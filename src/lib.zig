@@ -1,5 +1,7 @@
 const std = @import("std");
 
+pub const GlyphId = u32; // 0..=255 self-map to single-byte ASCII
+
 pub const Direction = enum { row, column };
 pub const MainAxisAlignment = enum { start, center, end, space_between, space_around, space_evenly };
 pub const CrossAxisAlignment = enum { start, center, end, stretch };
@@ -155,36 +157,48 @@ pub fn wrapAlloc(allocator: std.mem.Allocator, s: []const u8, width: usize) ![][
 pub const Raster = struct {
     width: usize,
     height: usize,
-    buf: []u8,
+    cells: []GlyphId, // MxN grid of interned glyph identifiers
 
     pub fn init(allocator: std.mem.Allocator, width: usize, height: usize) !Raster {
         const r = Raster{
             .width = width,
             .height = height,
-            .buf = try allocator.alloc(u8, width * height),
+            .cells = try allocator.alloc(GlyphId, width * height),
         };
-        @memset(r.buf, ' ');
+        var i: usize = 0;
+        while (i < r.cells.len) : (i += 1) r.cells[i] = @as(GlyphId, 32); // space
         return r;
     }
 
     pub fn deinit(self: *Raster, allocator: std.mem.Allocator) void {
-        allocator.free(self.buf);
+        allocator.free(self.cells);
         self.* = undefined;
     }
 
+    /// Set an ASCII glyph at a cell
     pub fn set(self: *Raster, x: usize, y: usize, ch: u8) void {
         if (x >= self.width or y >= self.height) return;
-        self.buf[y * self.width + x] = ch;
+        self.cells[y * self.width + x] = @as(GlyphId, ch);
+    }
+
+    /// Set a glyph id at a cell
+    pub fn setGlyph(self: *Raster, x: usize, y: usize, gid: GlyphId) void {
+        if (x >= self.width or y >= self.height) return;
+        self.cells[y * self.width + x] = gid;
     }
 
     pub fn toStringAlloc(self: *const Raster, allocator: std.mem.Allocator) ![]u8 {
         const line_len = self.width + 1; // + '\n'
         var out = try allocator.alloc(u8, self.height * line_len);
-        var i: usize = 0;
-        while (i < self.height) : (i += 1) {
-            const row = self.buf[i * self.width .. i * self.width + self.width];
-            std.mem.copyForwards(u8, out[i * line_len ..][0..self.width], row);
-            out[i * line_len + self.width] = '\n';
+        var y: usize = 0;
+        while (y < self.height) : (y += 1) {
+            var x: usize = 0;
+            while (x < self.width) : (x += 1) {
+                const gid = self.cells[y * self.width + x];
+                // For ASCII ids (0..=255) we emit the single byte; otherwise, emit '?'
+                out[y * line_len + x] = if (gid <= 255) @as(u8, @intCast(gid)) else '?';
+            }
+            out[y * line_len + self.width] = '\n';
         }
         return out;
     }
@@ -220,9 +234,9 @@ pub fn renderParagraphAlloc(allocator: std.mem.Allocator, s: []const u8, width: 
     var y: usize = 0;
     while (y < lines.len) : (y += 1) {
         const ln = lines[y];
-        // copy line into raster row
         const n = if (ln.len < width) ln.len else width;
-        std.mem.copyForwards(u8, r.buf[y * r.width ..][0..n], ln[0..n]);
+        var x: usize = 0;
+        while (x < n) : (x += 1) r.set(x, y, ln[x]);
     }
     return r;
 }
@@ -498,8 +512,8 @@ pub fn blitNonSpace(dst: *Raster, dx: usize, dy: usize, src: *const Raster) void
     while (y < src.height) : (y += 1) {
         var x: usize = 0;
         while (x < src.width) : (x += 1) {
-            const ch = src.buf[y * src.width + x];
-            if (ch != ' ') dst.set(dx + x, dy + y, ch);
+            const gid = src.cells[y * src.width + x];
+            if (gid != @as(GlyphId, 32)) dst.setGlyph(dx + x, dy + y, gid);
         }
     }
 }
@@ -688,8 +702,10 @@ fn drawTextBoxIntoRaster(
     while (row < lines.len and row < inner_h) : (row += 1) {
         const ln = lines[row];
         const n = @min(ln.len, inner_w);
-        // Copy ln into interior cell area
-        std.mem.copyForwards(u8, r.buf[(y + 1 + row) * r.width + (x + 1) ..][0..n], ln[0..n]);
+        var col: usize = 0;
+        while (col < n) : (col += 1) {
+            r.set((x + 1) + col, (y + 1) + row, ln[col]);
+        }
     }
 }
 
