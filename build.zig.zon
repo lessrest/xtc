@@ -1,0 +1,17 @@
+.{
+    .fingerprint = 0x3a4b6cea53cc4a64,
+    .name = .xtc,
+    .version = "0.5.0",
+    .dependencies = .{
+        .zg = .{
+            .url = "https://codeberg.org/atman/zg/archive/v0.14.1.tar.gz",
+            .hash = "zg-0.14.1-oGqU3IQ_tALZIiBN026_NTaPJqU-Upm8P_C7QED2Rzm8",
+        },
+    },
+    .minimum_zig_version = "0.14.0",
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}
