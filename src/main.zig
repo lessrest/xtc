@@ -4,6 +4,15 @@ const lib = @import("lib.zig");
 const Graphemes = @import("Graphemes");
 const DisplayWidth = @import("DisplayWidth");
 const live = @import("live.zig");
+const domFromXmlAlloc = @import("lib.zig").domFromXmlAlloc;
+const buildBoxTreeFromDomAlloc = @import("lib.zig").buildBoxTreeFromDomAlloc;
+const layoutBoxesInPlace = @import("layout.zig").layoutBoxesInPlace;
+const dumpBoxTree = @import("lib.zig").dumpBoxTree;
+const PaintCommandBatch = @import("paint.zig").PaintCommandBatch;
+const computePaintCommands = @import("paint.zig").computePaintCommands;
+const GlyphTable = @import("tty.zig").GlyphTable;
+const Raster = @import("tty.zig").Raster;
+const rasterizeDisplayListAscii = @import("tty.zig").rasterizeDisplayListAscii;
 
 // Global logging options using std.log
 pub const std_options: std.Options = .{
@@ -130,12 +139,12 @@ pub fn main() !void {
     var xdoc = try xml.parse(al, path, file.reader());
     defer xdoc.deinit();
 
-    const xd = try lib.domFromXmlAlloc(al, &xdoc);
+    const xd = try domFromXmlAlloc(al, &xdoc);
     var dom = xd.dom;
     defer dom.deinit();
 
     // Build tree and layout
-    var tree = try lib.buildBoxTreeFromDomAlloc(al, &dom, xd.root);
+    var tree = try buildBoxTreeFromDomAlloc(al, &dom, xd.root);
     defer tree.deinit();
 
     var provider = lib.StyleProvider{ .graphemes = try Graphemes.init(al), .display_width = try DisplayWidth.init(al) };
@@ -145,22 +154,22 @@ pub fn main() !void {
     // For now, size to a reasonable default terminal viewport
     const width: usize = 80;
     const height: usize = 24;
-    try lib.layoutBoxesInPlace(al, &tree, &dom, tree.root_index, .{ .x = 0, .y = 0, .w = width, .h = height }, provider);
+    try layoutBoxesInPlace(al, &tree, &dom, tree.root_index, .{ .x = 0, .y = 0, .w = width, .h = height }, provider);
 
     if (debug_boxes) {
-        try lib.dumpBoxTree(al, std.io.getStdOut().writer(), &tree, &dom);
+        try dumpBoxTree(al, std.io.getStdOut().writer(), &tree, &dom);
         return;
     }
 
     // Build display list and rasterize
-    var dl = lib.PaintCommandBatch.init(al);
+    var dl = PaintCommandBatch.init(al);
     defer dl.deinit();
-    var glyphs = try lib.GlyphTable.init(al);
+    var glyphs = try GlyphTable.init(al);
     defer glyphs.deinit();
-    try lib.computePaintCommands(&dl, &dom, &tree, &glyphs);
-    var r = try lib.Raster.init(al, width, height);
+    try computePaintCommands(&dl, &dom, &tree, &glyphs);
+    var r = try Raster.init(al, width, height);
     defer r.deinit(al);
-    try lib.rasterizeDisplayListAscii(&r, al, &glyphs, &dl);
+    try rasterizeDisplayListAscii(&r, al, &glyphs, &dl);
 
     const out = try r.toStringAlloc(al);
     defer al.free(out);

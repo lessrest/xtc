@@ -227,10 +227,10 @@ pub fn renderBoxTreeAscii(r: *Raster, root: *const BoxNode) void {
     }
 }
 
-pub const DomNodeId = @import("dom.zig").DomNodeId;
-pub const Rect = @import("layout.zig").Rect;
-pub const BoxNode = @import("dom.zig").BoxNode;
-pub const Dom = @import("dom.zig").Dom;
+const DomNodeId = @import("dom.zig").DomNodeId;
+const Rect = @import("layout.zig").Rect;
+const BoxNode = @import("dom.zig").BoxNode;
+const Dom = @import("dom.zig").Dom;
 pub const calculateSpaces = @import("layout.zig").calculateSpaces;
 pub const domFromXmlAlloc = @import("xml.zig").domFromXmlAlloc;
 

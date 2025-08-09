@@ -1,8 +1,14 @@
 const std = @import("std");
 const posix = std.posix;
 const lib = @import("lib.zig");
+const Dom = @import("dom.zig").Dom;
 const Graphemes = @import("Graphemes");
 const DisplayWidth = @import("DisplayWidth");
+const PaintCommandBatch = @import("paint.zig").PaintCommandBatch;
+const rasterizeDisplayListAscii = @import("lib.zig").rasterizeDisplayListAscii;
+const computePaintCommands = @import("paint.zig").computePaintCommands;
+const layoutBoxesInPlace = @import("layout.zig").layoutBoxesInPlace;
+const GlyphTable = @import("tty.zig").GlyphTable;
 
 pub fn run(allocator: std.mem.Allocator, log_path: ?[]const u8) !void {
     _ = log_path; // autofix
@@ -21,7 +27,7 @@ pub fn run(allocator: std.mem.Allocator, log_path: ?[]const u8) !void {
     defer provider.graphemes.deinit(allocator);
     defer provider.display_width.deinit(allocator);
 
-    var dom = lib.Dom.init(allocator);
+    var dom = Dom.init(allocator);
     defer dom.deinit();
 
     const root_id = try dom.addElement(
@@ -59,7 +65,7 @@ const RenderCtx = struct {
     provider: *lib.StyleProvider,
     width: usize = 80,
     height: usize = 24,
-    dom: lib.Dom,
+    dom: Dom,
     root_id: lib.DomNodeId,
     text_id: lib.DomNodeId,
     resized: bool = false,
@@ -68,7 +74,7 @@ const RenderCtx = struct {
     log: ?std.fs.File = null,
 };
 
-fn setDomText(dom: *lib.Dom, text_id: lib.DomNodeId, text: []const u8) !void {
+fn setDomText(dom: *Dom, text_id: lib.DomNodeId, text: []const u8) !void {
     const off: u32 = @intCast(dom.text_arena.items.len);
     try dom.text_arena.appendSlice(text);
     const len: u32 = @intCast(text.len);
@@ -111,18 +117,18 @@ fn renderDom(ctx: *RenderCtx) !void {
     var tree = try lib.buildBoxTreeFromDomAlloc(al, &ctx.dom, ctx.root_id);
     defer tree.deinit();
 
-    try lib.layoutBoxesInPlace(al, &tree, &ctx.dom, tree.root_index, .{ .x = 0, .y = 0, .w = ctx.width, .h = ctx.height }, ctx.provider.*);
+    try layoutBoxesInPlace(al, &tree, &ctx.dom, tree.root_index, .{ .x = 0, .y = 0, .w = ctx.width, .h = ctx.height }, ctx.provider.*);
     //    std.debug.print("layout: {}\n", .{try lib.dumpBoxTreeNodeXml(al, std.io.getStdErr().writer(), &tree, &ctx.dom, tree.root_index, 0)});
-    var dl = lib.PaintCommandBatch.init(al);
+    var dl = PaintCommandBatch.init(al);
     defer dl.deinit();
-    var glyphs = try lib.GlyphTable.init(al);
+    var glyphs = try GlyphTable.init(al);
     defer glyphs.deinit();
 
-    try lib.computePaintCommands(&dl, &ctx.dom, &tree, &glyphs);
+    try computePaintCommands(&dl, &ctx.dom, &tree, &glyphs);
     // Double-buffered raster: render into back, diff against front, then swap
     var rb = try ensureDoubleRaster(ctx);
     rb.back.clear();
-    try lib.rasterizeDisplayListAscii(rb.back, al, &glyphs, &dl);
+    try rasterizeDisplayListAscii(rb.back, al, &glyphs, &dl);
 
     // Emit diffs from front -> back
     var out = std.ArrayList(u8).init(al);
