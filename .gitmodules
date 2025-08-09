@@ -1,0 +1,3 @@
+[submodule "deps/zig-xml"]
+	path = deps/zig-xml
+	url = git@github.com:nektro/zig-xml

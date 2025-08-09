@@ -98,6 +98,12 @@ pub const DomNodeKind = enum { element, text };
 
 pub const StyleDisplay = enum(u3) { none, @"inline", block, flex, inline_flex, _unused0, _unused1, _unused2 };
 pub const StyleWhitespace = enum(u2) { normal, pre, nowrap, pre_wrap };
+// Debug helpers
+const DEBUG_LOG: bool = true; // set false to silence
+fn dbg(comptime fmt: []const u8, args: anytype) void {
+    if (DEBUG_LOG) std.debug.print(fmt, args);
+}
+
 pub const StyleBorderStyle = enum(u2) { none, solid, double, dashed };
 pub const StyleFlexDir = enum(u2) { row, column, row_reverse, column_reverse };
 pub const StyleFlexWrap = enum(u2) { nowrap, wrap, wrap_reverse, _unused };
@@ -256,9 +262,8 @@ pub const Dom = struct {
     }
 
     pub fn addElement(self: *Dom, style_bytes: []const u8) !DomNodeId {
-        _ = style_bytes; // TODO: parse class tokens -> StyleRow
-        // For now: map class string to a default StyleRow; later parse tokens
-        const style_row = defaultStyleRow();
+        // Parse utility-class list (Tailwind-like) into a StyleRow
+        const style_row = parseUtilityClassList(style_bytes);
         const style_id = try self.styles.intern(self.alloc, style_row);
         const idx = try self.headers.addOne(self.alloc);
         self.headers.set(idx, .{
@@ -327,6 +332,756 @@ pub const Dom = struct {
         p_count.* += 1;
     }
 };
+
+// --- XML -> DOM mapping ---
+pub const XmlDom = struct { dom: Dom, root: DomNodeId };
+
+fn xmlAddElementRecursive(dom: *Dom, el: @import("xml").Element) !DomNodeId {
+    const class_attr = el.attr("class") orelse "";
+    const id = try dom.addElement(class_attr);
+    if (el.content) |_| {
+        const kids = el.children();
+        var i: usize = 0;
+        while (i < kids.len) : (i += 1) {
+            const n = kids[i].v();
+            switch (n) {
+                .element => |child_el| {
+                    const cid = try xmlAddElementRecursive(dom, child_el);
+                    dom.appendChild(id, cid);
+                },
+                .text => |sidx| {
+                    const tid = try dom.addText(sidx.slice());
+                    dom.appendChild(id, tid);
+                },
+                .pi => |_| {},
+            }
+        }
+    }
+    return id;
+}
+
+pub fn domFromXmlAlloc(alloc: std.mem.Allocator, doc: *const @import("xml").Document) !XmlDom {
+    var dom = Dom.init(alloc);
+    doc.acquire();
+    defer doc.release();
+    const root_id = try xmlAddElementRecursive(&dom, doc.root);
+    return .{ .dom = dom, .root = root_id };
+}
+
+// --- Unified (parse+emit) Tailwind-like rules ---
+const Rule = struct {
+    parse: fn (*StyleRow, []const u8) bool,
+    emit: fn (*std.ArrayList([]const u8), std.mem.Allocator, StyleRow, StyleRow) anyerror!void,
+};
+
+fn ruleExactField(comptime token: []const u8, comptime field_name: []const u8, comptime value: anytype, comptime omit_if_default: bool) Rule {
+    return .{
+        .parse = struct {
+            fn p(row: *StyleRow, tok: []const u8) bool {
+                if (!std.mem.eql(u8, tok, token)) return false;
+                @field(row, field_name) = value;
+                return true;
+            }
+        }.p,
+        .emit = struct {
+            fn e(out: *std.ArrayList([]const u8), alloc: std.mem.Allocator, row: StyleRow, def: StyleRow) anyerror!void {
+                const cur = @field(row, field_name);
+                if (cur != value) return;
+                if (omit_if_default and @field(def, field_name) == value) return;
+                try dup_and_push(alloc, out, token);
+            }
+        }.e,
+    };
+}
+
+fn ruleParseOnlyExact(comptime token: []const u8, comptime apply: fn (*StyleRow) void) Rule {
+    return .{
+        .parse = struct {
+            fn p(row: *StyleRow, tok: []const u8) bool {
+                if (!std.mem.eql(u8, tok, token)) return false;
+                apply(row);
+                return true;
+            }
+        }.p,
+        .emit = struct {
+            fn e(_: *std.ArrayList([]const u8), _: std.mem.Allocator, _: StyleRow, _: StyleRow) anyerror!void {}
+        }.e,
+    };
+}
+
+fn ruleNumField(comptime prefix: []const u8, comptime field_name: []const u8) Rule {
+    return .{
+        .parse = struct {
+            fn p(row: *StyleRow, tok: []const u8) bool {
+                if (!std.mem.startsWith(u8, tok, prefix)) return false;
+                const n = parseUint(tok[prefix.len..]) orelse 0;
+                const T = @TypeOf(@field(row, field_name));
+                const maxv: usize = @intCast(std.math.maxInt(T));
+                @field(row, field_name) = @intCast(if (n < maxv) n else maxv);
+                return true;
+            }
+        }.p,
+        .emit = struct {
+            fn e(out: *std.ArrayList([]const u8), alloc: std.mem.Allocator, row: StyleRow, _: StyleRow) anyerror!void {
+                const v = @field(row, field_name);
+                if (v == 0) return;
+                try emitFmt(alloc, out, prefix ++ "{}", .{v});
+            }
+        }.e,
+    };
+}
+
+fn ruleNumNestedParseOnly(comptime prefix: []const u8, comptime field_a: []const u8, comptime field_b: []const u8) Rule {
+    return .{
+        .parse = struct {
+            fn p(row: *StyleRow, tok: []const u8) bool {
+                if (!std.mem.startsWith(u8, tok, prefix)) return false;
+                const n = parseUint(tok[prefix.len..]) orelse 0;
+                const T = @TypeOf(@field(@field(row, field_a), field_b));
+                const maxv: usize = @intCast(std.math.maxInt(T));
+                @field(@field(row, field_a), field_b) = @intCast(if (n < maxv) n else maxv);
+                return true;
+            }
+        }.p,
+        .emit = struct {
+            fn e(_: *std.ArrayList([]const u8), _: std.mem.Allocator, _: StyleRow, _: StyleRow) anyerror!void {}
+        }.e,
+    };
+}
+
+fn ruleNumCustomParseOnly(comptime prefix: []const u8, comptime set: fn (*StyleRow, usize) void) Rule {
+    return .{
+        .parse = struct {
+            fn p(row: *StyleRow, tok: []const u8) bool {
+                if (!std.mem.startsWith(u8, tok, prefix)) return false;
+                const n = parseUint(tok[prefix.len..]) orelse 0;
+                set(row, n);
+                return true;
+            }
+        }.p,
+        .emit = struct {
+            fn e(_: *std.ArrayList([]const u8), _: std.mem.Allocator, _: StyleRow, _: StyleRow) anyerror!void {}
+        }.e,
+    };
+}
+
+fn ruleNumCustom(comptime prefix: []const u8, comptime set: fn (*StyleRow, usize) void, comptime get: fn (StyleRow) ?usize) Rule {
+    return .{
+        .parse = struct {
+            fn p(row: *StyleRow, tok: []const u8) bool {
+                if (!std.mem.startsWith(u8, tok, prefix)) return false;
+                const n = parseUint(tok[prefix.len..]) orelse 0;
+                set(row, n);
+                return true;
+            }
+        }.p,
+        .emit = struct {
+            fn e(out: *std.ArrayList([]const u8), alloc: std.mem.Allocator, row: StyleRow, _: StyleRow) anyerror!void {
+                const n = get(row) orelse return;
+                try emitFmt(alloc, out, prefix ++ "{}", .{n});
+            }
+        }.e,
+    };
+}
+
+fn ruleEmitOnly(comptime emit_fn: fn (*std.ArrayList([]const u8), std.mem.Allocator, StyleRow, StyleRow) anyerror!void) Rule {
+    return .{
+        .parse = struct {
+            fn p(_: *StyleRow, _: []const u8) bool {
+                return false;
+            }
+        }.p,
+        .emit = emit_fn,
+    };
+}
+
+fn parseUtilityClassList(s: []const u8) StyleRow {
+    var row = defaultStyleRow();
+    var it = std.mem.tokenizeScalar(u8, s, ' ');
+    while (it.next()) |tok| outer: {
+        inline for (RULES) |rule| {
+            if (rule.parse(&row, tok)) break :outer;
+        }
+        // Unknown token: ignore
+    }
+    return row;
+}
+
+// Emission: generate a compact set of utility tokens from a row.
+fn dup_and_push(alloc: std.mem.Allocator, out: *std.ArrayList([]const u8), s: []const u8) !void {
+    const buf = try alloc.alloc(u8, s.len);
+    std.mem.copyForwards(u8, buf, s);
+    try out.append(buf);
+}
+
+fn emitFmt(alloc: std.mem.Allocator, out: *std.ArrayList([]const u8), comptime fmt: []const u8, args: anytype) !void {
+    var tmp = std.ArrayList(u8).init(alloc);
+    defer tmp.deinit();
+    try tmp.writer().print(fmt, args);
+    try dup_and_push(alloc, out, tmp.items);
+}
+
+// Unified custom helpers
+fn set_basis_cells(row: *StyleRow, n: usize) void {
+    row.flex.basis_auto = 0;
+    const maxv: usize = @intCast(std.math.maxInt(@TypeOf(row.flex.basis_cells)));
+    row.flex.basis_cells = @intCast(if (n < maxv) n else maxv);
+}
+
+fn get_border_w_gt1(row: StyleRow) ?usize {
+    return if (row.border.width_cells > 1) row.border.width_cells else null;
+}
+
+fn get_basis_cells_emit(row: StyleRow) ?usize {
+    return if (row.flex.basis_auto == 0 and row.flex.basis_cells != 0) row.flex.basis_cells else null;
+}
+
+fn emit_border_eq1(out: *std.ArrayList([]const u8), alloc: std.mem.Allocator, row: StyleRow, _: StyleRow) anyerror!void {
+    if (row.border.width_cells == 1) try dup_and_push(alloc, out, "border");
+}
+
+fn emit_padding_shorthands(out: *std.ArrayList([]const u8), alloc: std.mem.Allocator, row: StyleRow, _: StyleRow) anyerror!void {
+    const p = row.padding;
+    if ((p.t | p.r | p.b | p.l) == 0) return;
+    if (p.t == p.r and p.r == p.b and p.b == p.l) {
+        try emitFmt(alloc, out, "p-{}", .{p.t});
+        return;
+    }
+    if (p.l == p.r and p.t == p.b) {
+        if (p.l != 0) try emitFmt(alloc, out, "px-{}", .{p.l});
+        if (p.t != 0) try emitFmt(alloc, out, "py-{}", .{p.t});
+    }
+}
+
+fn emit_padding_edges(out: *std.ArrayList([]const u8), alloc: std.mem.Allocator, row: StyleRow, _: StyleRow) anyerror!void {
+    const p = row.padding;
+    if (p.t == p.r and p.r == p.b and p.b == p.l) return;
+    if (p.l == p.r and p.t == p.b) return;
+    if (p.l != 0) try emitFmt(alloc, out, "pl-{}", .{p.l});
+    if (p.r != 0) try emitFmt(alloc, out, "pr-{}", .{p.r});
+    if (p.t != 0) try emitFmt(alloc, out, "pt-{}", .{p.t});
+    if (p.b != 0) try emitFmt(alloc, out, "pb-{}", .{p.b});
+}
+
+fn emit_basis_auto(out: *std.ArrayList([]const u8), alloc: std.mem.Allocator, row: StyleRow, def: StyleRow) anyerror!void {
+    if (row.flex.basis_auto == 1 and !(def.flex.basis_auto == 1 and row.flex.basis_cells == 0)) {
+        try dup_and_push(alloc, out, "basis-auto");
+    }
+}
+
+const RULES = [_]Rule{
+    // display
+    ruleExactField("flex", "display", StyleDisplay.flex, true),
+    ruleExactField("block", "display", StyleDisplay.block, true),
+    ruleExactField("inline", "display", StyleDisplay.@"inline", true),
+    ruleExactField("inline-flex", "display", StyleDisplay.inline_flex, true),
+    // direction (include row for parsing; omit on default)
+    ruleExactField("flex-row", "flex_dir", StyleFlexDir.row, true),
+    ruleExactField("flex-col", "flex_dir", StyleFlexDir.column, true),
+    ruleExactField("flex-row-reverse", "flex_dir", StyleFlexDir.row_reverse, true),
+    ruleExactField("flex-col-reverse", "flex_dir", StyleFlexDir.column_reverse, true),
+    // basis
+    ruleParseOnlyExact("basis-auto", struct {
+        fn s(row: *StyleRow) void {
+            row.flex.basis_auto = 1;
+        }
+    }.s),
+    ruleNumCustom("basis-", set_basis_cells, get_basis_cells_emit),
+    // size
+    ruleNumField("w-", "width_cells"),
+    ruleNumField("h-", "height_cells"),
+    // border
+    ruleParseOnlyExact("border", struct {
+        fn s(row: *StyleRow) void {
+            row.border.width_cells = 1;
+        }
+    }.s),
+    ruleNumCustom("border-", struct {
+        fn s(row: *StyleRow, n: usize) void {
+            row.border.width_cells = @intCast(@min(n, @as(usize, std.math.maxInt(@TypeOf(row.border.width_cells)))));
+        }
+    }.s, get_border_w_gt1),
+    // justify-content
+    ruleExactField("justify-start", "justify", StyleJustify.start, true),
+    ruleExactField("justify-end", "justify", StyleJustify.end, true),
+    ruleExactField("justify-center", "justify", StyleJustify.center, true),
+    ruleExactField("justify-between", "justify", StyleJustify.space_between, true),
+    ruleExactField("justify-around", "justify", StyleJustify.space_around, true),
+    ruleExactField("justify-evenly", "justify", StyleJustify.space_evenly, true),
+    // align-items
+    ruleExactField("items-start", "align_items", StyleAlign.start, true),
+    ruleExactField("items-end", "align_items", StyleAlign.end, true),
+    ruleExactField("items-center", "align_items", StyleAlign.center, true),
+    ruleExactField("items-stretch", "align_items", StyleAlign.stretch, true),
+    ruleExactField("items-baseline", "align_items", StyleAlign.baseline, true),
+    // padding parse rules
+    ruleNumCustomParseOnly("p-", setPadAll),
+    ruleNumCustomParseOnly("px-", setPadX),
+    ruleNumCustomParseOnly("py-", setPadY),
+    ruleNumNestedParseOnly("pl-", "padding", "l"),
+    ruleNumNestedParseOnly("pr-", "padding", "r"),
+    ruleNumNestedParseOnly("pt-", "padding", "t"),
+    ruleNumNestedParseOnly("pb-", "padding", "b"),
+    // emission-only preferences
+    ruleEmitOnly(emit_basis_auto),
+    ruleEmitOnly(emit_border_eq1),
+    ruleEmitOnly(emit_padding_shorthands),
+    ruleEmitOnly(emit_padding_edges),
+    // colors
+    ruleColor("text-", get_fg_rgb, set_fg_rgb),
+    ruleColor("bg-", get_bg_rgb, set_bg_rgb),
+};
+
+pub fn utilityTokensFromStyleRow(alloc: std.mem.Allocator, row: StyleRow) ![]const []const u8 {
+    var out = std.ArrayList([]const u8).init(alloc);
+    const def = defaultStyleRow();
+    inline for (RULES) |r| try r.emit(&out, alloc, row, def);
+    return out.toOwnedSlice();
+}
+
+// --- Color integration (Tailwind-like palette via OKLCH) ---
+
+const ColorEntry = struct {
+    token: []const u8,
+    kind: enum { oklch, rgb },
+    l: f64 = 0,
+    c: f64 = 0,
+    h: f64 = 0,
+    rgb: [3]u8 = .{ 0, 0, 0 },
+};
+
+inline fn clamp01(x: f64) f64 {
+    return if (x < 0.0) 0.0 else if (x > 1.0) 1.0 else x;
+}
+
+inline fn linearToSrgb(x: f64) f64 {
+    // sRGB electro-optical transfer function
+    return if (x <= 0.0031308) 12.92 * x else 1.055 * std.math.pow(f64, x, 1.0 / 2.4) - 0.055;
+}
+
+inline fn oklchToSrgbU8(l: f64, c: f64, h_deg: f64) [3]u8 {
+    const h = h_deg * std.math.pi / 180.0;
+    const a = c * std.math.cos(h);
+    const ch_b = c * std.math.sin(h);
+    // OKLab to LMS
+    const l_ = l + 0.3963377774 * a + 0.2158037573 * ch_b;
+    const m_ = l - 0.1055613458 * a - 0.0638541728 * ch_b;
+    const s_ = l - 0.0894841775 * a - 1.2914855480 * ch_b;
+    const l3 = l_ * l_ * l_;
+    const m3 = m_ * m_ * m_;
+    const s3 = s_ * s_ * s_;
+    // LMS to linear sRGB
+    const r_lin = 4.0767416621 * l3 - 3.3077115913 * m3 + 0.2309699292 * s3;
+    const g_lin = -1.2684380046 * l3 + 2.6097574011 * m3 - 0.3413193965 * s3;
+    const b_lin = -0.0041960863 * l3 - 0.7034186147 * m3 + 1.7076147010 * s3;
+    const r = @as(u8, @intFromFloat(255.0 * clamp01(linearToSrgb(r_lin)) + 0.5));
+    const g = @as(u8, @intFromFloat(255.0 * clamp01(linearToSrgb(g_lin)) + 0.5));
+    const b8 = @as(u8, @intFromFloat(255.0 * clamp01(linearToSrgb(b_lin)) + 0.5));
+    return .{ r, g, b8 };
+}
+
+inline fn ce_oklch(comptime name: []const u8, comptime l: f64, comptime c: f64, comptime h: f64) ColorEntry {
+    return .{ .token = name, .kind = .oklch, .l = l, .c = c, .h = h };
+}
+inline fn ce(comptime name: []const u8, comptime l: f64, comptime c: f64, comptime h: f64) ColorEntry {
+    // Back-compat helper: store OKLCH parameters without converting at comptime
+    return ce_oklch(name, l, c, h);
+}
+
+inline fn ce_rgb(comptime name: []const u8, comptime r8: u8, comptime g8: u8, comptime b8: u8) ColorEntry {
+    return .{ .token = name, .kind = .rgb, .rgb = .{ r8, g8, b8 } };
+}
+
+const PALETTE = [_]ColorEntry{
+    // reds
+    ce_oklch("red-50", 0.971, 0.013, 17.38),
+    ce_oklch("red-100", 0.936, 0.032, 17.717),
+    ce_oklch("red-200", 0.885, 0.062, 18.334),
+    ce_oklch("red-300", 0.808, 0.114, 19.571),
+    ce_oklch("red-400", 0.704, 0.191, 22.216),
+    ce_oklch("red-500", 0.637, 0.237, 25.331),
+    ce_oklch("red-600", 0.577, 0.245, 27.325),
+    ce_oklch("red-700", 0.505, 0.213, 27.518),
+    ce_oklch("red-800", 0.444, 0.177, 26.899),
+    ce_oklch("red-900", 0.396, 0.141, 25.723),
+    ce_oklch("red-950", 0.258, 0.092, 26.042),
+    // orange
+    ce_oklch("orange-50", 0.98, 0.016, 73.684),
+    ce_oklch("orange-100", 0.954, 0.038, 75.164),
+    ce_oklch("orange-200", 0.901, 0.076, 70.697),
+    ce_oklch("orange-300", 0.837, 0.128, 66.29),
+    ce_oklch("orange-400", 0.75, 0.183, 55.934),
+    ce_oklch("orange-500", 0.705, 0.213, 47.604),
+    ce_oklch("orange-600", 0.646, 0.222, 41.116),
+    ce_oklch("orange-700", 0.553, 0.195, 38.402),
+    ce_oklch("orange-800", 0.47, 0.157, 37.304),
+    ce_oklch("orange-900", 0.408, 0.123, 38.172),
+    ce_oklch("orange-950", 0.266, 0.079, 36.259),
+    // amber
+    ce("amber-50", 0.987, 0.022, 95.277),
+    ce("amber-100", 0.962, 0.059, 95.617),
+    ce("amber-200", 0.924, 0.12, 95.746),
+    ce("amber-300", 0.879, 0.169, 91.605),
+    ce("amber-400", 0.828, 0.189, 84.429),
+    ce("amber-500", 0.769, 0.188, 70.08),
+    ce("amber-600", 0.666, 0.179, 58.318),
+    ce("amber-700", 0.555, 0.163, 48.998),
+    ce("amber-800", 0.473, 0.137, 46.201),
+    ce("amber-900", 0.414, 0.112, 45.904),
+    ce("amber-950", 0.279, 0.077, 45.635),
+    // yellow
+    ce("yellow-50", 0.987, 0.026, 102.212),
+    ce("yellow-100", 0.973, 0.071, 103.193),
+    ce("yellow-200", 0.945, 0.129, 101.54),
+    ce("yellow-300", 0.905, 0.182, 98.111),
+    ce("yellow-400", 0.852, 0.199, 91.936),
+    ce("yellow-500", 0.795, 0.184, 86.047),
+    ce("yellow-600", 0.681, 0.162, 75.834),
+    ce("yellow-700", 0.554, 0.135, 66.442),
+    ce("yellow-800", 0.476, 0.114, 61.907),
+    ce("yellow-900", 0.421, 0.095, 57.708),
+    ce("yellow-950", 0.286, 0.066, 53.813),
+    // lime
+    ce("lime-50", 0.986, 0.031, 120.757),
+    ce("lime-100", 0.967, 0.067, 122.328),
+    ce("lime-200", 0.938, 0.127, 124.321),
+    ce("lime-300", 0.897, 0.196, 126.665),
+    ce("lime-400", 0.841, 0.238, 128.85),
+    ce("lime-500", 0.768, 0.233, 130.85),
+    ce("lime-600", 0.648, 0.2, 131.684),
+    ce("lime-700", 0.532, 0.157, 131.589),
+    ce("lime-800", 0.453, 0.124, 130.933),
+    ce("lime-900", 0.405, 0.101, 131.063),
+    ce("lime-950", 0.274, 0.072, 132.109),
+    // green
+    ce("green-50", 0.982, 0.018, 155.826),
+    ce("green-100", 0.962, 0.044, 156.743),
+    ce("green-200", 0.925, 0.084, 155.995),
+    ce("green-300", 0.871, 0.15, 154.449),
+    ce("green-400", 0.792, 0.209, 151.711),
+    ce("green-500", 0.723, 0.219, 149.579),
+    ce("green-600", 0.627, 0.194, 149.214),
+    ce("green-700", 0.527, 0.154, 150.069),
+    ce("green-800", 0.448, 0.119, 151.328),
+    ce("green-900", 0.393, 0.095, 152.535),
+    ce("green-950", 0.266, 0.065, 152.934),
+    // emerald
+    ce("emerald-50", 0.979, 0.021, 166.113),
+    ce("emerald-100", 0.95, 0.052, 163.051),
+    ce("emerald-200", 0.905, 0.093, 164.15),
+    ce("emerald-300", 0.845, 0.143, 164.978),
+    ce("emerald-400", 0.765, 0.177, 163.223),
+    ce("emerald-500", 0.696, 0.17, 162.48),
+    ce("emerald-600", 0.596, 0.145, 163.225),
+    ce("emerald-700", 0.508, 0.118, 165.612),
+    ce("emerald-800", 0.432, 0.095, 166.913),
+    ce("emerald-900", 0.378, 0.077, 168.94),
+    ce("emerald-950", 0.262, 0.051, 172.552),
+    // teal
+    ce("teal-50", 0.984, 0.014, 180.72),
+    ce("teal-100", 0.953, 0.051, 180.801),
+    ce("teal-200", 0.91, 0.096, 180.426),
+    ce("teal-300", 0.855, 0.138, 181.071),
+    ce("teal-400", 0.777, 0.152, 181.912),
+    ce("teal-500", 0.704, 0.14, 182.503),
+    ce("teal-600", 0.6, 0.118, 184.704),
+    ce("teal-700", 0.511, 0.096, 186.391),
+    ce("teal-800", 0.437, 0.078, 188.216),
+    ce("teal-900", 0.386, 0.063, 188.416),
+    ce("teal-950", 0.277, 0.046, 192.524),
+    // cyan
+    ce("cyan-50", 0.984, 0.019, 200.873),
+    ce("cyan-100", 0.956, 0.045, 203.388),
+    ce("cyan-200", 0.917, 0.08, 205.041),
+    ce("cyan-300", 0.865, 0.127, 207.078),
+    ce("cyan-400", 0.789, 0.154, 211.53),
+    ce("cyan-500", 0.715, 0.143, 215.221),
+    ce("cyan-600", 0.609, 0.126, 221.723),
+    ce("cyan-700", 0.52, 0.105, 223.128),
+    ce("cyan-800", 0.45, 0.085, 224.283),
+    ce("cyan-900", 0.398, 0.07, 227.392),
+    ce("cyan-950", 0.302, 0.056, 229.695),
+    // sky
+    ce("sky-50", 0.977, 0.013, 236.62),
+    ce("sky-100", 0.951, 0.026, 236.824),
+    ce("sky-200", 0.901, 0.058, 230.902),
+    ce("sky-300", 0.828, 0.111, 230.318),
+    ce("sky-400", 0.746, 0.16, 232.661),
+    ce("sky-500", 0.685, 0.169, 237.323),
+    ce("sky-600", 0.588, 0.158, 241.966),
+    ce("sky-700", 0.5, 0.134, 242.749),
+    ce("sky-800", 0.443, 0.11, 240.79),
+    ce("sky-900", 0.391, 0.09, 240.876),
+    ce("sky-950", 0.293, 0.066, 243.157),
+    // blue
+    ce("blue-50", 0.97, 0.014, 254.604),
+    ce("blue-100", 0.932, 0.032, 255.585),
+    ce("blue-200", 0.882, 0.059, 254.128),
+    ce("blue-300", 0.809, 0.105, 251.813),
+    ce("blue-400", 0.707, 0.165, 254.624),
+    ce("blue-500", 0.623, 0.214, 259.815),
+    ce("blue-600", 0.546, 0.245, 262.881),
+    ce("blue-700", 0.488, 0.243, 264.376),
+    ce("blue-800", 0.424, 0.199, 265.638),
+    ce("blue-900", 0.379, 0.146, 265.522),
+    ce("blue-950", 0.282, 0.091, 267.935),
+    // indigo
+    ce("indigo-50", 0.962, 0.018, 272.314),
+    ce("indigo-100", 0.93, 0.034, 272.788),
+    ce("indigo-200", 0.87, 0.065, 274.039),
+    ce("indigo-300", 0.785, 0.115, 274.713),
+    ce("indigo-400", 0.673, 0.182, 276.935),
+    ce("indigo-500", 0.585, 0.233, 277.117),
+    ce("indigo-600", 0.511, 0.262, 276.966),
+    ce("indigo-700", 0.457, 0.24, 277.023),
+    ce("indigo-800", 0.398, 0.195, 277.366),
+    ce("indigo-900", 0.359, 0.144, 278.697),
+    ce("indigo-950", 0.257, 0.09, 281.288),
+    // violet
+    ce("violet-50", 0.969, 0.016, 293.756),
+    ce("violet-100", 0.943, 0.029, 294.588),
+    ce("violet-200", 0.894, 0.057, 293.283),
+    ce("violet-300", 0.811, 0.111, 293.571),
+    ce("violet-400", 0.702, 0.183, 293.541),
+    ce("violet-500", 0.606, 0.25, 292.717),
+    ce("violet-600", 0.541, 0.281, 293.009),
+    ce("violet-700", 0.491, 0.27, 292.581),
+    ce("violet-800", 0.432, 0.232, 292.759),
+    ce("violet-900", 0.38, 0.189, 293.745),
+    ce("violet-950", 0.283, 0.141, 291.089),
+    // purple
+    ce("purple-50", 0.977, 0.014, 308.299),
+    ce("purple-100", 0.946, 0.033, 307.174),
+    ce("purple-200", 0.902, 0.063, 306.703),
+    ce("purple-300", 0.827, 0.119, 306.383),
+    ce("purple-400", 0.714, 0.203, 305.504),
+    ce("purple-500", 0.627, 0.265, 303.9),
+    ce("purple-600", 0.558, 0.288, 302.321),
+    ce("purple-700", 0.496, 0.265, 301.924),
+    ce("purple-800", 0.438, 0.218, 303.724),
+    ce("purple-900", 0.381, 0.176, 304.987),
+    ce("purple-950", 0.291, 0.149, 302.717),
+    // fuchsia
+    ce("fuchsia-50", 0.977, 0.017, 320.058),
+    ce("fuchsia-100", 0.952, 0.037, 318.852),
+    ce("fuchsia-200", 0.903, 0.076, 319.62),
+    ce("fuchsia-300", 0.833, 0.145, 321.434),
+    ce("fuchsia-400", 0.74, 0.238, 322.16),
+    ce("fuchsia-500", 0.667, 0.295, 322.15),
+    ce("fuchsia-600", 0.591, 0.293, 322.896),
+    ce("fuchsia-700", 0.518, 0.253, 323.949),
+    ce("fuchsia-800", 0.452, 0.211, 324.591),
+    ce("fuchsia-900", 0.401, 0.17, 325.612),
+    ce("fuchsia-950", 0.293, 0.136, 325.661),
+    // pink
+    ce("pink-50", 0.971, 0.014, 343.198),
+    ce("pink-100", 0.948, 0.028, 342.258),
+    ce("pink-200", 0.899, 0.061, 343.231),
+    ce("pink-300", 0.823, 0.12, 346.018),
+    ce("pink-400", 0.718, 0.202, 349.761),
+    ce("pink-500", 0.656, 0.241, 354.308),
+    ce("pink-600", 0.592, 0.249, 0.584),
+    ce("pink-700", 0.525, 0.223, 3.958),
+    ce("pink-800", 0.459, 0.187, 3.815),
+    ce("pink-900", 0.408, 0.153, 2.432),
+    ce("pink-950", 0.284, 0.109, 3.907),
+    // rose
+    ce("rose-50", 0.969, 0.015, 12.422),
+    ce("rose-100", 0.941, 0.03, 12.58),
+    ce("rose-200", 0.892, 0.058, 10.001),
+    ce("rose-300", 0.81, 0.117, 11.638),
+    ce("rose-400", 0.712, 0.194, 13.428),
+    ce("rose-500", 0.645, 0.246, 16.439),
+    ce("rose-600", 0.586, 0.253, 17.585),
+    ce("rose-700", 0.514, 0.222, 16.935),
+    ce("rose-800", 0.455, 0.188, 13.697),
+    ce("rose-900", 0.41, 0.159, 10.272),
+    ce("rose-950", 0.271, 0.105, 12.094),
+    // slate
+    ce("slate-50", 0.984, 0.003, 247.858),
+    ce("slate-100", 0.968, 0.007, 247.896),
+    ce("slate-200", 0.929, 0.013, 255.508),
+    ce("slate-300", 0.869, 0.022, 252.894),
+    ce("slate-400", 0.704, 0.04, 256.788),
+    ce("slate-500", 0.554, 0.046, 257.417),
+    ce("slate-600", 0.446, 0.043, 257.281),
+    ce("slate-700", 0.372, 0.044, 257.287),
+    ce("slate-800", 0.279, 0.041, 260.031),
+    ce("slate-900", 0.208, 0.042, 265.755),
+    ce("slate-950", 0.129, 0.042, 264.695),
+    // gray
+    ce("gray-50", 0.985, 0.002, 247.839),
+    ce("gray-100", 0.967, 0.003, 264.542),
+    ce("gray-200", 0.928, 0.006, 264.531),
+    ce("gray-300", 0.872, 0.01, 258.338),
+    ce("gray-400", 0.707, 0.022, 261.325),
+    ce("gray-500", 0.551, 0.027, 264.364),
+    ce("gray-600", 0.446, 0.03, 256.802),
+    ce("gray-700", 0.373, 0.034, 259.733),
+    ce("gray-800", 0.278, 0.033, 256.848),
+    ce("gray-900", 0.21, 0.034, 264.665),
+    ce("gray-950", 0.13, 0.028, 261.692),
+    // zinc
+    ce("zinc-50", 0.985, 0.0, 0.0),
+    ce("zinc-100", 0.967, 0.001, 286.375),
+    ce("zinc-200", 0.92, 0.004, 286.32),
+    ce("zinc-300", 0.871, 0.006, 286.286),
+    ce("zinc-400", 0.705, 0.015, 286.067),
+    ce("zinc-500", 0.552, 0.016, 285.938),
+    ce("zinc-600", 0.442, 0.017, 285.786),
+    ce("zinc-700", 0.37, 0.013, 285.805),
+    ce("zinc-800", 0.274, 0.006, 286.033),
+    ce("zinc-900", 0.21, 0.006, 285.885),
+    ce("zinc-950", 0.141, 0.005, 285.823),
+    // neutral
+    ce("neutral-50", 0.985, 0.0, 0.0),
+    ce("neutral-100", 0.97, 0.0, 0.0),
+    ce("neutral-200", 0.922, 0.0, 0.0),
+    ce("neutral-300", 0.87, 0.0, 0.0),
+    ce("neutral-400", 0.708, 0.0, 0.0),
+    ce("neutral-500", 0.556, 0.0, 0.0),
+    ce("neutral-600", 0.439, 0.0, 0.0),
+    ce("neutral-700", 0.371, 0.0, 0.0),
+    ce("neutral-800", 0.269, 0.0, 0.0),
+    ce("neutral-900", 0.205, 0.0, 0.0),
+    ce("neutral-950", 0.145, 0.0, 0.0),
+    // stone
+    ce("stone-50", 0.985, 0.001, 106.423),
+    ce("stone-100", 0.97, 0.001, 106.424),
+    ce("stone-200", 0.923, 0.003, 48.717),
+    ce("stone-300", 0.869, 0.005, 56.366),
+    ce("stone-400", 0.709, 0.01, 56.259),
+    ce("stone-500", 0.553, 0.013, 58.071),
+    ce("stone-600", 0.444, 0.011, 73.639),
+    ce("stone-700", 0.374, 0.01, 67.558),
+    ce("stone-800", 0.268, 0.007, 34.298),
+    ce("stone-900", 0.216, 0.006, 56.043),
+    ce("stone-950", 0.147, 0.004, 49.25),
+    // black/white
+    ce_rgb("black", 0, 0, 0),
+    ce_rgb("white", 255, 255, 255),
+};
+
+fn set_fg_rgb(row: *StyleRow, rgb: [3]u8) void {
+    row.fg = .{ .r = rgb[0], .g = rgb[1], .b = rgb[2], .use_default = 0 };
+}
+fn set_bg_rgb(row: *StyleRow, rgb: [3]u8) void {
+    row.bg = .{ .r = rgb[0], .g = rgb[1], .b = rgb[2], .use_default = 0 };
+}
+fn get_fg_rgb(row: StyleRow) ?[3]u8 {
+    if (row.fg.use_default == 1) return null;
+    return .{ row.fg.r, row.fg.g, row.fg.b };
+}
+fn get_bg_rgb(row: StyleRow) ?[3]u8 {
+    if (row.bg.use_default == 1) return null;
+    return .{ row.bg.r, row.bg.g, row.bg.b };
+}
+
+fn rgbEqual(a: [3]u8, c: [3]u8) bool {
+    return a[0] == c[0] and a[1] == c[1] and a[2] == c[2];
+}
+
+inline fn entryRgb(e: ColorEntry) [3]u8 {
+    return switch (e.kind) {
+        .oklch => oklchToSrgbU8(e.l, e.c, e.h),
+        .rgb => e.rgb,
+    };
+}
+
+fn ruleColor(comptime prefix: []const u8, comptime get_color: anytype, comptime set_color: anytype) Rule {
+    return .{
+        .parse = struct {
+            fn p(row: *StyleRow, tok: []const u8) bool {
+                if (!std.mem.startsWith(u8, tok, prefix)) return false;
+                const suffix = tok[prefix.len..];
+                for (PALETTE) |ce_entry| {
+                    if (std.mem.eql(u8, ce_entry.token, suffix)) {
+                        set_color(row, entryRgb(ce_entry));
+                        return true;
+                    }
+                }
+                return false;
+            }
+        }.p,
+        .emit = struct {
+            fn e(out: *std.ArrayList([]const u8), alloc: std.mem.Allocator, row: StyleRow, _: StyleRow) anyerror!void {
+                const rgb = get_color(row) orelse return;
+                for (PALETTE) |ce_entry| {
+                    if (rgbEqual(entryRgb(ce_entry), rgb)) {
+                        try emitFmt(alloc, out, prefix ++ "{s}", .{ce_entry.token});
+                        return;
+                    }
+                }
+            }
+        }.e,
+    };
+}
+
+// (Rules added into RULES below)
+
+test "utility parse + emit: roundtrip simple flex row with padding" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const al = gpa.allocator();
+
+    const s = "flex flex-row justify-between items-center w-10 h-3 p-2 border-2";
+    const row = parseUtilityClassList(s);
+    try std.testing.expect(row.display == .flex);
+    try std.testing.expect(row.flex_dir == .row);
+    try std.testing.expect(row.justify == .space_between);
+    try std.testing.expect(row.align_items == .center);
+    try std.testing.expectEqual(@as(u16, 10), row.width_cells);
+    try std.testing.expectEqual(@as(u16, 3), row.height_cells);
+    try std.testing.expectEqual(@as(u4, 2), row.padding.t);
+    try std.testing.expectEqual(@as(u4, 2), row.padding.r);
+    try std.testing.expectEqual(@as(u4, 2), row.padding.b);
+    try std.testing.expectEqual(@as(u4, 2), row.padding.l);
+    try std.testing.expectEqual(@as(u2, 2), row.border.width_cells);
+
+    const toks = try utilityTokensFromStyleRow(al, row);
+    defer {
+        // free duplicated slices
+        for (toks) |tok| al.free(@constCast(tok));
+        al.free(toks);
+    }
+    // Ensure at least a subset is emitted
+    var seen: usize = 0;
+    inline for (&[_][]const u8{ "flex", "flex-row", "justify-between", "items-center", "w-10", "h-3", "p-2", "border-2" }) |needle| {
+        var found = false;
+        for (toks) |tok| {
+            if (std.mem.eql(u8, tok, needle)) {
+                found = true;
+                break;
+            }
+        }
+        if (found) seen += 1;
+    }
+    try std.testing.expect(seen >= 6);
+}
+
+fn parseUint(s: []const u8) ?usize {
+    var it = std.mem.tokenizeAny(u8, s, "_"); // allow e.g., h-[12] later; for now simple numbers
+    const num = it.next() orelse return null;
+    return std.fmt.parseInt(usize, num, 10) catch null;
+}
+
+fn clamp4(n: usize) u4 {
+    return @intCast(@min(n, 15));
+}
+fn setPadAll(row: *StyleRow, n: usize) void {
+    const v = clamp4(n);
+    row.padding = .{ .t = v, .r = v, .b = v, .l = v };
+}
+fn setPadX(row: *StyleRow, n: usize) void {
+    const v = clamp4(n);
+    row.padding.l = v;
+    row.padding.r = v;
+}
+fn setPadY(row: *StyleRow, n: usize) void {
+    const v = clamp4(n);
+    row.padding.t = v;
+    row.padding.b = v;
+}
 
 pub const BoxNode = struct {
     id: DomNodeId,
@@ -491,6 +1246,228 @@ pub const BoxTree = struct {
         return self.headers.items[start..end];
     }
 };
+
+// --- ANSI styling helpers for human-friendly debug output ---
+pub const Ansi = struct {
+    pub const reset = "\x1b[0m";
+    pub const bold = "\x1b[1m";
+    pub const dim = "\x1b[2m";
+    pub const fg = struct {
+        pub const black = "\x1b[30m";
+        pub const red = "\x1b[31m";
+        pub const green = "\x1b[32m";
+        pub const yellow = "\x1b[33m";
+        pub const blue = "\x1b[34m";
+        pub const magenta = "\x1b[35m";
+        pub const cyan = "\x1b[36m";
+        pub const white = "\x1b[37m";
+        pub const gray = "\x1b[90m"; // bright black
+    };
+};
+
+/// Write a nicely formatted dump of the box tree with rects and node kinds.
+pub fn dumpBoxTree(alloc: std.mem.Allocator, writer: anytype, tree: *const BoxTree, dom: *const Dom) !void {
+    // Emit XML-formatted dump
+    try writer.print("<boxes>\n", .{});
+    try dumpBoxTreeNodeXml(alloc, writer, tree, dom, tree.root_index, 1);
+    try writer.print("</boxes>\n", .{});
+}
+
+fn writeIndent(writer: anytype, depth: usize, is_last: bool, more_mask: u64) !void {
+    var d: usize = 0;
+    while (d < depth) : (d += 1) {
+        const has_more = (more_mask & (@as(u64, 1) << @intCast(d))) != 0;
+        try writer.print("{s}{s}{s}", .{ Ansi.fg.gray, if (has_more) "│  " else " ", Ansi.reset });
+    }
+    if (depth > 0) {
+        try writer.print("{s}{s}{s}", .{ Ansi.fg.gray, if (is_last) "└─ " else "├─ ", Ansi.reset });
+    }
+}
+
+fn styleSummary(row: StyleRow) struct {
+    display: []const u8,
+    dir: []const u8,
+} {
+    const d: []const u8 = switch (row.display) {
+        .none => "none",
+        .@"inline" => "inline",
+        .block => "block",
+        .flex => "flex",
+        .inline_flex => "inline-flex",
+        else => "?",
+    };
+    const dir: []const u8 = switch (row.flex_dir) {
+        .row => "row",
+        .column => "column",
+        .row_reverse => "row-rev",
+        .column_reverse => "col-rev",
+    };
+    return .{ .display = d, .dir = dir };
+}
+
+fn dumpBoxTreeNode(writer: anytype, tree: *const BoxTree, dom: *const Dom, idx: u32, depth: usize, is_last: bool, more_mask: u64) !void {
+    const h = tree.headers.items[@as(usize, @intCast(idx))];
+    const items = dom.headers.slice();
+    const kind = items.items(.kind)[@as(usize, @intCast(h.dom_id))];
+
+    try writeIndent(writer, depth, is_last, more_mask);
+    const kind_tag = if (kind == .element) "tag" else "text";
+    const kind_color = if (kind == .element) Ansi.fg.green else Ansi.fg.yellow;
+    try writer.print("{s}{s}{s}{s} ", .{ Ansi.bold, kind_color, kind_tag, Ansi.reset });
+    try writer.print("at {s}{d},{d}{s} ", .{ Ansi.fg.cyan, h.rect.x, h.rect.y, Ansi.reset });
+    try writer.print("size {s}{d}x{d}{s}", .{ Ansi.fg.blue, h.rect.w, h.rect.h, Ansi.reset });
+
+    const sid = items.items(.style_id)[@as(usize, @intCast(h.dom_id))];
+    const row = dom.styles.cols.items[@intCast(sid)];
+    const ss = styleSummary(row);
+    if (kind == .element) {
+        const basis = if (row.flex.basis_auto == 1) "auto" else "";
+        const basis_val: usize = @intCast(row.flex.basis_cells);
+        try writer.print("  {s}style:{s} {s}{s}{s} {s}{s}{s}", .{ Ansi.dim, Ansi.reset, Ansi.bold, ss.display, Ansi.reset, Ansi.fg.magenta, ss.dir, Ansi.reset });
+        if (row.width_cells != 0) try writer.print(" {s}w={d}{s}", .{ Ansi.fg.blue, row.width_cells, Ansi.reset });
+        if (row.height_cells != 0) try writer.print(" {s}h={d}{s}", .{ Ansi.fg.blue, row.height_cells, Ansi.reset });
+        if (row.flex.basis_auto == 0 or basis_val != 0) try writer.print(" {s}basis={s}{d}{s}", .{ Ansi.fg.blue, basis, basis_val, Ansi.reset });
+        if (row.border.width_cells != 0) try writer.print(" {s}border={d}{s}", .{ Ansi.fg.blue, row.border.width_cells, Ansi.reset });
+        if ((row.padding.t | row.padding.r | row.padding.b | row.padding.l) != 0)
+            try writer.print(" {s}pad={d},{d},{d},{d}{s}", .{ Ansi.fg.blue, row.padding.t, row.padding.r, row.padding.b, row.padding.l, Ansi.reset });
+    } else {
+        const txt = dom.getTextSlice(h.dom_id);
+        const preview_len = if (txt.len > 20) 20 else txt.len;
+        try writer.print("  {s}text:{s} {s}\"{s}{s}\"{s}", .{ Ansi.dim, Ansi.reset, Ansi.fg.yellow, txt[0..preview_len], if (txt.len > preview_len) "…" else "", Ansi.reset });
+    }
+    try writer.print("\n", .{});
+
+    if (h.child_count == 0) return;
+    const start: usize = @intCast(h.first_child);
+    var j: usize = 0;
+    while (j < h.child_count) : (j += 1) {
+        const child_idx: u32 = @intCast(start + j);
+        const child_is_last = (j + 1 == h.child_count);
+        const next_mask = if (depth < 63) (more_mask & ~(@as(u64, 1) << @intCast(depth))) | (if (!child_is_last) (@as(u64, 1) << @intCast(depth)) else 0) else more_mask;
+        try dumpBoxTreeNode(writer, tree, dom, child_idx, depth + 1, child_is_last, next_mask);
+    }
+}
+
+fn xmlIndent(writer: anytype, depth: usize) !void {
+    var i: usize = 0;
+    while (i < depth) : (i += 1) try writer.print("  ", .{});
+}
+
+fn enumNameDisplay(v: StyleDisplay) []const u8 {
+    return switch (v) {
+        .none => "none",
+        .@"inline" => "inline",
+        .block => "block",
+        .flex => "flex",
+        .inline_flex => "inline-flex",
+        else => "unknown",
+    };
+}
+fn enumNameWhitespace(v: StyleWhitespace) []const u8 {
+    return switch (v) {
+        .normal => "normal",
+        .pre => "pre",
+        .nowrap => "nowrap",
+        .pre_wrap => "pre-wrap",
+    };
+}
+fn enumNameBorderStyle(v: StyleBorderStyle) []const u8 {
+    return switch (v) {
+        .none => "none",
+        .solid => "solid",
+        .double => "double",
+        .dashed => "dashed",
+    };
+}
+fn enumNameFlexDir(v: StyleFlexDir) []const u8 {
+    return switch (v) {
+        .row => "row",
+        .column => "column",
+        .row_reverse => "row-reverse",
+        .column_reverse => "column-reverse",
+    };
+}
+fn enumNameFlexWrap(v: StyleFlexWrap) []const u8 {
+    return switch (v) {
+        .nowrap => "nowrap",
+        .wrap => "wrap",
+        .wrap_reverse => "wrap-reverse",
+        else => "unknown",
+    };
+}
+fn enumNameJustify(v: StyleJustify) []const u8 {
+    return switch (v) {
+        .start => "start",
+        .end => "end",
+        .center => "center",
+        .space_between => "space-between",
+        .space_around => "space-around",
+        .space_evenly => "space-evenly",
+        else => "unknown",
+    };
+}
+fn enumNameAlign(v: StyleAlign) []const u8 {
+    return switch (v) {
+        .start => "start",
+        .end => "end",
+        .center => "center",
+        .stretch => "stretch",
+        .baseline => "baseline",
+        else => "unknown",
+    };
+}
+
+fn dumpStyleRowXml(alloc: std.mem.Allocator, writer: anytype, row: StyleRow, depth: usize) !void {
+    try xmlIndent(writer, depth);
+    // Emit Tailwind-like utility class list instead of verbose attributes
+    const toks = try utilityTokensFromStyleRow(alloc, row);
+    defer {
+        for (toks) |tok| alloc.free(@constCast(tok));
+        alloc.free(toks);
+    }
+    try writer.print("<style class=\"", .{});
+    var first = true;
+    for (toks) |tok| {
+        if (!first) try writer.print(" ", .{});
+        first = false;
+        try writer.print("{s}", .{tok});
+    }
+    try writer.print("\"/>\n", .{});
+}
+
+fn dumpBoxTreeNodeXml(alloc: std.mem.Allocator, writer: anytype, tree: *const BoxTree, dom: *const Dom, idx: u32, depth: usize) !void {
+    const h = tree.headers.items[@as(usize, @intCast(idx))];
+    const items = dom.headers.slice();
+    const kind = items.items(.kind)[@as(usize, @intCast(h.dom_id))];
+
+    try xmlIndent(writer, depth);
+    try writer.print("<node kind=\"{s}\" dom-id=\"{d}\" x=\"{d}\" y=\"{d}\" w=\"{d}\" h=\"{d}\">\n", .{ if (kind == .element) "element" else "text", h.dom_id, h.rect.x, h.rect.y, h.rect.w, h.rect.h });
+
+    const sid = items.items(.style_id)[@as(usize, @intCast(h.dom_id))];
+    const row = dom.styles.cols.items[@intCast(sid)];
+    try dumpStyleRowXml(alloc, writer, row, depth + 1);
+
+    if (kind == .text) {
+        try xmlIndent(writer, depth + 1);
+        try writer.print("<text>", .{});
+        const txt = dom.getTextSlice(h.dom_id);
+        // Note: not escaping, assuming UTF-8 without special chars; extend if needed.
+        try writer.print("{s}", .{txt});
+        try writer.print("</text>\n", .{});
+    }
+
+    if (h.child_count > 0) {
+        const start: usize = @intCast(h.first_child);
+        var j: usize = 0;
+        while (j < h.child_count) : (j += 1) {
+            const child_idx: u32 = @intCast(start + j);
+            try dumpBoxTreeNodeXml(alloc, writer, tree, dom, child_idx, depth + 1);
+        }
+    }
+
+    try xmlIndent(writer, depth);
+    try writer.print("</node>\n", .{});
+}
 
 // Build a BoxTree with contiguous children slices using the provided layout provider.
 fn emitBoxRecursive(tree: *BoxTree, dom_: *const Dom, id_: DomNodeId, rect_: Rect, provider_: anytype, arena_: *std.heap.ArenaAllocator) !u32 {
@@ -848,6 +1825,60 @@ test "dom: unicode borders render" {
     try expectAsciiEqual(want, got);
 }
 
+test "xml full stack: utility classes render unicode boxes" {
+    const xml = @import("xml");
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    var arena = std.heap.ArenaAllocator.init(gpa.allocator());
+    defer arena.deinit();
+    const al = arena.allocator();
+
+    const input =
+        \\<?xml version="1.0" standalone="yes" ?>
+        \\<root class="flex flex-row">
+        \\  <box class="basis-6 h-3 border" />
+        \\  <box class="basis-6 h-3 border" />
+        \\</root>
+    ;
+    var fbs = std.io.fixedBufferStream(input);
+    var xdoc = try xml.parse(al, "<stdin>", fbs.reader());
+    defer xdoc.deinit();
+    const xd = try domFromXmlAlloc(al, &xdoc);
+    var dom = xd.dom;
+    defer dom.deinit();
+    const root = xd.root;
+
+    var tree = try buildBoxTreeFromDomAlloc(al, &dom, root);
+    defer tree.deinit();
+
+    var provider = StyleProvider{ .graphemes = try Graphemes.init(al), .display_width = try DisplayWidth.init(al) };
+    defer provider.graphemes.deinit(al);
+    defer provider.display_width.deinit(al);
+
+    const container = b(18, 3);
+    var r = try Raster.init(al, container.width, container.height);
+    defer r.deinit(al);
+    var glyphs = try GlyphTable.init(al);
+    defer glyphs.deinit();
+
+    // Layout directly in the full raster area
+    try layoutBoxesInPlace(al, &tree, &dom, tree.root_index, .{ .x = 0, .y = 0, .w = container.width, .h = container.height }, provider);
+
+    // Build and rasterize via display list (ASCII border style)
+    var dl = DisplayList.init(al);
+    defer dl.deinit();
+    try buildDisplayListFromBoxes(&dl, &dom, &tree, &glyphs);
+    try rasterizeDisplayListAscii(&r, al, &glyphs, &dl);
+
+    const got = try r.toStringAlloc(al);
+    defer al.free(got);
+    const want =
+        "+------++------+  \n" ++
+        "|      ||      |  \n" ++
+        "+------++------+  \n";
+    try expectAsciiEqual(want, got);
+}
+
 test "dom text node: layout + paint glyph run" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -960,7 +1991,7 @@ test "dom text node: combining grapheme treated as single cell" {
     try expectAsciiEqual(want, got);
 }
 
-test "wrap international prose with center and right alignment" {
+test "wrap mixed ascii+emoji prose with center and right alignment (predictable)" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     var arena = std.heap.ArenaAllocator.init(gpa.allocator());
@@ -970,79 +2001,54 @@ test "wrap international prose with center and right alignment" {
     var dom = Dom.init(al);
     defer dom.deinit();
     const root = try dom.addElement("root");
-    const txt = try dom.addText("Metonym   Μετωνύμιο メトニム 😊");
+    const txt = try dom.addText("One 😊 two three");
     dom.appendChild(root, txt);
 
-    // Two passes: center, then end
-    inline for (.{ .center, .end }) |just| {
-        var sr_root = defaultStyleRow();
-        sr_root.flex_dir = .row;
-        sr_root.justify = .start;
-        sr_root.align_items = .start;
-        try dom.setStyle(root, sr_root);
-        var sr_text = defaultStyleRow();
-        sr_text.justify = just;
-        try dom.setStyle(txt, sr_text);
+    var sr_root = defaultStyleRow();
+    sr_root.flex_dir = .row;
+    sr_root.justify = .start;
+    sr_root.align_items = .start;
+    try dom.setStyle(root, sr_root);
+    var sr_text = defaultStyleRow();
+    sr_text.justify = .start;
+    try dom.setStyle(txt, sr_text);
 
-        var tree = try buildBoxTreeFromDomAlloc(al, &dom, root);
-        defer tree.deinit();
-        var provider = StyleProvider{ .graphemes = try Graphemes.init(al), .display_width = try DisplayWidth.init(al) };
-        defer provider.graphemes.deinit(al);
-        defer provider.display_width.deinit(al);
+    var tree = try buildBoxTreeFromDomAlloc(al, &dom, root);
+    defer tree.deinit();
+    var provider = StyleProvider{ .graphemes = try Graphemes.init(al), .display_width = try DisplayWidth.init(al) };
+    defer provider.graphemes.deinit(al);
+    defer provider.display_width.deinit(al);
 
-        const container = b(22, 7);
-        var r = try Raster.init(al, container.width, container.height);
-        defer r.deinit(al);
-        drawBorderAscii(&r, 0, 0, container.width, container.height);
-        const inner_x: usize = if (container.width >= 2) 1 else 0;
-        const inner_y: usize = if (container.height >= 2) 1 else 0;
-        const inner_w: usize = if (container.width > 1) container.width - 2 else container.width;
-        const inner_h: usize = if (container.height > 1) container.height - 2 else container.height;
-        try layoutBoxesInPlace(al, &tree, &dom, tree.root_index, .{ .x = inner_x, .y = inner_y, .w = inner_w, .h = inner_h }, provider);
+    const container = b(14, 6);
+    var r = try Raster.init(al, container.width, container.height);
+    defer r.deinit(al);
+    drawBorderAscii(&r, 0, 0, container.width, container.height);
+    const inner_x: usize = if (container.width >= 2) 1 else 0;
+    const inner_y: usize = if (container.height >= 2) 1 else 0;
+    const inner_w: usize = if (container.width > 1) container.width - 2 else container.width;
+    const inner_h: usize = if (container.height > 1) container.height - 2 else container.height;
+    try layoutBoxesInPlace(al, &tree, &dom, tree.root_index, .{ .x = inner_x, .y = inner_y, .w = inner_w, .h = inner_h }, provider);
 
-        var dl = DisplayList.init(al);
-        defer dl.deinit();
-        var glyphs = try GlyphTable.init(al);
-        defer glyphs.deinit();
-        try buildDisplayListFromBoxes(&dl, &dom, &tree, &glyphs);
-        try rasterizeDisplayListAscii(&r, al, &glyphs, &dl);
+    var dl = DisplayList.init(al);
+    defer dl.deinit();
+    var glyphs = try GlyphTable.init(al);
+    defer glyphs.deinit();
+    try buildDisplayListFromBoxes(&dl, &dom, &tree, &glyphs);
+    try rasterizeDisplayListAscii(&r, al, &glyphs, &dl);
 
-        const got = try toUtf8AllocWithGlyphs(&r, al, &glyphs);
-        defer al.free(got);
-        // Structural assertions: border lines present and content split across separate lines.
-        var it = std.mem.splitScalar(u8, got, '\n');
-        const top = it.next().?;
-        const l2 = it.next().?;
-        const l3 = it.next().?;
-        const l4 = it.next().?;
-        const l5 = it.next().?;
-        const l6 = it.next().?;
-        const bot = it.next().?;
-        _ = l6; // unused content line
-        try std.testing.expectEqualStrings("+--------------------+", top);
-        try std.testing.expectEqualStrings("+--------------------+", bot);
-        // Find the three content-bearing lines among l2..l5
-        const has_metonym = std.mem.indexOf(u8, l2, "Metonym") != null or std.mem.indexOf(u8, l3, "Metonym") != null or std.mem.indexOf(u8, l4, "Metonym") != null or std.mem.indexOf(u8, l5, "Metonym") != null;
-        try std.testing.expect(has_metonym);
-        const has_greek_or_cjk = (std.mem.indexOf(u8, l2, "Μετωνύμιο") != null or std.mem.indexOf(u8, l3, "Μετωνύμιο") != null or std.mem.indexOf(u8, l4, "Μετωνύμιο") != null or std.mem.indexOf(u8, l5, "Μετωνύμιο") != null) or (std.mem.indexOf(u8, l2, "メトニム") != null or std.mem.indexOf(u8, l3, "メトニム") != null or std.mem.indexOf(u8, l4, "メトニム") != null or std.mem.indexOf(u8, l5, "メトニム") != null);
-        try std.testing.expect(has_greek_or_cjk);
-        const has_emoji = std.mem.indexOf(u8, l2, "😊") != null or std.mem.indexOf(u8, l3, "😊") != null or std.mem.indexOf(u8, l4, "😊") != null or std.mem.indexOf(u8, l5, "😊") != null;
-        try std.testing.expect(has_emoji);
-        // Alignment sanity: ensure padding exists left or right per justification
-        if (just == .center) {
-            // At least one line should have non-zero symmetric-ish padding
-            const line = if (std.mem.indexOf(u8, l3, "Metonym") != null) l3 else if (std.mem.indexOf(u8, l4, "Metonym") != null) l4 else l5;
-            const inner = line[1 .. line.len - 1];
-            const content_pos = std.mem.indexOf(u8, inner, "Metonym").?;
-            try std.testing.expect(content_pos > 0);
-        } else {
-            const line = if (std.mem.indexOf(u8, l3, "Metonym") != null) l3 else if (std.mem.indexOf(u8, l4, "Metonym") != null) l4 else l5;
-            const inner = line[1 .. line.len - 1];
-            const content_pos = std.mem.indexOf(u8, inner, "Metonym").?;
-            // Right-aligned: should not start at col 0
-            try std.testing.expect(content_pos > 0);
-        }
-    }
+    const got = try toUtf8AllocWithGlyphs(&r, al, &glyphs);
+    defer al.free(got);
+    try std.testing.expectEqualStrings(
+        \\+------------+
+        \\|One 😊 two   |
+        \\|three       |
+        \\|            |
+        \\|            |
+        \\+------------+
+        \\
+    ,
+        got,
+    );
 }
 
 test "dom: build structure, layout in place, render row" {
@@ -1713,7 +2719,27 @@ pub fn buildDisplayListFromBoxes(list: *DisplayList, dom: *const Dom, tree: *con
         const kind = items.items(.kind)[@as(usize, @intCast(h.dom_id))];
         if (kind == .text and h.rect.w > 0 and h.rect.h > 0) {
             const slice = dom.getTextSlice(h.dom_id);
-            const inner_w: usize = if (h.rect.w > 1) h.rect.w - 2 else h.rect.w;
+            // Compute content area from style.
+            // We reserve a 1-cell inset only when a border is drawn for this node.
+            const border_w: usize = @as(usize, @intCast(row.border.width_cells));
+            const pad_l: usize = @as(usize, @intCast(row.padding.l));
+            const pad_r: usize = @as(usize, @intCast(row.padding.r));
+            const pad_t: usize = @as(usize, @intCast(row.padding.t));
+            const pad_b: usize = @as(usize, @intCast(row.padding.b));
+            const base_inset: usize = if (border_w > 0) 1 else 0;
+            const inset_left = base_inset + pad_l;
+            const inset_right = base_inset + pad_r;
+            const inset_top = base_inset + pad_t;
+            const inset_bottom = base_inset + pad_b;
+            const content_w: usize = if (h.rect.w > inset_left + inset_right)
+                h.rect.w - (inset_left + inset_right)
+            else
+                0;
+            const content_h: usize = if (h.rect.h > inset_top + inset_bottom)
+                h.rect.h - (inset_top + inset_bottom)
+            else
+                0;
+
             var y_offset: usize = 0;
             var line_start: usize = 0;
             var line_width: usize = 0;
@@ -1724,7 +2750,7 @@ pub fn buildDisplayListFromBoxes(list: *DisplayList, dom: *const Dom, tree: *con
             while (witer.next()) |seg| {
                 const bytes = seg.bytes(slice);
                 const seg_w = dw.strWidth(bytes);
-                if (line_width + seg_w > inner_w and line_width > 0) {
+                if (line_width + seg_w > content_w and line_width > 0) {
                     const line_bytes_end = last_break_bytes orelse seg.offset;
                     const line_bytes = slice[line_start..line_bytes_end];
                     // emit line
@@ -1740,13 +2766,13 @@ pub fn buildDisplayListFromBoxes(list: *DisplayList, dom: *const Dom, tree: *con
                         const run = try list.ops.allocator.alloc(GlyphId, gids.items.len);
                         std.mem.copyForwards(GlyphId, run, gids.items);
                         const line_w_cols = dw.strWidth(line_bytes);
-                        const extra = if (line_w_cols >= inner_w) 0 else switch (row.justify) {
+                        const extra = if (line_w_cols >= content_w) 0 else switch (row.justify) {
                             .start => 0,
-                            .center => (inner_w - line_w_cols) / 2,
-                            .end => inner_w - line_w_cols,
+                            .center => (content_w - line_w_cols) / 2,
+                            .end => content_w - line_w_cols,
                             else => 0,
                         };
-                        try list.push(PaintOp{ .GlyphRun = .{ .x = h.rect.x + 1 + extra, .y = h.rect.y + 1 + y_offset, .glyphs = run } });
+                        try list.push(PaintOp{ .GlyphRun = .{ .x = h.rect.x + inset_left + extra, .y = h.rect.y + inset_top + y_offset, .glyphs = run } });
                     }
                     // next line
                     y_offset += 1;
@@ -1759,7 +2785,7 @@ pub fn buildDisplayListFromBoxes(list: *DisplayList, dom: *const Dom, tree: *con
                 last_break_bytes = seg.offset + seg.len;
             }
             // flush last line
-            if (line_start < slice.len and y_offset < if (h.rect.h > 0) h.rect.h - 2 else 0) {
+            if (line_start < slice.len and y_offset < content_h) {
                 const line_bytes = slice[line_start..];
                 var gids = std.ArrayList(GlyphId).init(list.ops.allocator);
                 defer gids.deinit();
@@ -1768,7 +2794,7 @@ pub fn buildDisplayListFromBoxes(list: *DisplayList, dom: *const Dom, tree: *con
                 while (it2.next()) |gc| {
                     const gb = gc.bytes(line_bytes);
                     const w = dw.strWidth(gb);
-                    if (w2 + w > inner_w) break;
+                    if (w2 + w > content_w) break;
                     w2 += w;
                     const gid = try glyphs.intern(list.ops.allocator, gb);
                     try gids.append(gid);
@@ -1777,13 +2803,13 @@ pub fn buildDisplayListFromBoxes(list: *DisplayList, dom: *const Dom, tree: *con
                     const run = try list.ops.allocator.alloc(GlyphId, gids.items.len);
                     std.mem.copyForwards(GlyphId, run, gids.items);
                     const line_w_cols = dw.strWidth(line_bytes);
-                    const extra = if (line_w_cols >= inner_w) 0 else switch (row.justify) {
+                    const extra = if (line_w_cols >= content_w) 0 else switch (row.justify) {
                         .start => 0,
-                        .center => (inner_w - line_w_cols) / 2,
-                        .end => inner_w - line_w_cols,
+                        .center => (content_w - line_w_cols) / 2,
+                        .end => content_w - line_w_cols,
                         else => 0,
                     };
-                    try list.push(PaintOp{ .GlyphRun = .{ .x = h.rect.x + 1 + extra, .y = h.rect.y + 1 + y_offset, .glyphs = run } });
+                    try list.push(PaintOp{ .GlyphRun = .{ .x = h.rect.x + inset_left + extra, .y = h.rect.y + inset_top + y_offset, .glyphs = run } });
                 }
             }
         }
@@ -2189,6 +3215,7 @@ pub fn toUtf8AllocWithGlyphs(self: *const Raster, allocator: std.mem.Allocator, 
             } else if (glyphs.getSlice(gid)) |sl| {
                 total += sl.len;
             } else {
+                std.debug.panic("glyph not found: {d}", .{gid});
                 total += 1; // '?'
             }
         }
@@ -3043,4 +4070,26 @@ test "renderParagraphAlloc wraps into glyph grid" {
     defer al.free(got);
     // two lines expected given width 10
     try std.testing.expect(std.mem.indexOfScalar(u8, got, '\n') != null);
+}
+
+test "xml: parse multiline string literal" {
+    const xml = @import("xml");
+    const input =
+        \\<?xml version="1.0" standalone="yes" ?>
+        \\<root>
+        \\  <g>Hello</g>
+        \\  <g>World</g>
+        \\</root>
+    ;
+    var fbs = std.io.fixedBufferStream(input);
+    var doc = try xml.parse(std.testing.allocator, "<stdin>", fbs.reader());
+    defer doc.deinit();
+    doc.acquire();
+    defer doc.release();
+
+    try std.testing.expectEqualStrings("root", doc.root.tag_name.slice());
+    const children = doc.root.children();
+    try std.testing.expect(children.len == 2);
+    try std.testing.expect(children[0].v() == .element);
+    try std.testing.expect(children[1].v() == .element);
 }

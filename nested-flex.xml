@@ -1,0 +1,22 @@
+<?xml version="1.0" standalone="yes"?>
+<root class="flex flex-row px-1">
+    <col class="basis-12 h-5 border px-1">
+        <row class="flex flex-row">
+            <box class="basis-6 h-3 border"/>
+            <box class="basis-6 h-3 border"/>
+        </row>
+        <row class="flex flex-row">
+            <box class="basis-8 h-3 border"/>
+            <box class="basis-4 h-3 border"/>
+        </row>
+    </col>
+    <col class="basis-12 h-5 border px-1">
+        <row class="flex flex-row">
+            <box class="basis-12 h-3 border"/>
+        </row>
+        <row class="flex flex-row">
+            <box class="basis-6 h-3 border"/>
+            <box class="basis-6 h-3 border"/>
+        </row>
+    </col>
+</root>

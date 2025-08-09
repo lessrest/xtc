@@ -1,0 +1,4 @@
+<?xml version="1.0" standalone="yes"?>
+<root class="flex flex-row px-1">
+    <body class="border">The quick brown fox</body>
+</root>

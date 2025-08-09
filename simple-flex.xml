@@ -1,0 +1,11 @@
+<?xml version="1.0" standalone="yes"?>
+<root class="flex flex-row">
+    <box class="basis-10 h-3 border"/>
+    <box class="basis-6 h-3 border"/>
+    <box class="basis-4 h-3 border"/>
+    <box class="basis-8 h-3 border"/>
+    <box class="basis-6 h-3 border"/>
+    <box class="basis-6 h-3 border"/>
+    <box class="basis-12 h-3 border"/>
+    <box class="basis-8 h-3 border"/>
+</root>
