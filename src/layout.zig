@@ -295,32 +295,42 @@ fn positionChildRect(
     return .{ .rect = rect, .advanced = advanced };
 }
 
-/// Build only the structural BoxTree (contiguous child ranges), with zeroed rects.
-fn emitStructureNode(tree: *BoxTree, dom_: *const Dom, id_: DomNodeId) !void {
-    const idx_u: u32 = @intCast(tree.boxes.items.len);
-    try tree.boxes.append(.{ .dom_id = id_, .rect = .{ .x = 0, .y = 0, .w = 0, .h = 0 }, .first_child = std.math.maxInt(u32), .child_count = 0 });
-    const items = dom_.headers.slice();
-    const kind = items.items(.kind)[@as(usize, @intCast(id_))];
-    if (kind == .element) {
-        const child_count = items.items(.child_count)[@as(usize, @intCast(id_))];
-        if (child_count > 0) {
-            var i: usize = 0;
-            var c = items.items(.first_child)[@as(usize, @intCast(id_))];
-            const first_child_index: u32 = @intCast(tree.boxes.items.len);
-            while (i < child_count) : (i += 1) {
-                _ = try emitStructureNode(tree, dom_, c);
-                c = items.items(.next_sibling)[@as(usize, @intCast(c))];
-            }
-            var hdr_ptr = &tree.boxes.items[@as(usize, @intCast(idx_u))];
-            hdr_ptr.first_child = first_child_index;
-            hdr_ptr.child_count = @intCast(child_count);
-        }
-    }
-}
-
 pub fn allocateBoxTreeFromDOM(alloc: std.mem.Allocator, dom: *const Dom, root: DomNodeId) !BoxTree {
     var tree = BoxTree.init(alloc);
-    try emitStructureNode(&tree, dom, root);
+    // Breadth-first construction so each node's immediate children are contiguous
+    const items = dom.headers.slice();
+
+    const Pair = struct { dom_id: DomNodeId, tree_idx: u32 };
+    var queue = std.ArrayList(Pair).init(alloc);
+    defer queue.deinit();
+
+    // Append root header
+    try tree.boxes.append(.{ .dom_id = root, .rect = .{ .x = 0, .y = 0, .w = 0, .h = 0 }, .first_child = std.math.maxInt(u32), .child_count = 0 });
+    try queue.append(.{ .dom_id = root, .tree_idx = 0 });
+
+    var qi: usize = 0;
+    while (qi < queue.items.len) : (qi += 1) {
+        const cur = queue.items[qi];
+        const kind = items.items(.kind)[@as(usize, @intCast(cur.dom_id))];
+        if (kind != .element) continue;
+
+        const dom_child_count = items.items(.child_count)[@as(usize, @intCast(cur.dom_id))];
+        if (dom_child_count == 0) continue;
+
+        const first_child_index: u32 = @intCast(tree.boxes.items.len);
+        var i: usize = 0;
+        var c = items.items(.first_child)[@as(usize, @intCast(cur.dom_id))];
+        while (i < dom_child_count) : (i += 1) {
+            const child_tree_idx: u32 = @intCast(tree.boxes.items.len);
+            try tree.boxes.append(.{ .dom_id = c, .rect = .{ .x = 0, .y = 0, .w = 0, .h = 0 }, .first_child = std.math.maxInt(u32), .child_count = 0 });
+            try queue.append(.{ .dom_id = c, .tree_idx = child_tree_idx });
+            c = items.items(.next_sibling)[@as(usize, @intCast(c))];
+        }
+        var hdr_ptr = &tree.boxes.items[@as(usize, @intCast(cur.tree_idx))];
+        hdr_ptr.first_child = first_child_index;
+        hdr_ptr.child_count = @intCast(dom_child_count);
+    }
+
     return tree;
 }
 
