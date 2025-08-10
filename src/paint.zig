@@ -12,7 +12,33 @@ const StyleJustify = @import("style.zig").StyleJustify;
 
 // --- Paint stage: device-independent display list ---
 
-pub const Rgba8 = struct { r: u8, g: u8, b: u8, a: u8 };
+/// RGBA color packed into a u32: 0xAABBGGRR (little-endian layout)
+pub const Rgba8 = u32;
+
+/// Create an Rgba8 color from individual components
+pub fn rgba8(r: u8, g: u8, b: u8, a: u8) Rgba8 {
+    return @as(u32, r) | (@as(u32, g) << 8) | (@as(u32, b) << 16) | (@as(u32, a) << 24);
+}
+
+/// Extract red component from Rgba8
+pub fn rgba8Red(color: Rgba8) u8 {
+    return @truncate(color);
+}
+
+/// Extract green component from Rgba8
+pub fn rgba8Green(color: Rgba8) u8 {
+    return @truncate(color >> 8);
+}
+
+/// Extract blue component from Rgba8
+pub fn rgba8Blue(color: Rgba8) u8 {
+    return @truncate(color >> 16);
+}
+
+/// Extract alpha component from Rgba8
+pub fn rgba8Alpha(color: Rgba8) u8 {
+    return @truncate(color >> 24);
+}
 
 fn mul255(x: u32, y: u32) u8 {
     // (x*y)/255 with rounding, inputs 0..255
@@ -22,25 +48,25 @@ fn mul255(x: u32, y: u32) u8 {
 
 pub fn blendOver(dst: *Rgba8, src: Rgba8) void {
     // Porter-Duff SrcOver for straight (non-premultiplied) 8-bit RGBA
-    const as: u8 = src.a;
-    const ad: u8 = dst.a;
+    const as: u8 = rgba8Alpha(src);
+    const ad: u8 = rgba8Alpha(dst.*);
     const one_minus_as: u8 = 255 - as;
     const out_a: u8 = as + mul255(ad, one_minus_as);
     if (out_a == 0) {
-        dst.* = .{ .r = 0, .g = 0, .b = 0, .a = 0 };
+        dst.* = rgba8(0, 0, 0, 0);
         return;
     }
     // Premultiplied channel blend
     const dst_scale: u8 = mul255(ad, one_minus_as);
-    const cp_r: u16 = @as(u16, mul255(src.r, as)) + @as(u16, mul255(dst.r, dst_scale));
-    const cp_g: u16 = @as(u16, mul255(src.g, as)) + @as(u16, mul255(dst.g, dst_scale));
-    const cp_b: u16 = @as(u16, mul255(src.b, as)) + @as(u16, mul255(dst.b, dst_scale));
+    const cp_r: u16 = @as(u16, mul255(rgba8Red(src), as)) + @as(u16, mul255(rgba8Red(dst.*), dst_scale));
+    const cp_g: u16 = @as(u16, mul255(rgba8Green(src), as)) + @as(u16, mul255(rgba8Green(dst.*), dst_scale));
+    const cp_b: u16 = @as(u16, mul255(rgba8Blue(src), as)) + @as(u16, mul255(rgba8Blue(dst.*), dst_scale));
     // Un-premultiply
     const oa: u16 = out_a;
-    dst.r = @intCast((cp_r * 255 + oa / 2) / oa);
-    dst.g = @intCast((cp_g * 255 + oa / 2) / oa);
-    dst.b = @intCast((cp_b * 255 + oa / 2) / oa);
-    dst.a = out_a;
+    const out_r: u8 = @intCast((cp_r * 255 + oa / 2) / oa);
+    const out_g: u8 = @intCast((cp_g * 255 + oa / 2) / oa);
+    const out_b: u8 = @intCast((cp_b * 255 + oa / 2) / oa);
+    dst.* = rgba8(out_r, out_g, out_b, out_a);
 }
 
 pub const PaintBorderStyle = enum { line_light, line_double, line_heavy, line_dashed };
@@ -79,10 +105,10 @@ fn resolveEffectiveFgBg(dref: *const dom.Dom, node_id: dom.DomNodeId) struct { f
         const sid = items.items(.style_id)[@as(usize, @intCast(cur))];
         const row = dref.styles.cols.items[@intCast(sid)];
         if (eff_fg == null and row.fg.use_default == 0) {
-            eff_fg = .{ .r = row.fg.r, .g = row.fg.g, .b = row.fg.b, .a = 255 };
+            eff_fg = rgba8(row.fg.r, row.fg.g, row.fg.b, 255);
         }
         if (eff_bg == null and row.bg.use_default == 0) {
-            eff_bg = .{ .r = row.bg.r, .g = row.bg.g, .b = row.bg.b, .a = 255 };
+            eff_bg = rgba8(row.bg.r, row.bg.g, row.bg.b, 255);
         }
         const p = items.items(.parent)[@as(usize, @intCast(cur))];
         if (p == dom.Dom.NullId) break;
@@ -101,13 +127,13 @@ fn emitGlyphTileFill(list: *PaintCommandBatch, glyphs: *tty.GlyphTable, rect: la
         const n = std.unicode.utf8Encode(@intCast(row.fill_glyph), &tmp) catch 0;
         break :blk if (n == 0) @as(tty.GlyphId, 32) else try glyphs.intern(list.ops.allocator, tmp[0..n]);
     };
-    try list.push(PaintOp{ .FillGlyphRect = .{ .x = rect.x, .y = rect.y, .w = rect.w, .h = rect.h, .glyph = gid, .color = .{ .r = row.fg.r, .g = row.fg.g, .b = row.fg.b, .a = 255 } } });
+    try list.push(PaintOp{ .FillGlyphRect = .{ .x = rect.x, .y = rect.y, .w = rect.w, .h = rect.h, .glyph = gid, .color = rgba8(row.fg.r, row.fg.g, row.fg.b, 255) } });
 }
 
 /// Helper: background painting step per CSS painting order (backgrounds behind borders and content).
 fn emitBackgroundFillIfAny(list: *PaintCommandBatch, rect: layout.Rect, row: StyleRow) !void {
     if (row.bg.use_default == 0 and rect.w > 0 and rect.h > 0) {
-        try list.push(PaintOp{ .FillRect = .{ .x = rect.x, .y = rect.y, .w = rect.w, .h = rect.h, .color = .{ .r = row.bg.r, .g = row.bg.g, .b = row.bg.b, .a = 255 } } });
+        try list.push(PaintOp{ .FillRect = .{ .x = rect.x, .y = rect.y, .w = rect.w, .h = rect.h, .color = rgba8(row.bg.r, row.bg.g, row.bg.b, 255) } });
     }
 }
 
@@ -134,12 +160,12 @@ fn emitBorderBlock(list: *PaintCommandBatch, rect: layout.Rect, color: Rgba8, th
 fn emitBorderStrokeIfAny(list: *PaintCommandBatch, rect: layout.Rect, row: StyleRow) !void {
     if (!(row.border.width > 0 and rect.w > 0 and rect.h > 0)) return;
     const col: Rgba8 = blk: {
-        if (row.border_color.use_default == 0) break :blk .{ .r = row.border_color.r, .g = row.border_color.g, .b = row.border_color.b, .a = 255 };
-        if (row.fg.use_default == 0) break :blk .{ .r = row.fg.r, .g = row.fg.g, .b = row.fg.b, .a = 255 };
-        break :blk .{ .r = 255, .g = 255, .b = 255, .a = 255 };
+        if (row.border_color.use_default == 0) break :blk rgba8(row.border_color.r, row.border_color.g, row.border_color.b, 255);
+        if (row.fg.use_default == 0) break :blk rgba8(row.fg.r, row.fg.g, row.fg.b, 255);
+        break :blk rgba8(255, 255, 255, 255);
     };
     const bg_for_border: ?Rgba8 = if (row.bg.use_default == 0)
-        .{ .r = row.bg.r, .g = row.bg.g, .b = row.bg.b, .a = 255 }
+        rgba8(row.bg.r, row.bg.g, row.bg.b, 255)
     else
         null;
     switch (row.border.style) {
@@ -180,8 +206,8 @@ fn computeContentBox(rect: layout.Rect, row: StyleRow) ContentBox {
 
 fn computeTextColor(document: *const dom.Dom, node_id: dom.DomNodeId, row: StyleRow) Rgba8 {
     const eff = resolveEffectiveFgBg(document, node_id);
-    const base_fg: Rgba8 = eff.fg orelse .{ .r = 255, .g = 255, .b = 255, .a = 255 };
-    const base_bg: Rgba8 = eff.bg orelse .{ .r = 255, .g = 255, .b = 255, .a = 255 };
+    const base_fg: Rgba8 = eff.fg orelse rgba8(255, 255, 255, 255);
+    const base_bg: Rgba8 = eff.bg orelse rgba8(255, 255, 255, 255);
     return if (row.text_flags.inverse == 1) base_bg else base_fg;
 }
 
@@ -302,13 +328,13 @@ pub fn computePaintCommands(list: *PaintCommandBatch, document: *const dom.Dom, 
 }
 
 test "alpha: simple SrcOver blend" {
-    var dst = Rgba8{ .r = 0, .g = 0, .b = 255, .a = 255 };
-    const src = Rgba8{ .r = 255, .g = 0, .b = 0, .a = 128 };
+    var dst = rgba8(0, 0, 255, 255);
+    const src = rgba8(255, 0, 0, 128);
     blendOver(&dst, src);
     // Expect purple-ish, full alpha
-    try std.testing.expect(dst.r > 120 and dst.r < 140);
-    try std.testing.expect(dst.b > 120 and dst.b < 140);
-    try std.testing.expectEqual(@as(u8, 255), dst.a);
+    try std.testing.expect(rgba8Red(dst) > 120 and rgba8Red(dst) < 140);
+    try std.testing.expect(rgba8Blue(dst) > 120 and rgba8Blue(dst) < 140);
+    try std.testing.expectEqual(@as(u8, 255), rgba8Alpha(dst));
 }
 
 test "paint: stroke rect via display list (ascii)" {
@@ -321,7 +347,7 @@ test "paint: stroke rect via display list (ascii)" {
     defer glyphs.deinit();
     var dl = PaintCommandBatch.init(al);
     defer dl.deinit();
-    try dl.push(PaintOp{ .StrokeRect = .{ .x = 2, .y = 1, .w = 6, .h = 4, .color = .{ .r = 255, .g = 255, .b = 255, .a = 255 }, .style = .line_light, .bg_color = .{ .r = 0, .g = 0, .b = 0, .a = 255 } } });
+    try dl.push(PaintOp{ .StrokeRect = .{ .x = 2, .y = 1, .w = 6, .h = 4, .color = rgba8(255, 255, 255, 255), .style = .line_light, .bg_color = rgba8(0, 0, 0, 255) } });
     // Force ASCII fallback for this test
     tty.setUseUnicodeBoxes(false);
     defer tty.setUseUnicodeBoxes(true);
@@ -386,6 +412,6 @@ test "text color inheritance: parent element color applies to child text glyph r
 
     const sr = tailwind.parseUtilityClassList("text-blue-200");
     const rgb = tailwind.get_fg_rgb(sr) orelse return error.TestExpectedFg;
-    const want: Rgba8 = .{ .r = rgb[0], .g = rgb[1], .b = rgb[2], .a = 255 };
+    const want: Rgba8 = rgba8(rgb[0], rgb[1], rgb[2], 255);
     try std.testing.expectEqual(want, got);
 }

@@ -1,61 +1,82 @@
 const std = @import("std");
 const posix = std.posix;
-const Raster = @import("tty.zig").Raster;
-const Rgba8 = @import("tty.zig").Rgba8;
-const DisplayWidth = @import("lib.zig").DisplayWidth;
+
+// Module imports
+const tty = @import("tty.zig");
 const trealla = @import("trealla.zig");
-const allocateBoxTreeFromDOM = @import("layout.zig").allocateBoxTreeFromDOM;
-const Dom = @import("dom.zig").Dom;
+const layout = @import("layout.zig");
+const dom = @import("dom.zig");
+const paint = @import("paint.zig");
+const ansi = @import("ansi.zig");
+
+// External dependencies
 const Graphemes = @import("Graphemes");
-const PaintCommandBatch = @import("paint.zig").PaintCommandBatch;
-const rasterizeDisplayList = @import("tty.zig").rasterizeDisplayList;
-const computePaintCommands = @import("paint.zig").computePaintCommands;
-const layoutBoxesInPlaceNode = @import("layout.zig").layoutBoxesInPlaceNode;
-const GlyphTable = @import("tty.zig").GlyphTable;
-const DomNodeId = @import("dom.zig").DomNodeId;
+const DisplayWidth = @import("DisplayWidth");
+
+// Type aliases for convenience
+const Raster = tty.Raster;
+const Rgba8 = tty.Rgba8;
+const Dom = dom.Dom;
+const DomNodeId = dom.DomNodeId;
 
 pub fn run(allocator: std.mem.Allocator) !void {
     var raw = try RawMode.enable(posix.STDIN_FILENO);
     defer raw.disable() catch {};
 
     // Enter alternate screen buffer and hide cursor; restore on exit
-    var w = std.io.getStdOut().writer();
-    _ = try w.write("\x1b[?1049h\x1b[?25l\x1b[2J\x1b[H");
+    var stdout_ansi = ansi.stdout();
+    try stdout_ansi.initializeTerminal();
     defer {
-        var w2 = std.io.getStdOut().writer();
-        _ = w2.write("\x1b[0m\x1b[?25h\x1b[?1049l") catch {};
+        var restore_ansi = ansi.stdout();
+        restore_ansi.restoreTerminal() catch {};
     }
 
     var display_width = try DisplayWidth.init(allocator);
     defer display_width.deinit(allocator);
 
-    var dom = Dom.init(allocator);
-    defer dom.deinit();
+    var document = Dom.init(allocator);
+    defer document.deinit();
 
-    const root_id = try dom.addElement(
+    const root_id = try document.addElement(
         "flex flex-col bg-glyph-[.] items-center",
     );
-    const container_id = try dom.addElement(
+    const container_id = try document.addElement(
         "flex flex-col grow-1 w-80 items-stretch border border-blue-200 bg-yellow-700",
     );
-    const prolog_output_id = try dom.addElement(
+    const prolog_output_id = try document.addElement(
         "px-2 grow-1 bg-green-400 text-slate-800",
     );
-    const child_id = try dom.addElement(
+    const child_id = try document.addElement(
         "px-2 flex items-center grow-0 h-6 bg-slate-700 text-slate-200",
     );
 
-    const text_id = try dom.addText("foo");
-    const output_text_id = try dom.addText("prolog");
-    dom.appendChild(child_id, try dom.addText("» "));
-    dom.appendChild(child_id, text_id);
+    const text_id = try document.addText("foo");
+    const output_text_id = try document.addText("prolog");
+    document.appendChild(child_id, try document.addText("» "));
+    document.appendChild(child_id, text_id);
 
-    dom.appendChild(prolog_output_id, output_text_id);
-    dom.appendChild(container_id, prolog_output_id);
-    dom.appendChild(container_id, child_id);
-    dom.appendChild(root_id, container_id);
+    document.appendChild(prolog_output_id, output_text_id);
+    document.appendChild(container_id, prolog_output_id);
+    document.appendChild(container_id, child_id);
+    document.appendChild(root_id, container_id);
 
-    var ctx = RenderCtx{ .allocator = allocator, .display_width = &display_width, .width = 80, .height = 24, .dom = dom, .root_id = root_id, .text_id = text_id, .output_text_id = output_text_id, .raster_front = null, .raster_back = null, .log = null };
+    var ctx = RenderCtx{
+        .allocator = allocator,
+        .display_width = &display_width,
+        .width = 80,
+        .height = 24,
+        .dom = document,
+        .root_id = root_id,
+        .text_id = text_id,
+        .output_text_id = output_text_id,
+        .raster_front = null,
+        .raster_back = null,
+        .log = null,
+    };
+    defer {
+        if (ctx.raster_front) |*r| r.deinit(allocator);
+        if (ctx.raster_back) |*r| r.deinit(allocator);
+    }
 
     var editor = try LineEditor.init(allocator);
     defer editor.deinit(allocator);
@@ -102,11 +123,11 @@ const RenderCtx = struct {
     log: ?std.fs.File = null,
 };
 
-fn setDomText(dom: *Dom, text_id: DomNodeId, text: []const u8) !void {
-    const off: u32 = @intCast(dom.text_arena.items.len);
-    try dom.text_arena.appendSlice(text);
+fn setDomText(document: *Dom, text_id: DomNodeId, text: []const u8) !void {
+    const off: u32 = @intCast(document.text_arena.items.len);
+    try document.text_arena.appendSlice(text);
     const len: u32 = @intCast(text.len);
-    var items = dom.headers.slice();
+    var items = document.headers.slice();
     const idx: usize = @intCast(text_id);
     items.items(.first_child)[idx] = @as(DomNodeId, off);
     items.items(.child_count)[idx] = len;
@@ -142,10 +163,10 @@ const pretty = @import("pretty");
 fn renderDom(ctx: *RenderCtx) !void {
     const al = ctx.allocator;
 
-    var tree = try allocateBoxTreeFromDOM(al, &ctx.dom, ctx.root_id);
+    var tree = try layout.allocateBoxTreeFromDOM(al, &ctx.dom, ctx.root_id);
     defer tree.deinit();
 
-    try layoutBoxesInPlaceNode(
+    try layout.computeFlexLayout(
         al,
         &tree,
         &ctx.dom,
@@ -154,76 +175,45 @@ fn renderDom(ctx: *RenderCtx) !void {
         ctx.display_width,
     );
 
-    var dl = PaintCommandBatch.init(al);
+    var dl = paint.PaintCommandBatch.init(al);
     defer dl.deinit();
-    var glyphs = try GlyphTable.init(al);
+    var glyphs = try tty.GlyphTable.init(al);
     defer glyphs.deinit();
 
-    try computePaintCommands(&dl, &ctx.dom, &tree, &glyphs);
+    try paint.computePaintCommands(&dl, &ctx.dom, &tree, &glyphs);
+
     // Double-buffered raster: render into back, diff against front, then swap
     var rb = try ensureDoubleRaster(ctx);
     rb.back.clear();
-    try rasterizeDisplayList(rb.back, al, &glyphs, &dl);
+    try tty.rasterizeDisplayList(rb.back, al, &glyphs, &dl);
 
-    // Emit diffs from front -> back
-    var out = std.ArrayList(u8).init(al);
-    defer out.deinit();
-    try out.appendSlice("\x1b[0m"); // reset styles; no clear, we'll position per change
-    var cur_fg: ?Rgba8 = null;
-    var cur_bg: ?Rgba8 = null;
-    var y: usize = 0;
-    while (y < rb.back.height) : (y += 1) {
-        var x: usize = 0;
-        while (x < rb.back.width) : (x += 1) {
-            const idx = y * rb.back.width + x;
-            const g0 = rb.front.cells[idx];
-            const g1 = rb.back.cells[idx];
-            const fg0 = rb.front.fg_set[idx];
-            const fg1 = rb.back.fg_set[idx];
-            const bg0 = rb.front.bg_set[idx];
-            const bg1 = rb.back.bg_set[idx];
-            const fg_eq = if (fg0 == fg1 and (!fg1 or std.meta.eql(rb.front.fg[idx], rb.back.fg[idx]))) true else false;
-            const bg_eq = if (bg0 == bg1 and (!bg1 or std.meta.eql(rb.front.bg[idx], rb.back.bg[idx]))) true else false;
-            if (g0 == g1 and fg_eq and bg_eq) continue;
-            // Move cursor to 1-based row/col
-            try out.writer().print("\x1b[{d};{d}H", .{ y + 1, x + 1 });
-            // Set/clear bg
-            if (rb.back.bg_set[idx]) {
-                const b = rb.back.bg[idx];
-                if (cur_bg == null or !std.meta.eql(cur_bg.?, b)) {
-                    try out.writer().print("\x1b[48;2;{d};{d};{d}m", .{ b.r, b.g, b.b });
-                    cur_bg = b;
-                }
-            } else if (cur_bg != null) {
-                try out.appendSlice("\x1b[49m");
-                cur_bg = null;
-            }
-            // Set/clear fg
-            if (rb.back.fg_set[idx]) {
-                const f = rb.back.fg[idx];
-                if (cur_fg == null or !std.meta.eql(cur_fg.?, f)) {
-                    try out.writer().print("\x1b[38;2;{d};{d};{d}m", .{ f.r, f.g, f.b });
-                    cur_fg = f;
-                }
-            } else if (cur_fg != null) {
-                try out.appendSlice("\x1b[39m");
-                cur_fg = null;
-            }
-            // Emit glyph from back
-            if (g1 <= 255) {
-                try out.append(@as(u8, @intCast(g1)));
-            } else if (glyphs.getSlice(g1)) |bytes| {
-                try out.appendSlice(bytes);
-            } else {
-                try out.append('?');
-            }
+    // Emit diffs from front -> back directly to stdout
+    var out_ansi = ansi.stdout();
+    try out_ansi.resetStyle(); // reset styles; no clear, we'll position per change
+
+    var diff_iter = tty.RasterDiff.iterateChanges(rb.front, rb.back);
+    while (diff_iter.next()) |change_run| {
+        // Move cursor to 1-based row/col
+        try out_ansi.moveCursor(change_run.y + 1, change_run.x + 1);
+
+        // Handle color changes and resets
+        if (change_run.bg_reset) {
+            try out_ansi.resetBackground();
+        } else if (change_run.bg_change) |bg| {
+            try out_ansi.setBackground(bg);
         }
-    }
-    // Optional: reset at end
-    try out.appendSlice("\x1b[0m");
 
-    var w = std.io.getStdOut().writer();
-    _ = try w.write(out.items);
+        if (change_run.fg_reset) {
+            try out_ansi.resetForeground();
+        } else if (change_run.fg_change) |fg| {
+            try out_ansi.setForeground(fg);
+        }
+
+        // Write the entire run of glyphs
+        try out_ansi.writeGlyphs(change_run.glyphs, &glyphs);
+    }
+
+    try out_ansi.resetStyle();
 
     // Swap front/back for next frame
     const tmp = ctx.raster_front.?;

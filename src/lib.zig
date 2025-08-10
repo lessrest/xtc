@@ -1,54 +1,50 @@
 pub usingnamespace @import("style.zig");
 pub usingnamespace @import("layout.zig");
 pub usingnamespace @import("dom.zig");
+pub usingnamespace @import("tailwind.zig");
+pub usingnamespace @import("paint.zig");
+pub usingnamespace @import("tty.zig");
+pub usingnamespace @import("xml.zig");
 
 const std = @import("std");
 const builtin = @import("builtin");
 
+const style = @import("style.zig");
+const layout = @import("layout.zig");
+const dom = @import("dom.zig");
+const tailwind = @import("tailwind.zig");
+const paint = @import("paint.zig");
+const tty = @import("tty.zig");
+const xml = @import("xml.zig");
+const xmlparse = @import("xmlparse.zig");
+
 pub const DisplayWidth = @import("DisplayWidth");
 pub const Graphemes = @import("Graphemes");
 pub const Words = @import("Words");
-pub const StyleRow = @import("style.zig").StyleRow;
-pub const defaultStyleRow = @import("style.zig").defaultStyleRow;
-pub const layoutFromStyleRow = @import("layout.zig").layoutFromStyleRow;
-pub const styleAlignToCross = @import("style.zig").styleAlignToCross;
-pub const parseUtilityClassList = @import("tailwind.zig").parseUtilityClassList;
-pub const utilityTokensFromStyleRow = @import("tailwind.zig").utilityTokensFromStyleRow;
-pub const StyleTable = @import("style.zig").StyleTable;
-pub const StyleDisplay = @import("style.zig").StyleDisplay;
-pub const trealla = @import("trealla.zig");
-pub const PaintCommandBatch = @import("paint.zig").PaintCommandBatch;
-pub const drawBorderAscii = @import("tty.zig").drawBorderAscii;
-pub const rasterizeDisplayList = @import("tty.zig").rasterizeDisplayList;
-pub const Rgba8 = @import("paint.zig").Rgba8;
-pub const GlyphTable = @import("tty.zig").GlyphTable;
-pub const GlyphId = @import("tty.zig").GlyphId;
-pub const Raster = @import("tty.zig").Raster;
 
-const DomNodeId = @import("dom.zig").DomNodeId;
-const Rect = @import("layout.zig").Rect;
-const BoxNode = @import("dom.zig").BoxNode;
-const Dom = @import("dom.zig").Dom;
-const BoxTree = @import("layout.zig").BoxTree;
-pub const calculateSpaces = @import("layout.zig").calculateSpaces;
-pub const loadDocumentFromMarkup = @import("xml.zig").loadDocumentFromMarkup;
-pub const allocateBoxTreeFromDOM = @import("layout.zig").allocateBoxTreeFromDOM;
+pub const trealla = @import("trealla.zig");
+
+const DomNodeId = dom.DomNodeId;
+const Rect = layout.Rect;
+const BoxNode = dom.BoxNode;
+const Dom = dom.Dom;
+const BoxTree = layout.BoxTree;
 
 /// Helper for tests: pick the first top-level element as root and build a BoxTree.
-pub fn allocateBoxTreeFromDOMAutoRoot(alloc: std.mem.Allocator, dom: *const Dom) !BoxTree {
-    const items = dom.headers.slice();
+pub fn allocateBoxTreeFromDOMAutoRoot(alloc: std.mem.Allocator, document: *const Dom) !BoxTree {
+    const items = document.headers.slice();
     var i: usize = 0;
-    while (i < dom.headers.len) : (i += 1) {
+    while (i < document.headers.len) : (i += 1) {
         if (items.items(.parent)[i] == Dom.NullId and items.items(.kind)[i] == .element) {
             const root: DomNodeId = @intCast(i);
-            return try allocateBoxTreeFromDOM(alloc, dom, root);
+            return try layout.allocateBoxTreeFromDOM(alloc, document, root);
         }
     }
     // Fallback: empty tree with root 0 if no element found
-    return allocateBoxTreeFromDOM(alloc, dom, 0);
+    return layout.allocateBoxTreeFromDOM(alloc, document, 0);
 }
-pub const computeFlexLayout = @import("layout.zig").computeFlexLayout;
-pub const computePaintCommands = @import("paint.zig").computePaintCommands;
+pub const computeFlexLayout = layout.computeFlexLayout;
+pub const computePaintCommands = paint.computePaintCommands;
 
 // --- Test helpers (compact and integration-focused) ---
 fn expectAsciiEqual(want: []const u8, got: []const u8) !void {
@@ -61,37 +57,36 @@ pub fn renderXmlAscii(
     width: usize,
     height: usize,
 ) ![]u8 {
-    const xml = @import("xmlparse.zig");
     var fbs = std.io.fixedBufferStream(xml_input);
-    var xdoc = try xml.parse(al, "<stdin>", fbs.reader());
+    var xdoc = try xmlparse.parse(al, "<stdin>", fbs.reader());
     defer xdoc.deinit();
 
-    var dom = try loadDocumentFromMarkup(al, &xdoc);
-    defer dom.deinit();
+    var document = try xml.loadDocumentFromMarkup(al, &xdoc);
+    defer document.deinit();
 
-    var tree = try allocateBoxTreeFromDOMAutoRoot(al, &dom);
+    var tree = try allocateBoxTreeFromDOMAutoRoot(al, &document);
     defer tree.deinit();
 
     var dw = try DisplayWidth.init(al);
     defer dw.deinit(al);
 
-    try computeFlexLayout(
+    try layout.computeFlexLayout(
         al,
         &tree,
-        &dom,
+        &document,
         tree.getNodeMut(0),
         .{ .x = 0, .y = 0, .w = width, .h = height },
         &dw,
     );
 
-    var r = try Raster.init(al, width, height);
+    var r = try tty.Raster.init(al, width, height);
     defer r.deinit(al);
-    var glyphs = try GlyphTable.init(al);
+    var glyphs = try tty.GlyphTable.init(al);
     defer glyphs.deinit();
-    var dl = PaintCommandBatch.init(al);
+    var dl = paint.PaintCommandBatch.init(al);
     defer dl.deinit();
-    try computePaintCommands(&dl, &dom, &tree, &glyphs);
-    try rasterizeDisplayList(&r, al, &glyphs, &dl);
+    try paint.computePaintCommands(&dl, &document, &tree, &glyphs);
+    try tty.rasterizeDisplayList(&r, al, &glyphs, &dl);
     return try r.toStringAlloc(al, &glyphs);
 }
 
