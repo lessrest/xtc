@@ -19,85 +19,39 @@ pub fn build(b: *std.Build) void {
     lib.root_module.addImport("Words", zg.module("Words"));
     b.installArtifact(lib);
 
-    // Build Trealla C library (minimal: no FFI, SSL, threads, readline)
-    const trealla = b.addStaticLibrary(.{
-        .name = "trealla",
+    // Build Wren VM library
+    const wren = b.addStaticLibrary(.{
+        .name = "wren",
         .target = target,
         .optimize = optimize,
     });
-    trealla.addIncludePath(b.path("deps/trealla/src"));
-    trealla.addIncludePath(b.path("deps/trealla/src/isocline/include"));
-    trealla.addCSourceFiles(.{
+    wren.addIncludePath(b.path("deps/wren/src/include"));
+    wren.addIncludePath(b.path("deps/wren/src/vm"));
+    wren.addIncludePath(b.path("deps/wren/src/optional"));
+    wren.addCSourceFiles(.{
         .files = &.{
-            // core src
-            "deps/trealla/src/base64.c",
-            "deps/trealla/src/bif_atts.c",
-            "deps/trealla/src/bif_bboard.c",
-            "deps/trealla/src/bif_control.c",
-            "deps/trealla/src/bif_csv.c",
-            "deps/trealla/src/bif_database.c",
-            // exclude bif_ffi.c when NOFFI
-            "deps/trealla/src/bif_format.c",
-            "deps/trealla/src/bif_functions.c",
-            "deps/trealla/src/bif_maps.c",
-            "deps/trealla/src/bif_os.c",
-            "deps/trealla/src/bif_posix.c",
-            "deps/trealla/src/bif_predicates.c",
-            "deps/trealla/src/bif_sort.c",
-            "deps/trealla/src/bif_sregex.c",
-            "deps/trealla/src/bif_streams.c",
-            "deps/trealla/src/bif_tasks.c",
-            // provide lock stubs and threads builtins table even when NOTHREADS
-            "deps/trealla/src/bif_threads.c",
-            // exclude threads when NOTHREADS
-            "deps/trealla/src/compile.c",
-            "deps/trealla/src/heap.c",
-            "deps/trealla/src/history.c",
-            // NOTE: exclude deps/trealla/src/library.c (we provide g_libs in shim)
-            "deps/trealla/src/list.c",
-            "deps/trealla/src/module.c",
-            "deps/trealla/src/network.c",
-            "deps/trealla/src/parser.c",
-            "deps/trealla/src/print.c",
-            "deps/trealla/src/prolog.c",
-            "deps/trealla/src/query.c",
-            "deps/trealla/src/skiplist.c",
-            "deps/trealla/src/terms.c",
-            "deps/trealla/src/toplevel.c",
-            "deps/trealla/src/unify.c",
-            "deps/trealla/src/utf8.c",
-            "deps/trealla/src/version.c",
-            // imath and sre
-            "deps/trealla/src/imath/imath.c",
-            "deps/trealla/src/imath/imrat.c",
-            "deps/trealla/src/sre/re.c",
-            // bundled isocline (tiny line editor)
-            "deps/trealla/src/isocline/src/isocline.c",
-            // minimal embedded library shim (in-repo)
-            "c/trealla_g_libs_empty.c",
-            // shims for interpreter-only globals not provided in lib build
-            "c/trealla_shims.c",
+            // Core VM files
+            "deps/wren/src/vm/wren_compiler.c",
+            "deps/wren/src/vm/wren_core.c",
+            "deps/wren/src/vm/wren_debug.c",
+            "deps/wren/src/vm/wren_primitive.c",
+            "deps/wren/src/vm/wren_utils.c",
+            "deps/wren/src/vm/wren_value.c",
+            "deps/wren/src/vm/wren_vm.c",
+            // Optional modules
+            "deps/wren/src/optional/wren_opt_meta.c",
+            "deps/wren/src/optional/wren_opt_random.c",
         },
         .flags = &.{
             "-std=c99",
-            "-D_GNU_SOURCE",
-            // feature toggles for minimal build
-            "-DNOFFI=1",
-            "-DNOSSL=1",
-            "-DNOTHREADS=1",
-            // use bundled isocline, avoid readline/editline deps
-            "-DUSE_ISOCLINE=1",
-            // common warnings similar to upstream
             "-Wall",
             "-Wextra",
-            "-Wno-unused-but-set-variable",
             "-Wno-unused-parameter",
-            "-Wno-unused-variable",
         },
     });
     // math is required
-    trealla.linkSystemLibrary("m");
-    b.installArtifact(trealla);
+    wren.linkSystemLibrary("m");
+    b.installArtifact(wren);
 
     // CLI executable: xtc
     const exe = b.addExecutable(.{
@@ -110,7 +64,8 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addImport("Graphemes", zg.module("Graphemes"));
     exe.root_module.addImport("DisplayWidth", zg.module("DisplayWidth"));
     exe.root_module.addImport("Words", zg.module("Words"));
-    exe.linkLibrary(trealla);
+    exe.addIncludePath(b.path("deps/wren/src/include"));
+    exe.linkLibrary(wren);
 
     const pretty = b.dependency("pretty", .{ .target = target, .optimize = optimize });
     exe.root_module.addImport("pretty", pretty.module("pretty"));
@@ -126,7 +81,8 @@ pub fn build(b: *std.Build) void {
     unit_tests.root_module.addImport("Graphemes", zg.module("Graphemes"));
     unit_tests.root_module.addImport("DisplayWidth", zg.module("DisplayWidth"));
     unit_tests.root_module.addImport("Words", zg.module("Words"));
-    unit_tests.linkLibrary(trealla);
+    unit_tests.addIncludePath(b.path("deps/wren/src/include"));
+    unit_tests.linkLibrary(wren);
     const run_unit_tests = b.addRunArtifact(unit_tests);
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_unit_tests.step);

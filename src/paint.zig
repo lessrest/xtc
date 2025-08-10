@@ -266,38 +266,52 @@ fn emitTextGlyphRuns(
     if (cb.rect.w == 0 or cb.rect.h == 0) return;
 
     var y_offset: usize = 0;
-    var line_start: usize = 0;
-    var line_width: usize = 0;
-    var last_break_bytes: ?usize = null;
-    var word_iter = Words.init(list.ops.allocator) catch unreachable;
-    defer word_iter.deinit(list.ops.allocator);
-    var witer = word_iter.iterator(slice);
-    while (witer.next()) |seg| {
-        const bytes = seg.bytes(slice);
-        const seg_w = dw.strWidth(bytes);
-        if (line_width + seg_w > cb.rect.w and line_width > 0) {
-            const line_bytes_end = last_break_bytes orelse seg.offset;
-            const line_bytes = slice[line_start..line_bytes_end];
-            const shaped = try buildGlyphRun(list.ops.allocator, g, dw, glyphs, line_bytes, cb.rect.w, false);
+    
+    // First split by newlines
+    var line_iter = std.mem.tokenizeScalar(u8, slice, '\n');
+    while (line_iter.next()) |line| {
+        if (y_offset >= cb.rect.h) break;
+        
+        // For each line, apply word wrapping if needed
+        var line_start: usize = 0;
+        var line_width: usize = 0;
+        var last_break_bytes: ?usize = null;
+        var word_iter = Words.init(list.ops.allocator) catch unreachable;
+        defer word_iter.deinit(list.ops.allocator);
+        var witer = word_iter.iterator(line);
+        
+        while (witer.next()) |seg| {
+            const bytes = seg.bytes(line);
+            const seg_w = dw.strWidth(bytes);
+            if (line_width + seg_w > cb.rect.w and line_width > 0) {
+                // Emit the current wrapped line
+                const line_bytes_end = last_break_bytes orelse seg.offset;
+                const line_bytes = line[line_start..line_bytes_end];
+                const shaped = try buildGlyphRun(list.ops.allocator, g, dw, glyphs, line_bytes, cb.rect.w, false);
+                if (shaped.run.len > 0) {
+                    const extra = computeJustifyOffset(cb.rect.w, shaped.width_cols, row.justify);
+                    try list.push(PaintOp{ .GlyphRun = .{ .x = rect.x + cb.inset_left + extra, .y = rect.y + cb.inset_top + y_offset, .glyphs = shaped.run, .color = color } });
+                }
+                y_offset += 1;
+                if (y_offset >= cb.rect.h) break;
+                line_start = seg.offset;
+                line_width = seg_w;
+                last_break_bytes = seg.offset + seg.len;
+                continue;
+            }
+            line_width += seg_w;
+            last_break_bytes = seg.offset + seg.len;
+        }
+        
+        // Emit the remainder of this line (after wrapping)
+        if (line_start < line.len and y_offset < cb.rect.h) {
+            const line_bytes = line[line_start..];
+            const shaped = try buildGlyphRun(list.ops.allocator, g, dw, glyphs, line_bytes, cb.rect.w, true);
             if (shaped.run.len > 0) {
                 const extra = computeJustifyOffset(cb.rect.w, shaped.width_cols, row.justify);
                 try list.push(PaintOp{ .GlyphRun = .{ .x = rect.x + cb.inset_left + extra, .y = rect.y + cb.inset_top + y_offset, .glyphs = shaped.run, .color = color } });
             }
             y_offset += 1;
-            line_start = seg.offset;
-            line_width = seg_w;
-            last_break_bytes = seg.offset + seg.len;
-            continue;
-        }
-        line_width += seg_w;
-        last_break_bytes = seg.offset + seg.len;
-    }
-    if (line_start < slice.len and y_offset < cb.rect.h) {
-        const line_bytes = slice[line_start..];
-        const shaped = try buildGlyphRun(list.ops.allocator, g, dw, glyphs, line_bytes, cb.rect.w, true);
-        if (shaped.run.len > 0) {
-            const extra = computeJustifyOffset(cb.rect.w, shaped.width_cols, row.justify);
-            try list.push(PaintOp{ .GlyphRun = .{ .x = rect.x + cb.inset_left + extra, .y = rect.y + cb.inset_top + y_offset, .glyphs = shaped.run, .color = color } });
         }
     }
 }

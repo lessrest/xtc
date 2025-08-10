@@ -3,7 +3,7 @@ const posix = std.posix;
 
 // Module imports
 const tty = @import("tty.zig");
-const trealla = @import("trealla.zig");
+const wren = @import("wren.zig");
 const layout = @import("layout.zig");
 const dom = @import("dom.zig");
 const paint = @import("paint.zig");
@@ -43,7 +43,7 @@ pub fn run(allocator: std.mem.Allocator) !void {
     const container_id = try document.addElement(
         "flex flex-col grow-1 w-80 items-stretch border border-blue-200 bg-yellow-700",
     );
-    const prolog_output_id = try document.addElement(
+    const wren_output_id = try document.addElement(
         "px-2 grow-1 bg-green-400 text-slate-800",
     );
     const child_id = try document.addElement(
@@ -51,12 +51,12 @@ pub fn run(allocator: std.mem.Allocator) !void {
     );
 
     const text_id = try document.addText("foo");
-    const output_text_id = try document.addText("prolog");
+    const output_text_id = try document.addText("wren");
     document.appendChild(child_id, try document.addText("» "));
     document.appendChild(child_id, text_id);
 
-    document.appendChild(prolog_output_id, output_text_id);
-    document.appendChild(container_id, prolog_output_id);
+    document.appendChild(wren_output_id, output_text_id);
+    document.appendChild(container_id, wren_output_id);
     document.appendChild(container_id, child_id);
     document.appendChild(root_id, container_id);
 
@@ -81,9 +81,12 @@ pub fn run(allocator: std.mem.Allocator) !void {
     var editor = try LineEditor.init(allocator);
     defer editor.deinit(allocator);
 
-    // Persistent Trealla engine for the session
-    const pl = trealla.c.pl_create() orelse return error.CreateFailed;
-    defer trealla.c.pl_destroy(pl);
+    // Persistent Wren VM for the session
+    var wren_output = std.ArrayList(u8).init(allocator);
+    defer wren_output.deinit();
+    
+    var wren_vm = try wren.VM.init(allocator, &wren_output);
+    defer wren_vm.deinit();
 
     // Output log buffer backing the Prolog output box
     var out_log = std.ArrayList(u8).init(allocator);
@@ -94,14 +97,20 @@ pub fn run(allocator: std.mem.Allocator) !void {
         if (maybe_line == null) break;
         const line = maybe_line.?;
         defer allocator.free(line);
-        // Append prompt and query
-        try out_log.appendSlice("?- ");
+        // Append prompt and code
+        try out_log.appendSlice("> ");
         try out_log.appendSlice(line);
         try out_log.appendSlice("\n");
-        // Evaluate via Trealla, capturing stdout/err
-        const res = try trealla.evalToString(allocator, pl, line);
-        defer allocator.free(res);
-        try out_log.appendSlice(res);
+        // Evaluate via Wren VM
+        wren_output.clearRetainingCapacity();
+        wren_vm.interpret("main", line) catch |err| {
+            switch (err) {
+                error.CompileError => try wren_output.appendSlice("// Compile error\n"),
+                error.RuntimeError => try wren_output.appendSlice("// Runtime error\n"),
+                else => try wren_output.appendSlice("// Unknown error\n"),
+            }
+        };
+        try out_log.appendSlice(wren_output.items);
         // Update output area and redraw
         try setDomText(&ctx.dom, ctx.output_text_id, out_log.items);
         try renderDom(&ctx);

@@ -22,7 +22,8 @@ pub const DisplayWidth = @import("DisplayWidth");
 pub const Graphemes = @import("Graphemes");
 pub const Words = @import("Words");
 
-pub const trealla = @import("trealla.zig");
+// pub const trealla = @import("trealla.zig"); // Replaced with Wren
+pub const wren = @import("wren.zig");
 
 const DomNodeId = dom.DomNodeId;
 const Rect = layout.Rect;
@@ -43,8 +44,7 @@ pub fn allocateBoxTreeFromDOMAutoRoot(alloc: std.mem.Allocator, document: *const
     // Fallback: empty tree with root 0 if no element found
     return layout.allocateBoxTreeFromDOM(alloc, document, 0);
 }
-pub const computeFlexLayout = layout.computeFlexLayout;
-pub const computePaintCommands = paint.computePaintCommands;
+// Functions are already exported via usingnamespace above
 
 // --- Test helpers (compact and integration-focused) ---
 fn expectAsciiEqual(want: []const u8, got: []const u8) !void {
@@ -339,5 +339,21 @@ test "flex with texts" {
         \\aaa.
         \\bar.
         \\bbb.
+    );
+}
+
+test "text with newlines" {
+    try expectLayout(
+        \\<root class="flex bg-slate-800 text-white px-1 py-1 w-12 h-5">
+        \\  <box class="w-10 h-3">Line1
+        \\Line2
+        \\Line3</box>
+        \\</root>
+    ,
+        \\            
+        \\ Line1      
+        \\ Line2      
+        \\            
+        \\            
     );
 }

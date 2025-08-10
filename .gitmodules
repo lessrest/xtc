@@ -2,3 +2,6 @@
 [submodule "deps/trealla"]
 	path = deps/trealla
 	url = git@github.com:trealla-prolog/trealla
+[submodule "deps/wren"]
+	path = deps/wren
+	url = https://github.com/wren-lang/wren
