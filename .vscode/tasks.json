@@ -1,0 +1,38 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "watch: zig build",
+      "type": "shell",
+      "command": "watchexec",
+      "args": ["-e", "zig,zon", "-w", "src", "--", "zig", "build"],
+      "isBackground": true,
+      "presentation": {
+        "reveal": "never",
+        "panel": "dedicated",
+        "clear": true
+      },
+
+      "runOptions": { "runOn": "folderOpen" },
+      "problemMatcher": [
+        {
+          "owner": "zig",
+          "fileLocation": ["relative", "${workspaceFolder}"],
+          "pattern": {
+            "regexp": "^((?:[A-Za-z]:)?[^:]+):(\\d+):(\\d+):\\s+(error|warning|note):\\s+(.*)$",
+            "file": 1,
+            "line": 2,
+            "column": 3,
+            "severity": 4,
+            "message": 5
+          },
+          "background": {
+            "activeOnStart": false,
+            "beginsPattern": "^\\[Running: zig build]$",
+            "endsPattern": "^\\[(?:Command exited with \\d+|Command was successful)\\]$"
+          }
+        }
+      ]
+    }
+  ]
+}

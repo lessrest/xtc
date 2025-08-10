@@ -5,7 +5,7 @@ const DomNodeId = @import("dom.zig").DomNodeId;
 // --- XML -> DOM mapping ---
 pub const XmlDom = struct { dom: Dom, root: DomNodeId };
 
-fn xmlAddElementRecursive(dom: *Dom, el: @import("xml").Element) !DomNodeId {
+fn xmlAddElementRecursive(dom: *Dom, el: @import("xmlparse.zig").Element) !DomNodeId {
     const class_attr = el.attr("class") orelse "";
     const id = try dom.addElement(class_attr);
     if (el.content) |_| {
@@ -29,10 +29,10 @@ fn xmlAddElementRecursive(dom: *Dom, el: @import("xml").Element) !DomNodeId {
     return id;
 }
 
-pub fn domFromXmlAlloc(alloc: std.mem.Allocator, doc: *const @import("xml").Document) !XmlDom {
+pub fn loadDocumentFromMarkup(alloc: std.mem.Allocator, doc: *const @import("xml").Document) !Dom {
     var dom = Dom.init(alloc);
     doc.acquire();
     defer doc.release();
-    const root_id = try xmlAddElementRecursive(&dom, doc.root);
-    return .{ .dom = dom, .root = root_id };
+    _ = try xmlAddElementRecursive(&dom, doc.root);
+    return dom;
 }

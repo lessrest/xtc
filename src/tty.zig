@@ -1,6 +1,6 @@
 const std = @import("std");
 const PaintCommandBatch = @import("paint.zig").PaintCommandBatch;
-const Rgba8 = @import("paint.zig").Rgba8;
+pub const Rgba8 = @import("paint.zig").Rgba8;
 pub const GlyphId = u32; // 0..=255 self-map to single-byte ASCII
 
 /// Fixed-capacity-friendly glyph interning built on std's unmanaged string map.
@@ -157,6 +157,29 @@ pub const Raster = struct {
         }
     }
 
+    /// Fill entire raster with a single glyph id
+    pub fn fillAllGlyph(self: *Raster, gid: GlyphId) void {
+        var y: usize = 0;
+        while (y < self.height) : (y += 1) {
+            var x: usize = 0;
+            while (x < self.width) : (x += 1) self.setGlyph(x, y, gid);
+        }
+    }
+
+    /// Fill a rectangle with a single glyph id
+    pub fn fillGlyphRect(self: *Raster, x: usize, y: usize, w: usize, h: usize, gid: GlyphId, color: Rgba8) void {
+        var yy: usize = y;
+        const y_end = y + h;
+        const x_end = x + w;
+        while (yy < y_end and yy < self.height) : (yy += 1) {
+            var xx: usize = x;
+            while (xx < x_end and xx < self.width) : (xx += 1) {
+                self.setGlyph(xx, yy, gid);
+                self.setFg(xx, yy, color);
+            }
+        }
+    }
+
     pub fn toStringAlloc(self: *const Raster, allocator: std.mem.Allocator) ![]u8 {
         const line_len = self.width + 1; // + '\n'
         var out = try allocator.alloc(u8, self.height * line_len);
@@ -229,17 +252,12 @@ pub fn rasterizeDisplayListAscii(r: *Raster, alloc: std.mem.Allocator, glyphs: *
                 var x: usize = fr.x;
                 while (x < fr.x + fr.w and x < r.width) : (x += 1) {
                     r.setBg(x, y, fr.color);
+                    r.setGlyph(x, y, @as(GlyphId, 32));
                 }
             }
         },
         .FillGlyphRect => |fg| {
-            var y: usize = fg.y;
-            while (y < fg.y + fg.h and y < r.height) : (y += 1) {
-                var x: usize = fg.x;
-                while (x < fg.x + fg.w and x < r.width) : (x += 1) {
-                    r.setGlyph(x, y, fg.glyph);
-                }
-            }
+            r.fillGlyphRect(fg.x, fg.y, fg.w, fg.h, fg.glyph, fg.color);
         },
         .StrokeRect => |sr| {
             switch (sr.style) {

@@ -1,17 +1,19 @@
 const std = @import("std");
 const posix = std.posix;
-const lib = @import("lib.zig");
+const Raster = @import("tty.zig").Raster;
+const Rgba8 = @import("tty.zig").Rgba8;
+const DisplayWidth = @import("lib.zig").DisplayWidth;
+const allocateBoxTreeFromDOM = @import("layout.zig").allocateBoxTreeFromDOM;
 const Dom = @import("dom.zig").Dom;
 const Graphemes = @import("Graphemes");
-const DisplayWidth = @import("DisplayWidth");
 const PaintCommandBatch = @import("paint.zig").PaintCommandBatch;
-const rasterizeDisplayListAscii = @import("lib.zig").rasterizeDisplayListAscii;
+const rasterizeDisplayListAscii = @import("tty.zig").rasterizeDisplayListAscii;
 const computePaintCommands = @import("paint.zig").computePaintCommands;
 const layoutBoxesInPlace = @import("layout.zig").layoutBoxesInPlace;
 const GlyphTable = @import("tty.zig").GlyphTable;
+const DomNodeId = @import("dom.zig").DomNodeId;
 
-pub fn run(allocator: std.mem.Allocator, log_path: ?[]const u8) !void {
-    _ = log_path; // autofix
+pub fn run(allocator: std.mem.Allocator) !void {
     var raw = try RawMode.enable(posix.STDIN_FILENO);
     defer raw.disable() catch {};
 
@@ -23,30 +25,30 @@ pub fn run(allocator: std.mem.Allocator, log_path: ?[]const u8) !void {
         _ = w2.write("\x1b[0m\x1b[?25h\x1b[?1049l") catch {};
     }
 
-    var provider = lib.StyleProvider{ .graphemes = try Graphemes.init(allocator), .display_width = try DisplayWidth.init(allocator) };
-    defer provider.graphemes.deinit(allocator);
-    defer provider.display_width.deinit(allocator);
+    var display_width = try DisplayWidth.init(allocator);
+    defer display_width.deinit(allocator);
 
     var dom = Dom.init(allocator);
     defer dom.deinit();
 
     const root_id = try dom.addElement(
-        "flex flex-col",
+        "flex flex-col items-center",
     );
     const prolog_output_id = try dom.addElement(
-        "w-76 grow-1 border-2 border-gray-200 text-slate-800 bg-blue-100",
+        "flex grow-1 bg-slate-400 text-slate-800",
     );
     const child_id = try dom.addElement(
-        "px-4 flex py-1 w-76 h-3 flex-0 border-2 border-gray-200 text-blue-200 bg-blue-700",
+        "px-4 flex items-center grow-0 h-3 bg-slate-700 text-slate-200",
     );
 
     const text_id = try dom.addText("foo");
     dom.appendChild(child_id, try dom.addText("» "));
     dom.appendChild(child_id, text_id);
+
     dom.appendChild(root_id, prolog_output_id);
     dom.appendChild(root_id, child_id);
 
-    var ctx = RenderCtx{ .allocator = allocator, .provider = &provider, .width = 80, .height = 24, .dom = dom, .root_id = root_id, .text_id = text_id, .raster_front = null, .raster_back = null, .log = null };
+    var ctx = RenderCtx{ .allocator = allocator, .display_width = &display_width, .width = 80, .height = 24, .dom = dom, .root_id = root_id, .text_id = text_id, .raster_front = null, .raster_back = null, .log = null };
 
     var editor = try LineEditor.init(allocator);
     defer editor.deinit(allocator);
@@ -62,29 +64,29 @@ pub fn run(allocator: std.mem.Allocator, log_path: ?[]const u8) !void {
 
 const RenderCtx = struct {
     allocator: std.mem.Allocator,
-    provider: *lib.StyleProvider,
+    display_width: *DisplayWidth,
     width: usize = 80,
     height: usize = 24,
     dom: Dom,
-    root_id: lib.DomNodeId,
-    text_id: lib.DomNodeId,
+    root_id: DomNodeId,
+    text_id: DomNodeId,
     resized: bool = false,
-    raster_front: ?lib.Raster = null,
-    raster_back: ?lib.Raster = null,
+    raster_front: ?Raster = null,
+    raster_back: ?Raster = null,
     log: ?std.fs.File = null,
 };
 
-fn setDomText(dom: *Dom, text_id: lib.DomNodeId, text: []const u8) !void {
+fn setDomText(dom: *Dom, text_id: DomNodeId, text: []const u8) !void {
     const off: u32 = @intCast(dom.text_arena.items.len);
     try dom.text_arena.appendSlice(text);
     const len: u32 = @intCast(text.len);
     var items = dom.headers.slice();
     const idx: usize = @intCast(text_id);
-    items.items(.first_child)[idx] = @as(lib.DomNodeId, off);
+    items.items(.first_child)[idx] = @as(DomNodeId, off);
     items.items(.child_count)[idx] = len;
 }
 
-fn ensureDoubleRaster(ctx: *RenderCtx) !struct { front: *lib.Raster, back: *lib.Raster } {
+fn ensureDoubleRaster(ctx: *RenderCtx) !struct { front: *Raster, back: *Raster } {
     const al = ctx.allocator;
     if (ctx.raster_front) |*r| {
         if (r.width != ctx.width or r.height != ctx.height) {
@@ -99,11 +101,11 @@ fn ensureDoubleRaster(ctx: *RenderCtx) !struct { front: *lib.Raster, back: *lib.
         }
     }
     if (ctx.raster_front == null) {
-        const r = try lib.Raster.init(al, ctx.width, ctx.height);
+        const r = try Raster.init(al, ctx.width, ctx.height);
         ctx.raster_front = r;
     }
     if (ctx.raster_back == null) {
-        const r = try lib.Raster.init(al, ctx.width, ctx.height);
+        const r = try Raster.init(al, ctx.width, ctx.height);
         ctx.raster_back = r;
     }
     return .{ .front = &ctx.raster_front.?, .back = &ctx.raster_back.? };
@@ -114,11 +116,11 @@ const pretty = @import("pretty");
 fn renderDom(ctx: *RenderCtx) !void {
     const al = ctx.allocator;
 
-    var tree = try lib.buildBoxTreeFromDomAlloc(al, &ctx.dom, ctx.root_id);
+    var tree = try allocateBoxTreeFromDOM(al, &ctx.dom, ctx.root_id);
     defer tree.deinit();
 
-    try layoutBoxesInPlace(al, &tree, &ctx.dom, tree.root_index, .{ .x = 0, .y = 0, .w = ctx.width, .h = ctx.height }, ctx.provider.*);
-    //    std.debug.print("layout: {}\n", .{try lib.dumpBoxTreeNodeXml(al, std.io.getStdErr().writer(), &tree, &ctx.dom, tree.root_index, 0)});
+    try layoutBoxesInPlace(al, &tree, &ctx.dom, 0, .{ .x = 0, .y = 0, .w = ctx.width, .h = ctx.height }, ctx.display_width);
+
     var dl = PaintCommandBatch.init(al);
     defer dl.deinit();
     var glyphs = try GlyphTable.init(al);
@@ -134,8 +136,8 @@ fn renderDom(ctx: *RenderCtx) !void {
     var out = std.ArrayList(u8).init(al);
     defer out.deinit();
     try out.appendSlice("\x1b[0m"); // reset styles; no clear, we'll position per change
-    var cur_fg: ?lib.Rgba8 = null;
-    var cur_bg: ?lib.Rgba8 = null;
+    var cur_fg: ?Rgba8 = null;
+    var cur_bg: ?Rgba8 = null;
     var y: usize = 0;
     while (y < rb.back.height) : (y += 1) {
         var x: usize = 0;

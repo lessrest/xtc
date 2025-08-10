@@ -1,6 +1,4 @@
-[submodule "deps/zig-xml"]
-	path = deps/zig-xml
-	url = git@github.com:nektro/zig-xml
+
 [submodule "deps/trealla"]
 	path = deps/trealla
 	url = git@github.com:trealla-prolog/trealla

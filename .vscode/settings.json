@@ -1,0 +1,3 @@
+{
+  "zig-language-extras.testArgs": "--dep xml=xml -Mxml::../zig-xml/src/mod.zig"
+}

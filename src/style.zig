@@ -1,18 +1,44 @@
 const std = @import("std");
 
-pub const StyleDisplay = enum(u3) { none, @"inline", block, flex, inline_flex, _unused0, _unused1, _unused2 };
-pub const StyleWhitespace = enum(u2) { normal, pre, nowrap, pre_wrap };
-// Debug helpers
-const DEBUG_LOG: bool = true; // set false to silence
-fn dbg(comptime fmt: []const u8, args: anytype) void {
-    if (DEBUG_LOG) std.debug.print(fmt, args);
-}
-
-pub const StyleBorderStyle = enum(u2) { none, solid, double, dashed };
-pub const StyleFlexDir = enum(u2) { row, column, row_reverse, column_reverse };
-pub const StyleFlexWrap = enum(u2) { nowrap, wrap, wrap_reverse, _unused };
-pub const StyleJustify = enum(u3) { start, end, center, space_between, space_around, space_evenly, _u0, _u1 };
-pub const StyleAlign = enum(u3) { start, end, center, stretch, baseline, _u0, _u1, _u2 };
+pub const StyleDisplay = enum(u3) {
+    none,
+    @"inline",
+    block,
+    flex,
+    inline_flex,
+};
+pub const StyleWhitespace = enum(u2) {
+    normal,
+    pre,
+    nowrap,
+    pre_wrap,
+};
+pub const BorderStyle = enum(u2) {
+    none,
+    solid,
+    double,
+    dashed,
+};
+pub const StyleFlexDir = enum(u2) {
+    row,
+    column,
+    row_reverse,
+    column_reverse,
+};
+pub const StyleFlexWrap = enum(u2) {
+    nowrap,
+    wrap,
+    wrap_reverse,
+};
+pub const StyleJustify = enum(u3) {
+    start,
+    end,
+    center,
+    space_between,
+    space_around,
+    space_evenly,
+};
+pub const StyleAlign = enum(u3) { start, end, center, stretch, baseline };
 
 pub const StyleColor = packed struct {
     r: u8,
@@ -22,16 +48,14 @@ pub const StyleColor = packed struct {
     _pad: u7 = 0,
 };
 
-pub const StyleEdge4 = packed struct { t: u4, r: u4, b: u4, l: u4 };
-pub const StyleGap = packed struct { main: u3, cross: u3, _pad: u2 = 0 };
-pub const StyleBorderSpec = packed struct { width_cells: u2, style: StyleBorderStyle };
+pub const EdgeSizing = packed struct { t: u4, r: u4, b: u4, l: u4 };
+pub const GapSizing = packed struct { main: u3, cross: u3 };
+pub const BorderStyling = packed struct { width: u2, style: BorderStyle };
 
-pub const StyleFlex = packed struct {
-    grow: u4,
-    shrink: u4,
-    basis_auto: u1,
-    _pad: u7 = 0,
-    basis_cells: u16,
+// [CSS-FLEXBOX-1] § 7.1.
+pub const FlexibleLength = packed struct {
+    flexGrowFactor: u4,
+    flexShrinkFactor: u4,
 };
 
 // not packed: it's anyway in a MultiArrayList,
@@ -39,6 +63,7 @@ pub const StyleFlex = packed struct {
 pub const StyleRow = struct {
     fg: StyleColor,
     bg: StyleColor,
+    border_color: StyleColor,
     text_flags: packed struct { bold: u1, italic: u1, underline: u1, inverse: u1, strike: u1, dim: u1, blink: u1, _pad: u1 = 0 },
 
     display: StyleDisplay,
@@ -47,24 +72,26 @@ pub const StyleRow = struct {
     whitespace: StyleWhitespace,
     _pad0: u3 = 0,
 
-    width_cells: u16,
-    height_cells: u16,
+    width: u16,
+    height: u16,
 
-    padding: StyleEdge4,
-    margin: StyleEdge4,
-    border: StyleBorderSpec,
+    padding: EdgeSizing,
+    margin: EdgeSizing,
+    border: BorderStyling,
 
-    gaps: StyleGap,
+    gaps: GapSizing,
 
     flex_dir: StyleFlexDir,
     flex_wrap: StyleFlexWrap,
     justify: StyleJustify,
     align_items: StyleAlign,
-    align_self: StyleAlign,
-    flex: StyleFlex,
+    align_self: ?StyleAlign,
+    flex: FlexibleLength,
 
     z_index: i16,
     order: i16,
+    // ASCII raster test helper: when non-zero, paint stage tiles this glyph in the element's border-box
+    fill_glyph: u32 = 0,
 };
 
 fn hashBytesWy(seed: u64, bytes: []const u8) u64 {
@@ -114,25 +141,26 @@ pub fn defaultStyleRow() StyleRow {
     return .{
         .fg = .{ .r = 0, .g = 0, .b = 0, .use_default = 1 },
         .bg = .{ .r = 0, .g = 0, .b = 0, .use_default = 1 },
+        .border_color = .{ .r = 0, .g = 0, .b = 0, .use_default = 1 },
         .text_flags = .{ .bold = 0, .italic = 0, .underline = 0, .inverse = 0, .strike = 0, .dim = 0, .blink = 0 },
         .display = .@"inline",
         .visibility_hidden = 0,
         .overflow_clip = 0,
         .whitespace = .normal,
-        .width_cells = 0,
-        .height_cells = 0,
+        .width = 0,
+        .height = 0,
         .padding = .{ .t = 0, .r = 0, .b = 0, .l = 0 },
         .margin = .{ .t = 0, .r = 0, .b = 0, .l = 0 },
-        .border = .{ .width_cells = 0, .style = .none },
+        .border = .{ .width = 0, .style = .none },
         .gaps = .{ .main = 0, .cross = 0 },
         .flex_dir = .row,
         .flex_wrap = .nowrap,
         .justify = .start,
         .align_items = .start,
-        // align_self defaults to inherit parent cross align; use reserved value as sentinel
-        .align_self = ._u0,
-        .flex = .{ .grow = 0, .shrink = 1, .basis_auto = 1, .basis_cells = 0 },
+        .align_self = .start,
+        .flex = .{ .flexGrowFactor = 0, .flexShrinkFactor = 1 },
         .z_index = 0,
         .order = 0,
+        .fill_glyph = 0,
     };
 }

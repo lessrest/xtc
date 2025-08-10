@@ -183,23 +183,16 @@ fn emitFmt(alloc: std.mem.Allocator, out: *std.ArrayList([]const u8), comptime f
     try dup_and_push(alloc, out, tmp.items);
 }
 
-// Unified custom helpers
-fn set_basis_cells(row: *StyleRow, n: usize) void {
-    row.flex.basis_auto = 0;
-    const maxv: usize = @intCast(std.math.maxInt(@TypeOf(row.flex.basis_cells)));
-    row.flex.basis_cells = @intCast(if (n < maxv) n else maxv);
-}
-
 fn get_border_w_gt1(row: StyleRow) ?usize {
-    return if (row.border.width_cells > 1) row.border.width_cells else null;
+    return if (row.border.width > 1) row.border.width else null;
 }
 
 fn get_basis_cells_emit(row: StyleRow) ?usize {
-    return if (row.flex.basis_auto == 0 and row.flex.basis_cells != 0) row.flex.basis_cells else null;
+    return if (row.flex.flexBasisBit == 0 and row.flex.flexBasis != 0) row.flex.flexBasis else null;
 }
 
 fn emit_border_eq1(out: *std.ArrayList([]const u8), alloc: std.mem.Allocator, row: StyleRow, _: StyleRow) anyerror!void {
-    if (row.border.width_cells == 1) try dup_and_push(alloc, out, "border");
+    if (row.border.width == 1) try dup_and_push(alloc, out, "border");
 }
 
 fn emit_padding_shorthands(out: *std.ArrayList([]const u8), alloc: std.mem.Allocator, row: StyleRow, _: StyleRow) anyerror!void {
@@ -226,7 +219,7 @@ fn emit_padding_edges(out: *std.ArrayList([]const u8), alloc: std.mem.Allocator,
 }
 
 fn emit_basis_auto(out: *std.ArrayList([]const u8), alloc: std.mem.Allocator, row: StyleRow, def: StyleRow) anyerror!void {
-    if (row.flex.basis_auto == 1 and !(def.flex.basis_auto == 1 and row.flex.basis_cells == 0)) {
+    if (row.flex.flexBasisBit == 1 and !(def.flex.flexBasisBit == 1 and row.flex.flexBasis == 0)) {
         try dup_and_push(alloc, out, "basis-auto");
     }
 }
@@ -242,50 +235,41 @@ const RULES = [_]Rule{
     ruleExactField("flex-col", "flex_dir", StyleFlexDir.column, true),
     ruleExactField("flex-row-reverse", "flex_dir", StyleFlexDir.row_reverse, true),
     ruleExactField("flex-col-reverse", "flex_dir", StyleFlexDir.column_reverse, true),
-    // basis
-    ruleParseOnlyExact("basis-auto", struct {
-        fn s(row: *StyleRow) void {
-            row.flex.basis_auto = 1;
-        }
-    }.s),
-    ruleNumCustom("basis-", set_basis_cells, get_basis_cells_emit),
     // grow
     ruleParseOnlyExact("grow", struct {
         fn s(row: *StyleRow) void {
-            row.flex.grow = 1;
+            row.flex.flexGrowFactor = 1;
         }
     }.s),
     ruleNumCustom("grow-", struct {
         fn s(row: *StyleRow, n: usize) void {
-            const maxv: usize = @intCast(std.math.maxInt(@TypeOf(row.flex.grow)));
-            row.flex.grow = @intCast(if (n < maxv) n else maxv);
+            const maxv: usize = @intCast(std.math.maxInt(@TypeOf(row.flex.flexGrowFactor)));
+            row.flex.flexGrowFactor = @intCast(if (n < maxv) n else maxv);
         }
     }.s, struct {
         fn g(row: StyleRow) ?usize {
-            return if (row.flex.grow != 0) row.flex.grow else null;
+            return if (row.flex.flexGrowFactor != 0) row.flex.flexGrowFactor else null;
         }
     }.g),
     // common shorthand: flex-1 → grow:1; shrink:1 (kept); basis:0
     ruleParseOnlyExact("flex-1", struct {
         fn s(row: *StyleRow) void {
-            row.flex.grow = 1;
-            row.flex.shrink = 1;
-            row.flex.basis_auto = 0;
-            row.flex.basis_cells = 0;
+            row.flex.flexGrowFactor = 1;
+            row.flex.flexShrinkFactor = 1;
         }
     }.s),
     // size
-    ruleNumField("w-", "width_cells"),
-    ruleNumField("h-", "height_cells"),
+    ruleNumField("w-", "width"),
+    ruleNumField("h-", "height"),
     // border
     ruleParseOnlyExact("border", struct {
         fn s(row: *StyleRow) void {
-            row.border.width_cells = 1;
+            row.border.width = 1;
         }
     }.s),
     ruleNumCustom("border-", struct {
         fn s(row: *StyleRow, n: usize) void {
-            row.border.width_cells = @intCast(@min(n, @as(usize, std.math.maxInt(@TypeOf(row.border.width_cells)))));
+            row.border.width = @intCast(@min(n, @as(usize, std.math.maxInt(@TypeOf(row.border.width)))));
         }
     }.s, get_border_w_gt1),
     // justify-content
@@ -301,11 +285,6 @@ const RULES = [_]Rule{
     ruleExactField("items-center", "align_items", StyleAlign.center, true),
     ruleExactField("items-stretch", "align_items", StyleAlign.stretch, true),
     ruleExactField("items-baseline", "align_items", StyleAlign.baseline, true),
-    // align-self
-    ruleExactField("self-start", "align_self", StyleAlign.start, true),
-    ruleExactField("self-end", "align_self", StyleAlign.end, true),
-    ruleExactField("self-center", "align_self", StyleAlign.center, true),
-    ruleExactField("self-stretch", "align_self", StyleAlign.stretch, true),
     // align-self
     ruleExactField("self-start", "align_self", StyleAlign.start, true),
     ruleExactField("self-end", "align_self", StyleAlign.end, true),
@@ -327,6 +306,38 @@ const RULES = [_]Rule{
     // colors
     ruleColor("text-", get_fg_rgb, set_fg_rgb),
     ruleColor("bg-", get_bg_rgb, set_bg_rgb),
+    ruleColor("border-", get_border_rgb, set_border_rgb),
+    // bg-glyph-[x] → set StyleRow.fill_glyph to the codepoint of x (single glyph)
+    .{
+        .parse = struct {
+            fn p(row: *StyleRow, tok: []const u8) bool {
+                const pref = "bg-glyph-[";
+                if (tok.len < pref.len + 2) return false; // needs at least one char and closing bracket
+                if (!std.mem.startsWith(u8, tok, pref)) return false;
+                if (tok[tok.len - 1] != ']') return false;
+                const inner = tok[pref.len .. tok.len - 1];
+                // Accept exactly one UTF-8 scalar; ignore longer strings for now
+                var it = std.unicode.Utf8Iterator{ .bytes = inner, .i = 0 };
+                const first = it.nextCodepoint() orelse return false;
+                // If there is another codepoint, ignore (fail parse)
+                if (it.nextCodepoint()) |_| return false;
+                row.fill_glyph = first;
+                return true;
+            }
+        }.p,
+        .emit = struct {
+            fn e(out: *std.ArrayList([]const u8), alloc: std.mem.Allocator, row: StyleRow, _: StyleRow) anyerror!void {
+                if (row.fill_glyph == 0) return;
+                // Only emit ASCII bracketed form for 1-byte glyphs to keep emission simple
+                if (row.fill_glyph <= 0x7F) {
+                    var buf: [16]u8 = undefined;
+                    const ch: u8 = @intCast(row.fill_glyph);
+                    const n = try std.fmt.bufPrint(&buf, "bg-glyph-[{c}]", .{ch});
+                    try dup_and_push(alloc, out, n);
+                }
+            }
+        }.e,
+    },
 };
 
 pub fn utilityTokensFromStyleRow(alloc: std.mem.Allocator, row: StyleRow) ![]const []const u8 {
@@ -665,6 +676,9 @@ fn set_fg_rgb(row: *StyleRow, rgb: [3]u8) void {
 fn set_bg_rgb(row: *StyleRow, rgb: [3]u8) void {
     row.bg = .{ .r = rgb[0], .g = rgb[1], .b = rgb[2], .use_default = 0 };
 }
+fn set_border_rgb(row: *StyleRow, rgb: [3]u8) void {
+    row.border_color = .{ .r = rgb[0], .g = rgb[1], .b = rgb[2], .use_default = 0 };
+}
 pub fn get_fg_rgb(row: StyleRow) ?[3]u8 {
     if (row.fg.use_default == 1) return null;
     return .{ row.fg.r, row.fg.g, row.fg.b };
@@ -672,6 +686,10 @@ pub fn get_fg_rgb(row: StyleRow) ?[3]u8 {
 pub fn get_bg_rgb(row: StyleRow) ?[3]u8 {
     if (row.bg.use_default == 1) return null;
     return .{ row.bg.r, row.bg.g, row.bg.b };
+}
+pub fn get_border_rgb(row: StyleRow) ?[3]u8 {
+    if (row.border_color.use_default == 1) return null;
+    return .{ row.border_color.r, row.border_color.g, row.border_color.b };
 }
 
 fn rgbEqual(a: [3]u8, c: [3]u8) bool {

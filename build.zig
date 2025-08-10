@@ -7,10 +7,6 @@ pub fn build(b: *std.Build) void {
     const zg = b.dependency("zg", .{ .cjk = false });
 
     // Local modules
-    const xml_mod = b.createModule(.{ .root_source_file = b.path("deps/zig-xml/mod.zig") });
-    const tracer_mod = b.createModule(.{ .root_source_file = b.path("deps/tracer/mod.zig") });
-    xml_mod.addImport("tracer", tracer_mod);
-
     const lib = b.addStaticLibrary(.{
         .name = "zig-xtc",
         .root_source_file = b.path("src/lib.zig"),
@@ -21,7 +17,6 @@ pub fn build(b: *std.Build) void {
     lib.root_module.addImport("Graphemes", zg.module("Graphemes"));
     lib.root_module.addImport("DisplayWidth", zg.module("DisplayWidth"));
     lib.root_module.addImport("Words", zg.module("Words"));
-    lib.root_module.addImport("xml", xml_mod);
     b.installArtifact(lib);
 
     // Build Trealla C library (minimal: no FFI, SSL, threads, readline)
@@ -111,7 +106,6 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addImport("Graphemes", zg.module("Graphemes"));
     exe.root_module.addImport("DisplayWidth", zg.module("DisplayWidth"));
     exe.root_module.addImport("Words", zg.module("Words"));
-    exe.root_module.addImport("xml", xml_mod);
     exe.linkLibrary(trealla);
 
     const pretty = b.dependency("pretty", .{ .target = target, .optimize = optimize });
@@ -128,7 +122,6 @@ pub fn build(b: *std.Build) void {
     unit_tests.root_module.addImport("Graphemes", zg.module("Graphemes"));
     unit_tests.root_module.addImport("DisplayWidth", zg.module("DisplayWidth"));
     unit_tests.root_module.addImport("Words", zg.module("Words"));
-    unit_tests.root_module.addImport("xml", xml_mod);
     unit_tests.linkLibrary(trealla);
     const run_unit_tests = b.addRunArtifact(unit_tests);
     const test_step = b.step("test", "Run unit tests");

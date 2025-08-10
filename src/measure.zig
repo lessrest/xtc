@@ -1,0 +1,100 @@
+// Provider TODOs (production):
+// - Text measurement:
+//   - Grapheme-aware width (double-width, combining marks), tabs
+//   - Whitespace handling: normal/pre/nowrap/pre_wrap
+//   - Wrapping: greedy/balanced; ellipsis per overflow rules
+//   - Return border-box: content + padding + border
+//
+// - Intrinsic sizing:
+//   - Leaves: intrinsic or style overrides (width/height, min/max)
+//   - Containers: pre-measure pass: sum on main axis, max on cross; cache result
+//   - Replaced elements: intrinsic size; fallbacks
+//
+// - Flexbox completeness:
+//   - flex-grow/shrink distribution of free/deficit space with clamping to min/max
+//   - flex-basis:auto vs specified; percent bases
+//   - flex-wrap: multi-line layout and line breaking
+//   - align-content for multi-line cross-axis distribution
+//   - row_reverse/column_reverse direction
+//
+// - Constraints & percentages:
+//   - min-width/height, max-width/height
+//   - percentage resolution against parent inner size (for width/height, padding, margin)
+//   - margin auto (main-axis auto-centering semantics)
+//
+// - Alignment details:
+//   - align-items:baseline (baseline computation for text)
+//   - align-self overrides (already partially supported)
+//   - gap: main and cross (we have main; add cross)
+//
+// - Visual properties influence:
+//   - display:none (skip layout/paint); visibility:hidden (layout yes, paint no)
+//   - overflow:clip (establish clip rect during paint)
+//   - border.style (ascii/unicode mapping), border color, alpha blending
+//
+// - Painting hooks:
+//   - Emit background FillRect from styles (with alpha)
+//   - Emit borders from border spec; corners/joints style
+//   - Emit GlyphRun for text nodes (map DOM text → glyph ids)
+//   - Establish clip for overflow and descendant painting
+//
+// - Ordering/layers:
+//   - order (stable) for layout (done); z-index for paint ordering
+//   - Optional overlay layers (selection/caret) composited after main
+//
+// - Caching & invalidation:
+//   - Cache measure(props) by (node_id, constraints, style_hash, text_epoch)
+//   - Invalidate on style/text change or parent constraints change
+//
+// - Performance ergonomics:
+//   - Reuse arenas, avoid per-node allocations in hot paths
+//   - Small-vec for child temp buffers; pre-size arrays
+//   - Fast style lookup (we have interned rows)
+//
+// - Tests to add:
+//   - Text wrap/ellipsis/whitespace variants
+//   - flex-grow/shrink with min/max constraints
+//   - flex-wrap + align-content distributions
+//   - percentage sizes; margin auto centering
+//   - overflow:clip clipping correctness
+//   - border styles and alpha background blending
+
+const DisplayWidth = @import("lib.zig").DisplayWidth;
+const Dom = @import("dom.zig").Dom;
+const DomNodeId = @import("dom.zig").DomNodeId;
+
+pub fn intrinsicSize(dom_: *const Dom, id: DomNodeId, max_w: usize, max_h: usize, dw: *DisplayWidth) [2]usize {
+    const items = dom_.headers.slice();
+    const kind = items.items(.kind)[@as(usize, @intCast(id))];
+    const sid = items.items(.style_id)[@as(usize, @intCast(id))];
+    const row = dom_.styles.cols.items[@intCast(sid)];
+
+    const border_w: usize = @as(usize, @intCast(row.border.width));
+    // Avoid u4 overflow by widening before addition
+    const pad_x: usize = @as(usize, @intCast(row.padding.l)) + @as(usize, @intCast(row.padding.r)) + border_w * 2;
+    const pad_y: usize = @as(usize, @intCast(row.padding.t)) + @as(usize, @intCast(row.padding.b)) + border_w * 2;
+
+    var w: usize = 0;
+    var h: usize = 0;
+
+    // Explicit overrides are border-box and take precedence
+    if (row.width != 0) w = row.width;
+    if (row.height != 0) h = row.height;
+
+    // Text nodes: single-line measure via DisplayWidth; 1 row tall
+    if (w == 0 or h == 0) {
+        if (kind == .text) {
+            const slice = dom_.getTextSlice(id);
+            const content_w = @min(max_w, dw.strWidth(slice));
+            if (w == 0) w = @min(max_w, pad_x + content_w);
+            if (h == 0) h = @min(max_h, pad_y + 1);
+        }
+    }
+
+    // Minimal border-box when no intrinsic sizing known
+    if (w == 0) w = @min(max_w, pad_x);
+    if (h == 0) h = @min(max_h, pad_y);
+
+    // Replaced elements can extend this path later
+    return [_]usize{ w, h };
+}
