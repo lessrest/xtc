@@ -38,6 +38,7 @@ fn tracef(comptime fmt: []const u8, args: anytype) void {
 fn tracePhase(comptime name: []const u8) void {
     if (!g_layout_trace_enabled) return;
     std.log.info("{s}[phase] {s}\n", .{ traceIndent(), name });
+    g_trace_depth += 1;
 }
 
 pub const BoxHeader = struct {
@@ -336,13 +337,13 @@ pub fn layoutBoxesInPlaceNode(alloc_: std.mem.Allocator, tree_: *BoxTree, dom_: 
     const parent_sid = items.items(.style_id)[@as(usize, @intCast(hdr.dom_id))];
     const parent_style = dom_.styles.cols.items[@intCast(parent_sid)];
 
+    // this is suspicious! it's only based on style settings, it doesn't recurse or line wrap.
     const inner_rect = computeInnerContentRect(parent_style, rect_);
     hdr.rect = rect_;
     if (hdr.child_count == 0) return;
 
     const parent_layout = parent_style;
     tracePhase("layout-node");
-    tracePush();
     tracef("layout node dom={d} rect=({d},{d} {d}x{d}) inner=({d},{d} {d}x{d}) dir={s} justify={s} align_items={s}", .{
         hdr.dom_id,
         rect_.x,
@@ -362,12 +363,10 @@ pub fn layoutBoxesInPlaceNode(alloc_: std.mem.Allocator, tree_: *BoxTree, dom_: 
     const n = children.len;
 
     tracePhase("stable-sort-by-order");
-    tracePush();
     stableSortChildrenByOrderInPlace(children);
     tracePop();
 
     tracePhase("compute-extents-and-grow");
-    tracePush();
     const totals = computeContentExtentAndTotalGrow(children, parent_layout);
     const container_extent: i32 = @as(i32, @intCast(if (parent_layout.flex_dir == .row) inner_rect.w else inner_rect.h));
     tracef("content_extent={d} container_extent={d} gaps.main={d}", .{ totals.content_extent, container_extent, parent_style.gaps.main });
@@ -385,7 +384,6 @@ pub fn layoutBoxesInPlaceNode(alloc_: std.mem.Allocator, tree_: *BoxTree, dom_: 
     tracePop();
     // Step 2: justify-content spacing on the (now grown) content extent
     tracePhase("justify-spacing");
-    tracePush();
     const dist = try calculateSpaces(alloc_, parent_layout.justify, container_extent, content_after_grow, n);
     defer alloc_.free(dist.between_gaps);
 
@@ -401,7 +399,6 @@ pub fn layoutBoxesInPlaceNode(alloc_: std.mem.Allocator, tree_: *BoxTree, dom_: 
     while (i < n) : (i += 1) {
         const cinfo = children[i];
         tracePhase("position-child");
-        tracePush();
         const pos = positionChildRect(inner_rect, parent_layout, cursor_main, cinfo, extra_main_by_orig);
         const child_idx: u32 = @intCast(@as(usize, @intCast(hdr.first_child)) + cinfo.orig_index);
         tracef("position child[{d}] dom={d}: order={d} grow_add={d} -> rect=({d},{d} {d}x{d}) advance={d}", .{
