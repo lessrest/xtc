@@ -71,8 +71,8 @@ pub fn build(b: *std.Build) void {
             "deps/trealla/src/sre/re.c",
             // bundled isocline (tiny line editor)
             "deps/trealla/src/isocline/src/isocline.c",
-            // minimal embedded library shim
-            "deps/trealla/shim/g_libs_empty.c",
+            // minimal embedded library shim (in-repo)
+            "c/trealla_g_libs_empty.c",
         },
         .flags = &.{
             "-std=c99",

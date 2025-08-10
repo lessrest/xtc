@@ -29,7 +29,7 @@ fn xmlAddElementRecursive(dom: *Dom, el: @import("xmlparse.zig").Element) !DomNo
     return id;
 }
 
-pub fn loadDocumentFromMarkup(alloc: std.mem.Allocator, doc: *const @import("xml").Document) !Dom {
+pub fn loadDocumentFromMarkup(alloc: std.mem.Allocator, doc: *const @import("xmlparse.zig").Document) !Dom {
     var dom = Dom.init(alloc);
     doc.acquire();
     defer doc.release();

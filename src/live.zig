@@ -32,21 +32,25 @@ pub fn run(allocator: std.mem.Allocator) !void {
     defer dom.deinit();
 
     const root_id = try dom.addElement(
-        "flex flex-col items-center",
+        "flex flex-col bg-glyph-[.] items-center",
+    );
+    const container_id = try dom.addElement(
+        "flex flex-col grow-1 w-80 items-stretch",
     );
     const prolog_output_id = try dom.addElement(
-        "flex grow-1 bg-slate-400 text-slate-800",
+        "flex px-2 grow-1 bg-slate-400 text-slate-800",
     );
     const child_id = try dom.addElement(
-        "px-4 flex items-center grow-0 h-3 bg-slate-700 text-slate-200",
+        "px-2 flex items-center grow-0 h-3 bg-slate-700 text-slate-200",
     );
 
     const text_id = try dom.addText("foo");
     dom.appendChild(child_id, try dom.addText("» "));
     dom.appendChild(child_id, text_id);
 
-    dom.appendChild(root_id, prolog_output_id);
-    dom.appendChild(root_id, child_id);
+    dom.appendChild(container_id, prolog_output_id);
+    dom.appendChild(container_id, child_id);
+    dom.appendChild(root_id, container_id);
 
     var ctx = RenderCtx{ .allocator = allocator, .display_width = &display_width, .width = 80, .height = 24, .dom = dom, .root_id = root_id, .text_id = text_id, .raster_front = null, .raster_back = null, .log = null };
 

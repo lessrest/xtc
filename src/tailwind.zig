@@ -187,10 +187,6 @@ fn get_border_w_gt1(row: StyleRow) ?usize {
     return if (row.border.width > 1) row.border.width else null;
 }
 
-fn get_basis_cells_emit(row: StyleRow) ?usize {
-    return if (row.flex.flexBasisBit == 0 and row.flex.flexBasis != 0) row.flex.flexBasis else null;
-}
-
 fn emit_border_eq1(out: *std.ArrayList([]const u8), alloc: std.mem.Allocator, row: StyleRow, _: StyleRow) anyerror!void {
     if (row.border.width == 1) try dup_and_push(alloc, out, "border");
 }
@@ -216,12 +212,6 @@ fn emit_padding_edges(out: *std.ArrayList([]const u8), alloc: std.mem.Allocator,
     if (p.r != 0) try emitFmt(alloc, out, "pr-{}", .{p.r});
     if (p.t != 0) try emitFmt(alloc, out, "pt-{}", .{p.t});
     if (p.b != 0) try emitFmt(alloc, out, "pb-{}", .{p.b});
-}
-
-fn emit_basis_auto(out: *std.ArrayList([]const u8), alloc: std.mem.Allocator, row: StyleRow, def: StyleRow) anyerror!void {
-    if (row.flex.flexBasisBit == 1 and !(def.flex.flexBasisBit == 1 and row.flex.flexBasis == 0)) {
-        try dup_and_push(alloc, out, "basis-auto");
-    }
 }
 
 const RULES = [_]Rule{
@@ -299,7 +289,6 @@ const RULES = [_]Rule{
     ruleNumNestedParseOnly("pt-", "padding", "t"),
     ruleNumNestedParseOnly("pb-", "padding", "b"),
     // emission-only preferences
-    ruleEmitOnly(emit_basis_auto),
     ruleEmitOnly(emit_border_eq1),
     ruleEmitOnly(emit_padding_shorthands),
     ruleEmitOnly(emit_padding_edges),

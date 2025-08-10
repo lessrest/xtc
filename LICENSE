@@ -1,0 +1,15 @@
+XTC is licensed under the GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later).
+
+See LICENSES/AGPL-3.0-or-later.txt for the full text of the license.
+
+Exceptions and third-party components:
+- src/xmlparse.zig: Derived from zig-xml and remains under the Mozilla Public License 2.0 (MPL-2.0). See ATTRIBUTION.md and LICENSES/MPL-2.0.txt.
+- deps/trealla: Trealla Prolog sources are MIT-licensed (see deps/trealla/LICENSE). They are compiled into a static library.
+- Additional third-party dependencies may have their own licenses. Refer to file headers and the LICENSES/ directory.
+
+Unless otherwise noted in a file header, original code in this repository is AGPL-3.0-or-later.
+
+SPDX license identifiers (recommended):
+- For AGPL-licensed files: SPDX-License-Identifier: AGPL-3.0-or-later
+- For MPL file(s):          SPDX-License-Identifier: MPL-2.0
+

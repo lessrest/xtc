@@ -147,9 +147,27 @@ fn expectLayout(xml_input: []const u8, want: []const u8) !void {
 test "row start: two 4x3 tiles in 14x5 viewport" {
     try expectLayout(
         \\<?xml version="1.0" standalone="yes" ?>
-        \\<root class="flex flex-row items-stretch bg-glyph-[.]">
-        \\  <box class="basis-4 h-3 bg-glyph-[a]" />
-        \\  <box class="basis-4 h-3 bg-glyph-[b]" />
+        \\<root class="flex flex-row bg-glyph-[.]">
+        \\  <box class="w-4 h-3 bg-glyph-[a]" />
+        \\  <box class="w-4 h-3 bg-glyph-[b]" />
+        \\</root>
+    ,
+        \\aaaabbbb.......
+        \\aaaabbbb.......
+        \\aaaabbbb.......
+        \\...............
+        \\...............
+    );
+}
+
+test "flex row with stretch" {
+    try expectLayout(
+        \\<?xml version="1.0" standalone="yes" ?>
+        \\<root class="h-5 bg-glyph-[.]">
+        \\  <box class="h-3 flex flex-row items-stretch">
+        \\    <box class="w-4 bg-glyph-[a]" />
+        \\    <box class="w-4 bg-glyph-[b]" />
+        \\  </box>
         \\</root>
     ,
         \\aaaabbbb.......
@@ -162,9 +180,9 @@ test "row start: two 4x3 tiles in 14x5 viewport" {
 
 test "row center: centered 4x3 + 4x3 tiles in 14x5" {
     try expectLayout(
-        \\<root class="flex flex-row items-stretch justify-center bg-glyph-[.]">
-        \\  <box class="basis-4 h-3 bg-glyph-[a]" />
-        \\  <box class="basis-4 h-3 bg-glyph-[b]" />
+        \\<root class="flex flex-row justify-center bg-glyph-[.]">
+        \\  <box class="w-4 h-3 bg-glyph-[a]" />
+        \\  <box class="w-4 h-3 bg-glyph-[b]" />
         \\</root>
     ,
         \\...aaaabbbb...
@@ -178,9 +196,9 @@ test "row center: centered 4x3 + 4x3 tiles in 14x5" {
 
 test "row space-between: separated 4x3 tiles in 14x5" {
     try expectLayout(
-        \\<root class="flex flex-row items-stretch justify-between bg-glyph-[.]">
-        \\  <box class="basis-4 h-3 bg-glyph-[a]" />
-        \\  <box class="basis-4 h-3 bg-glyph-[b]" />
+        \\<root class="flex flex-row justify-between bg-glyph-[.]">
+        \\  <box class="w-4 h-3 bg-glyph-[a]" />
+        \\  <box class="w-4 h-3 bg-glyph-[b]" />
         \\</root>
     ,
         \\aaaa......bbbb
@@ -194,10 +212,10 @@ test "row space-between: separated 4x3 tiles in 14x5" {
 
 test "grow distribution: three tiles grow to fill main axis" {
     try expectLayout(
-        \\<root class="flex flex-row items-stretch bg-glyph-[.]">
-        \\  <box class="basis-2 h-2 grow-1 bg-glyph-[a]" />
-        \\  <box class="basis-2 h-2 grow-2 bg-glyph-[b]" />
-        \\  <box class="basis-2 h-2 grow-1 bg-glyph-[c]" />
+        \\<root class="flex flex-row bg-glyph-[.]">
+        \\  <box class="w-2 h-2 grow-1 bg-glyph-[a]" />
+        \\  <box class="w-2 h-2 grow-2 bg-glyph-[b]" />
+        \\  <box class="w-2 h-2 grow-1 bg-glyph-[c]" />
         \\</root>
     ,
         \\aaaabbbbbccc
@@ -210,10 +228,10 @@ test "grow distribution: three tiles grow to fill main axis" {
 
 test "justify-around: equal around gaps across three tiles" {
     try expectLayout(
-        \\<root class="flex flex-row items-stretch justify-around bg-glyph-[.]">
-        \\  <box class="basis-2 h-2 bg-glyph-[a]" />
-        \\  <box class="basis-2 h-2 bg-glyph-[b]" />
-        \\  <box class="basis-2 h-2 bg-glyph-[c]" />
+        \\<root class="flex flex-row justify-around bg-glyph-[.]">
+        \\  <box class="w-2 h-2 bg-glyph-[a]" />
+        \\  <box class="w-2 h-2 bg-glyph-[b]" />
+        \\  <box class="w-2 h-2 bg-glyph-[c]" />
         \\</root>
     ,
         \\.aa..bb..cc.
@@ -227,8 +245,8 @@ test "justify-around: equal around gaps across three tiles" {
 test "align-self overrides align-items (center vs start)" {
     try expectLayout(
         \\<root class="flex flex-row items-start bg-glyph-[.] h-4">
-        \\  <box class="basis-4 h-2 self-center bg-glyph-[a]" />
-        \\  <box class="basis-4 h-2 bg-glyph-[b]" />
+        \\  <box class="w-4 h-2 self-center bg-glyph-[a]" />
+        \\  <box class="w-4 h-2 bg-glyph-[b]" />
         \\</root>
     ,
         \\....bbbb....
