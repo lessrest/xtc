@@ -25,15 +25,23 @@ pub const Dom = struct {
     headers: std.MultiArrayList(DomNodeHeader) = .{},
     styles: StyleTable,
     text_arena: std.ArrayList(u8),
+    debug_ids: std.AutoHashMap(DomNodeId, []const u8),
 
     pub fn init(alloc: std.mem.Allocator) Dom {
-        return .{ .alloc = alloc, .headers = .{}, .styles = StyleTable.init(alloc), .text_arena = std.ArrayList(u8).init(alloc) };
+        return .{
+            .alloc = alloc,
+            .headers = .{},
+            .styles = StyleTable.init(alloc),
+            .text_arena = std.ArrayList(u8).init(alloc),
+            .debug_ids = std.AutoHashMap(DomNodeId, []const u8).init(alloc),
+        };
     }
 
     pub fn deinit(self: *Dom) void {
         self.headers.deinit(self.alloc);
         self.styles.deinit();
         self.text_arena.deinit();
+        self.debug_ids.deinit();
         self.* = undefined;
     }
 
@@ -106,6 +114,39 @@ pub const Dom = struct {
             items.items(.prev_sibling)[c] = last_id;
         }
         p_count.* += 1;
+    }
+
+    /// Set a debug ID for a node - string is copied to DOM's allocator
+    pub fn setDebugId(self: *Dom, id: DomNodeId, debug_id: []const u8) !void {
+        const owned_id = try self.alloc.dupe(u8, debug_id);
+        try self.debug_ids.put(id, owned_id);
+    }
+
+    /// Get debug ID for a node, or null if not set
+    pub fn getDebugId(self: *const Dom, id: DomNodeId) ?[]const u8 {
+        return self.debug_ids.get(id);
+    }
+
+    /// Get debug ID for a node, or return default string with numeric ID
+    pub fn getDebugIdOrDefault(self: *const Dom, id: DomNodeId, buf: []u8) []const u8 {
+        if (self.debug_ids.get(id)) |debug_id| {
+            return debug_id;
+        } else {
+            return std.fmt.bufPrint(buf, "#{d}", .{id}) catch "?";
+        }
+    }
+
+    /// Get the style row for a node
+    pub fn getNodeStyle(self: *const Dom, id: DomNodeId) StyleRow {
+        const items = self.headers.slice();
+        const style_id = items.items(.style_id)[@as(usize, @intCast(id))];
+        return self.styles.cols.items[@intCast(style_id)];
+    }
+
+    /// Get the kind (element or text) for a node
+    pub fn getNodeKind(self: *const Dom, id: DomNodeId) DomNodeKind {
+        const items = self.headers.slice();
+        return items.items(.kind)[@as(usize, @intCast(id))];
     }
 };
 

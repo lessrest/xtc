@@ -59,6 +59,7 @@
 //   - overflow:clip clipping correctness
 //   - border styles and alpha background blending
 
+const std = @import("std");
 const DisplayWidth = @import("lib.zig").DisplayWidth;
 const Dom = @import("dom.zig").Dom;
 const DomNodeId = @import("dom.zig").DomNodeId;
@@ -90,17 +91,28 @@ pub fn intrinsicSize(dom_: *const Dom, id: DomNodeId, max_w: usize, max_h: usize
             const slice = dom_.getTextSlice(id);
             const text_cols: usize = dw.strWidth(slice);
             const clamp_w: usize = if (max_w == 0) 0 else @min(max_w, text_cols);
+
+            const old_h = h;
+
             if (w == 0) {
                 w = @min(max_w, pad_x + clamp_w);
             }
             if (h == 0) {
+                // Count actual newlines in the text, not just character width-based wrapping
                 var lines: usize = 1;
-                if (max_w > 0 and text_cols > 0) {
-                    // ceil(text_cols / max_w)
-                    lines = (text_cols + max_w - 1) / max_w;
+                var it = std.unicode.Utf8Iterator{ .bytes = slice, .i = 0 };
+                while (it.nextCodepoint()) |codepoint| {
+                    if (codepoint == '\n') {
+                        lines += 1;
+                    }
                 }
                 h = @min(max_h, pad_y + lines);
             }
+
+            // Log the text measurement calculation
+            var id_buf: [32]u8 = undefined;
+            const debug_id = dom_.getDebugIdOrDefault(id, &id_buf);
+            std.log.info("  [measure] text {s}: text_cols={d} max_w={d} max_h={d} pad=({d}x{d}) lines={d} -> ({d}x{d})", .{ debug_id, text_cols, max_w, max_h, pad_x, pad_y, if (h > 0 and old_h == 0) (h - pad_y) else 1, w, h });
         }
     }
 

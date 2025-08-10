@@ -6,6 +6,7 @@ const StyleFlexDir = style.StyleFlexDir;
 const StyleFlexWrap = style.StyleFlexWrap;
 const StyleJustify = style.StyleJustify;
 const StyleAlign = style.StyleAlign;
+const StyleOverflow = style.StyleOverflow;
 const BorderStyle = style.BorderStyle;
 const defaultStyleRow = style.defaultStyleRow;
 
@@ -309,6 +310,16 @@ const RULES = [_]Rule{
     ruleExactField("self-end", "align_self", StyleAlign.end, true),
     ruleExactField("self-center", "align_self", StyleAlign.center, true),
     ruleExactField("self-stretch", "align_self", StyleAlign.stretch, true),
+    // overflow
+    ruleExactField("overflow-visible", "overflow_y", StyleOverflow.visible, true),
+    ruleExactField("overflow-hidden", "overflow_y", StyleOverflow.hidden, true),
+    ruleExactField("overflow-scroll", "overflow_y", StyleOverflow.scroll, true),
+    ruleExactField("overflow-x-visible", "overflow_x", StyleOverflow.visible, true),
+    ruleExactField("overflow-x-hidden", "overflow_x", StyleOverflow.hidden, true),
+    ruleExactField("overflow-x-scroll", "overflow_x", StyleOverflow.scroll, true),
+    ruleExactField("overflow-y-visible", "overflow_y", StyleOverflow.visible, true),
+    ruleExactField("overflow-y-hidden", "overflow_y", StyleOverflow.hidden, true),
+    ruleExactField("overflow-y-scroll", "overflow_y", StyleOverflow.scroll, true),
     // padding parse rules
     ruleNumCustomParseOnly("p-", setPadAll),
     ruleNumCustomParseOnly("px-", setPadX),

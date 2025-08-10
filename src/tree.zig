@@ -15,9 +15,16 @@ pub fn ContiguousTree(comptime NodeData: type) type {
             data: NodeData,
             first_child: NodeIndex,
             child_count: u32,
+            parent_index: NodeIndex,
 
             pub fn hasChildren(self: *const Node) bool {
                 return self.child_count > 0;
+            }
+
+            /// Get the parent node, or null if this is the root node
+            pub fn getParentNode(self: *const Node, tree: *const Self) ?*const Node {
+                if (self.parent_index == INVALID_INDEX) return null;
+                return tree.getNode(self.parent_index);
             }
 
             /// Get the index of the nth child node
@@ -132,6 +139,7 @@ pub fn ContiguousTree(comptime NodeData: type) type {
                 .data = root_data,
                 .first_child = INVALID_INDEX,
                 .child_count = 0,
+                .parent_index = INVALID_INDEX,
             });
             try queue.append(.{ .id = root_id, .tree_idx = 0 });
 
@@ -154,6 +162,7 @@ pub fn ContiguousTree(comptime NodeData: type) type {
                         .data = child_data,
                         .first_child = INVALID_INDEX,
                         .child_count = 0,
+                        .parent_index = current.tree_idx,
                     });
                     try queue.append(.{ .id = child_id, .tree_idx = child_tree_idx });
                 }

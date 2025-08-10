@@ -7,6 +7,7 @@ const measure = @import("measure.zig");
 const StyleAlign = @import("style.zig").StyleAlign;
 const StyleFlexDir = @import("style.zig").StyleFlexDir;
 const StyleJustify = @import("style.zig").StyleJustify;
+const StyleOverflow = @import("style.zig").StyleOverflow;
 const StyleRow = @import("style.zig").StyleRow;
 const ContiguousTree = @import("tree.zig").ContiguousTree;
 const BoxSize = [2]usize;
@@ -46,6 +47,9 @@ fn tracePhase(comptime name: []const u8) void {
 pub const BoxData = struct {
     dom_id: DomNodeId,
     rect: Rect,
+    // Scroll state for containers with overflow: scroll
+    scroll_offset_y: usize = 0,
+    content_size: BoxSize = .{ 0, 0 }, // Full content size (may exceed rect size for scroll containers)
 };
 
 /// Specialized tree for layout boxes
@@ -73,7 +77,7 @@ const FlexItemMainSizeInfo = struct {
     total_grow_factor: usize,
 };
 
-fn computeInnerContentRect(container_style: StyleRow, container_rect: Rect) Rect {
+pub fn computeInnerContentRect(container_style: StyleRow, container_rect: Rect) Rect {
     const border_width: usize = @as(usize, @intCast(container_style.border.width));
     const padding_left: usize = @as(usize, @intCast(container_style.padding.l)) + border_width;
     const padding_right: usize = @as(usize, @intCast(container_style.padding.r)) + border_width;
@@ -103,17 +107,33 @@ fn computeIntrinsicSizesForFlexItems(
     tracePhase("intrinsic-sizing");
     defer tracePop();
 
-    const dom_headers = dom.headers.slice();
     const flex_item_count = container_node.child_count;
     var flex_items = try allocator.alloc(FlexItem, flex_item_count);
 
     for (0..flex_item_count) |item_index| {
         const flex_item_box = container_node.getChildNode(box_tree, item_index);
         const item_dom_id = flex_item_box.data.dom_id;
-        const style_id = dom_headers.items(.style_id)[@as(usize, @intCast(item_dom_id))];
-        const item_style = dom.styles.cols.items[@intCast(style_id)];
+        const item_style = dom.getNodeStyle(item_dom_id);
 
-        var intrinsic_size = measure.intrinsicSize(dom, item_dom_id, content_rect.w, content_rect.h, display_width);
+        // For scroll containers, give unlimited height constraint to children
+        const constraint_h = if (flex_container_style.overflow_y == .scroll) 
+            std.math.maxInt(usize) 
+        else 
+            content_rect.h;
+        
+        var intrinsic_size = measure.intrinsicSize(dom, item_dom_id, content_rect.w, constraint_h, display_width);
+        
+        // Log text sizing details for text nodes
+        if (dom.getNodeKind(item_dom_id) == .text) {
+            const text_slice = dom.getTextSlice(item_dom_id);
+            const display_width_cols = display_width.strWidth(text_slice);
+            var id_buf: [32]u8 = undefined;
+            const debug_id = dom.getDebugIdOrDefault(item_dom_id, &id_buf);
+            tracef("text-sizing {s}: text=\"{s}\" display_width={d} max_w={d} max_h={d} -> size=({d}x{d})", .{
+                debug_id, text_slice, display_width_cols, content_rect.w, content_rect.h, intrinsic_size[0], intrinsic_size[1]
+            });
+        }
+        
         // Override with explicit width/height if specified
         if (item_style.width != 0) intrinsic_size[0] = item_style.width;
         if (item_style.height != 0) intrinsic_size[1] = item_style.height;
@@ -145,15 +165,17 @@ fn computeIntrinsicSizesForFlexItems(
 
         // Trace the sizing decisions
         if (g_layout_trace_enabled) {
+            var id_buf: [32]u8 = undefined;
+            const debug_id = dom.getDebugIdOrDefault(item_dom_id, &id_buf);
             if (item_style.width != 0 or item_style.height != 0) {
-                tracef("flex-item[{d}] dom={d}: natural=({d}x{d}) overridden=({d}x{d}) by width_cells={d} height_cells={d}", .{
-                    item_index, item_dom_id, natural_width, natural_height, intrinsic_size[0], intrinsic_size[1], item_style.width, item_style.height,
+                tracef("flex-item[{d}] {s}: natural=({d}x{d}) overridden=({d}x{d}) by width_cells={d} height_cells={d}", .{
+                    item_index, debug_id, natural_width, natural_height, intrinsic_size[0], intrinsic_size[1], item_style.width, item_style.height,
                 });
             } else {
-                tracef("flex-item[{d}] dom={d}: natural=({d}x{d})", .{ item_index, item_dom_id, intrinsic_size[0], intrinsic_size[1] });
+                tracef("flex-item[{d}] {s}: natural=({d}x{d})", .{ item_index, debug_id, intrinsic_size[0], intrinsic_size[1] });
             }
-            tracef("flex-item[{d}]: order={d} grow={d} align_self={?} main_margins start={d} end={d}", .{
-                item_index, item_style.order, item_style.flex.flexGrowFactor, item_style.align_self, main_axis_margin_start, main_axis_margin_end,
+            tracef("flex-item[{d}] {s}: order={d} grow={d} align_self={?} main_margins start={d} end={d}", .{
+                item_index, debug_id, item_style.order, item_style.flex.flexGrowFactor, item_style.align_self, main_axis_margin_start, main_axis_margin_end,
             });
         }
     }
@@ -446,17 +468,17 @@ pub fn computeFlexLayout(
     defer tracePop();
 
     var container_header = container_node;
-    const dom_headers = dom.headers.slice();
-    const container_style_id = dom_headers.items(.style_id)[@as(usize, @intCast(container_header.data.dom_id))];
-    const flex_container_style = dom.styles.cols.items[@intCast(container_style_id)];
+    const flex_container_style = dom.getNodeStyle(container_header.data.dom_id);
 
     // Compute the inner content area after padding and border
     const content_rect = computeInnerContentRect(flex_container_style, container_rect);
     container_header.data.rect = container_rect;
     if (container_header.child_count == 0) return;
 
-    tracef("flexbox-container dom={d} rect=({d},{d} {d}x{d}) content=({d},{d} {d}x{d}) dir={s} justify={s} align_items={s}", .{
-        container_header.data.dom_id,
+    var container_id_buf: [32]u8 = undefined;
+    const container_debug_id = dom.getDebugIdOrDefault(container_header.data.dom_id, &container_id_buf);
+    tracef("flexbox-container {s} rect=({d},{d} {d}x{d}) content=({d},{d} {d}x{d}) dir={s} justify={s} align_items={s}", .{
+        container_debug_id,
         container_rect.x,
         container_rect.y,
         container_rect.w,
@@ -544,9 +566,11 @@ pub fn computeFlexLayout(
         );
         const item_box_node = container_header.getChildNodeMut(box_tree, flex_item.original_index);
 
-        tracef("flex-item[{d}] dom={d}: order={d} extra_size={d} -> rect=({d},{d} {d}x{d}) advance={d}", .{
+        var item_id_buf: [32]u8 = undefined;
+        const item_debug_id = dom.getDebugIdOrDefault(flex_item.dom_id, &item_id_buf);
+        tracef("flex-item[{d}] {s}: order={d} extra_size={d} -> rect=({d},{d} {d}x{d}) advance={d}", .{
             item_index,
-            flex_item.dom_id,
+            item_debug_id,
             flex_item.flex_order,
             @max(0, flex_item.extra_main_size),
             item_position.final_rect.x,
@@ -569,6 +593,36 @@ pub fn computeFlexLayout(
         // Advance cursor for next item
         main_axis_cursor += @as(i32, @intCast(item_position.main_axis_advance)) + @as(i32, @intCast(flex_item.margin_main_axis_start + flex_item.margin_main_axis_end));
         main_axis_cursor += flex_item.trailing_space;
+    }
+    
+    // For scroll containers, track the actual content size and handle auto-scroll
+    if (flex_container_style.overflow_y == .scroll) {
+        // Calculate the total content height used by all flex items
+        const content_height: usize = @as(usize, @intCast(@max(0, main_axis_cursor - spacing.start_space)));
+        
+        // Store the content size for paint phase clipping
+        container_header.data.content_size = .{ content_rect.w, content_height };
+        
+        // Auto-scroll to bottom: set scroll offset to show the bottom of content
+        const viewport_height = content_rect.h;
+        if (content_height > viewport_height) {
+            container_header.data.scroll_offset_y = content_height - viewport_height;
+        } else {
+            container_header.data.scroll_offset_y = 0;
+        }
+        
+        if (g_layout_trace_enabled) {
+            var scroll_id_buf: [32]u8 = undefined;
+            const scroll_debug_id = dom.getDebugIdOrDefault(container_header.data.dom_id, &scroll_id_buf);
+            tracef("scroll-container {s}: content_size=({d}x{d}) viewport=({d}x{d}) scroll_y={d}", .{
+                scroll_debug_id,
+                content_rect.w,
+                content_height,
+                content_rect.w,
+                viewport_height,
+                container_header.data.scroll_offset_y,
+            });
+        }
     }
 }
 

@@ -7,6 +7,7 @@ const Words = @import("Words");
 const tailwind = @import("tailwind.zig");
 const tty = @import("tty.zig");
 const StyleRow = @import("style.zig").StyleRow;
+const StyleOverflow = @import("style.zig").StyleOverflow;
 const BorderStyle = @import("style.zig").BorderStyle;
 const StyleJustify = @import("style.zig").StyleJustify;
 
@@ -90,6 +91,66 @@ pub const PaintCommandBatch = struct {
     }
     pub fn push(self: *PaintCommandBatch, op: PaintOp) !void {
         try self.ops.append(op);
+    }
+    
+    pub fn logToFile(self: *const PaintCommandBatch, log_file: std.fs.File, glyphs: *const tty.GlyphTable) !void {
+        const writer = log_file.writer();
+        try writer.print("\n=== PAINT COMMANDS (count: {d}) ===\n", .{self.ops.items.len});
+        
+        for (self.ops.items, 0..) |op, i| {
+            try writer.print("[{d:2}] ", .{i});
+            switch (op) {
+                .FillRect => |fr| {
+                    try writer.print("FillRect({d},{d} {d}x{d}) color=#{X:0>8}\n", .{ fr.x, fr.y, fr.w, fr.h, fr.color });
+                },
+                .StrokeRect => |sr| {
+                    const bg_str = if (sr.bg_color) |bg| try std.fmt.allocPrint(std.heap.page_allocator, " bg=#{X:0>8}", .{bg}) else "";
+                    defer if (sr.bg_color != null) std.heap.page_allocator.free(bg_str);
+                    try writer.print("StrokeRect({d},{d} {d}x{d}) color=#{X:0>8} style={s}{s}\n", .{ sr.x, sr.y, sr.w, sr.h, sr.color, @tagName(sr.style), bg_str });
+                },
+                .GlyphRun => |gr| {
+                    var glyph_str_buf: [256]u8 = undefined;
+                    var glyph_str: []u8 = glyph_str_buf[0..0];
+                    
+                    // Build the glyph text representation
+                    for (gr.glyphs, 0..) |gid, gi| {
+                        if (gi >= 20) { // Limit output length
+                            const remaining = try std.fmt.bufPrint(glyph_str_buf[glyph_str.len..], "...+{d}", .{gr.glyphs.len - gi});
+                            glyph_str = glyph_str_buf[0..glyph_str.len + remaining.len];
+                            break;
+                        }
+                        
+                        const glyph_bytes = glyphs.getSlice(gid) orelse &[_]u8{};
+                        if (glyph_bytes.len == 0) {
+                            const empty_char = try std.fmt.bufPrint(glyph_str_buf[glyph_str.len..], "?", .{});
+                            glyph_str = glyph_str_buf[0..glyph_str.len + empty_char.len];
+                        } else if (glyph_bytes.len == 1 and glyph_bytes[0] >= 32 and glyph_bytes[0] <= 126) {
+                            // Printable ASCII
+                            const char = try std.fmt.bufPrint(glyph_str_buf[glyph_str.len..], "{c}", .{glyph_bytes[0]});
+                            glyph_str = glyph_str_buf[0..glyph_str.len + char.len];
+                        } else {
+                            // Non-printable or multi-byte - show as escaped
+                            const escaped = try std.fmt.bufPrint(glyph_str_buf[glyph_str.len..], "\\x{X}", .{@as(u32, glyph_bytes[0])});
+                            glyph_str = glyph_str_buf[0..glyph_str.len + escaped.len];
+                        }
+                    }
+                    
+                    try writer.print("GlyphRun({d},{d}) color=#{X:0>8} len={d} text=\"{s}\"\n", .{ gr.x, gr.y, gr.color, gr.glyphs.len, glyph_str });
+                },
+                .FillGlyphRect => |fgr| {
+                    const glyph_bytes = glyphs.getSlice(fgr.glyph) orelse &[_]u8{};
+                    var glyph_char: [8]u8 = undefined;
+                    const glyph_repr = if (glyph_bytes.len == 1 and glyph_bytes[0] >= 32 and glyph_bytes[0] <= 126)
+                        try std.fmt.bufPrint(&glyph_char, "'{c}'", .{glyph_bytes[0]})
+                    else
+                        try std.fmt.bufPrint(&glyph_char, "glyph#{d}", .{fgr.glyph});
+                    
+                    try writer.print("FillGlyphRect({d},{d} {d}x{d}) glyph={s} color=#{X:0>8}\n", .{ fgr.x, fgr.y, fgr.w, fgr.h, glyph_repr, fgr.color });
+                },
+            }
+        }
+        try writer.print("=== END PAINT COMMANDS ===\n\n", .{});
+        log_file.sync() catch {};
     }
 };
 
@@ -266,12 +327,12 @@ fn emitTextGlyphRuns(
     if (cb.rect.w == 0 or cb.rect.h == 0) return;
 
     var y_offset: usize = 0;
-    
+
     // First split by newlines
     var line_iter = std.mem.tokenizeScalar(u8, slice, '\n');
     while (line_iter.next()) |line| {
         if (y_offset >= cb.rect.h) break;
-        
+
         // For each line, apply word wrapping if needed
         var line_start: usize = 0;
         var line_width: usize = 0;
@@ -279,7 +340,7 @@ fn emitTextGlyphRuns(
         var word_iter = Words.init(list.ops.allocator) catch unreachable;
         defer word_iter.deinit(list.ops.allocator);
         var witer = word_iter.iterator(line);
-        
+
         while (witer.next()) |seg| {
             const bytes = seg.bytes(line);
             const seg_w = dw.strWidth(bytes);
@@ -290,7 +351,12 @@ fn emitTextGlyphRuns(
                 const shaped = try buildGlyphRun(list.ops.allocator, g, dw, glyphs, line_bytes, cb.rect.w, false);
                 if (shaped.run.len > 0) {
                     const extra = computeJustifyOffset(cb.rect.w, shaped.width_cols, row.justify);
-                    try list.push(PaintOp{ .GlyphRun = .{ .x = rect.x + cb.inset_left + extra, .y = rect.y + cb.inset_top + y_offset, .glyphs = shaped.run, .color = color } });
+                    try list.push(PaintOp{ .GlyphRun = .{
+                        .x = rect.x + cb.inset_left + extra,
+                        .y = rect.y + cb.inset_top + y_offset,
+                        .glyphs = shaped.run,
+                        .color = color,
+                    } });
                 }
                 y_offset += 1;
                 if (y_offset >= cb.rect.h) break;
@@ -302,23 +368,32 @@ fn emitTextGlyphRuns(
             line_width += seg_w;
             last_break_bytes = seg.offset + seg.len;
         }
-        
+
         // Emit the remainder of this line (after wrapping)
         if (line_start < line.len and y_offset < cb.rect.h) {
             const line_bytes = line[line_start..];
             const shaped = try buildGlyphRun(list.ops.allocator, g, dw, glyphs, line_bytes, cb.rect.w, true);
             if (shaped.run.len > 0) {
                 const extra = computeJustifyOffset(cb.rect.w, shaped.width_cols, row.justify);
-                try list.push(PaintOp{ .GlyphRun = .{ .x = rect.x + cb.inset_left + extra, .y = rect.y + cb.inset_top + y_offset, .glyphs = shaped.run, .color = color } });
+                try list.push(PaintOp{ .GlyphRun = .{
+                    .x = rect.x + cb.inset_left + extra,
+                    .y = rect.y + cb.inset_top + y_offset,
+                    .glyphs = shaped.run,
+                    .color = color,
+                } });
             }
             y_offset += 1;
         }
     }
 }
 
-pub fn computePaintCommands(list: *PaintCommandBatch, document: *const dom.Dom, tree: *const layout.BoxTree, glyphs: *tty.GlyphTable) !void {
+pub fn computePaintCommands(
+    list: *PaintCommandBatch,
+    document: *const dom.Dom,
+    tree: *const layout.BoxTree,
+    glyphs: *tty.GlyphTable,
+) !void {
     // Painting order follows CSS background, borders, then content (text). Stacking contexts are out of scope here.
-    const items = document.headers.slice();
     var g = try Graphemes.init(list.ops.allocator);
     defer g.deinit(list.ops.allocator);
     var dw = try DisplayWidth.init(list.ops.allocator);
@@ -327,16 +402,41 @@ pub fn computePaintCommands(list: *PaintCommandBatch, document: *const dom.Dom, 
     var i: usize = 0;
     while (i < tree.nodeCount()) : (i += 1) {
         const h = tree.getNode(@as(u32, @intCast(i)));
-        const sid = items.items(.style_id)[@as(usize, @intCast(h.data.dom_id))];
-        const row: StyleRow = document.styles.cols.items[@intCast(sid)];
+        const row = document.getNodeStyle(h.data.dom_id);
+        
+        // Find scroll container parent and apply scroll offset
+        var paint_rect = h.data.rect;
+        
+        // Check if this node has a scroll container parent
+        if (h.getParentNode(tree)) |parent_node| {
+            const parent_row = document.getNodeStyle(parent_node.data.dom_id);
+            
+            if (parent_row.overflow_y == .scroll) {
+                // Apply scroll offset: move content up by scroll amount
+                if (paint_rect.y >= parent_node.data.scroll_offset_y) {
+                    paint_rect.y -= parent_node.data.scroll_offset_y;
+                } else {
+                    // Content is scrolled out of view at the top
+                    continue;
+                }
+                
+                // Set up clipping rectangle to viewport
+                const parent_content_rect = layout.computeInnerContentRect(parent_row, parent_node.data.rect);
+                
+                // Skip if entirely outside viewport
+                if (paint_rect.y >= parent_content_rect.y + parent_content_rect.h or
+                    paint_rect.y + paint_rect.h <= parent_content_rect.y) {
+                    continue;
+                }
+            }
+        }
 
-        try emitGlyphTileFill(list, glyphs, h.data.rect, row);
-        try emitBackgroundFillIfAny(list, h.data.rect, row);
-        try emitBorderStrokeIfAny(list, h.data.rect, row);
+        try emitGlyphTileFill(list, glyphs, paint_rect, row);
+        try emitBackgroundFillIfAny(list, paint_rect, row);
+        try emitBorderStrokeIfAny(list, paint_rect, row);
 
-        const kind = items.items(.kind)[@as(usize, @intCast(h.data.dom_id))];
-        if (kind == .text) {
-            try emitTextGlyphRuns(list, document, h.data.dom_id, h.data.rect, row, glyphs, &g, &dw);
+        if (document.getNodeKind(h.data.dom_id) == .text) {
+            try emitTextGlyphRuns(list, document, h.data.dom_id, paint_rect, row, glyphs, &g, &dw);
         }
     }
 }

@@ -10,7 +10,7 @@ pub const std_options: std.Options = .{
     .logFn = myLogFn,
 };
 
-var g_log_file: ?std.fs.File = null; // set at runtime by --log
+pub var g_log_file: ?std.fs.File = null; // set at runtime by --log
 fn myLogFn(
     comptime level: std.log.Level,
     comptime scope: @Type(.enum_literal),
@@ -120,14 +120,9 @@ pub fn main() !void {
     // Initialize optional log file for std.log override
     var opened: ?std.fs.File = null;
     if (log_path) |lp| {
-        opened = std.fs.cwd().createFile(lp, .{ .truncate = false, .read = false, .exclusive = false }) catch |e| blk: {
-            if (e == error.PathAlreadyExists) {
-                break :blk std.fs.cwd().openFile(lp, .{ .mode = .write_only }) catch null;
-            }
-            break :blk null;
-        };
+        // Always create/truncate the log file to start fresh
+        opened = std.fs.cwd().createFile(lp, .{ .truncate = true, .read = false, .exclusive = false }) catch null;
         if (opened) |f| {
-            _ = f.seekFromEnd(0) catch {};
             g_log_file = f;
             std.log.info("logging to {s}", .{lp});
         }

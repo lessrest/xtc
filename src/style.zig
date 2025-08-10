@@ -40,6 +40,7 @@ pub const StyleJustify = enum(u3) {
     space_evenly,
 };
 pub const StyleAlign = enum(u3) { start, end, center, stretch, baseline };
+pub const StyleOverflow = enum(u2) { visible, hidden, scroll };
 
 pub const StyleColor = packed struct {
     r: u8,
@@ -69,9 +70,9 @@ pub const StyleRow = struct {
 
     display: StyleDisplay,
     visibility_hidden: u1,
-    overflow_clip: u1,
+    overflow_x: StyleOverflow,
+    overflow_y: StyleOverflow,
     whitespace: StyleWhitespace,
-    _pad0: u3 = 0,
 
     width: u16,
     height: u16,
@@ -146,7 +147,8 @@ pub fn defaultStyleRow() StyleRow {
         .text_flags = .{ .bold = 0, .italic = 0, .underline = 0, .inverse = 0, .strike = 0, .dim = 0, .blink = 0 },
         .display = .@"inline",
         .visibility_hidden = 0,
-        .overflow_clip = 0,
+        .overflow_x = .visible,
+        .overflow_y = .visible,
         .whitespace = .normal,
         .width = 0,
         .height = 0,

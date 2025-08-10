@@ -122,6 +122,11 @@ pub const Raster = struct {
         self.* = undefined;
     }
 
+    pub fn getCell(self: *const Raster, x: usize, y: usize) Cell {
+        const idx = y * self.width + x;
+        return self.cells.get(idx);
+    }
+
     /// Set an ASCII glyph at a cell
     pub fn set(self: *Raster, x: usize, y: usize, ch: u8) void {
         if (x >= self.width or y >= self.height) return;

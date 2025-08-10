@@ -40,19 +40,33 @@ pub fn run(allocator: std.mem.Allocator) !void {
     const root_id = try document.addElement(
         "flex flex-col bg-glyph-[.] items-center",
     );
+    try document.setDebugId(root_id, "root");
+    
     const container_id = try document.addElement(
         "flex flex-col grow-1 w-80 items-stretch border border-blue-200 bg-yellow-700",
     );
+    try document.setDebugId(container_id, "container");
+    
     const wren_output_id = try document.addElement(
-        "px-2 grow-1 bg-green-400 text-slate-800",
+        "px-2 grow-1 bg-green-400 text-slate-800 overflow-y-scroll",
     );
+    try document.setDebugId(wren_output_id, "wren-output");
+    
     const child_id = try document.addElement(
         "px-2 flex items-center grow-0 h-6 bg-slate-700 text-slate-200",
     );
+    try document.setDebugId(child_id, "input-line");
 
     const text_id = try document.addText("foo");
-    const output_text_id = try document.addText("wren");
-    document.appendChild(child_id, try document.addText("» "));
+    try document.setDebugId(text_id, "input-text");
+    
+    const output_text_id = try document.addText("wren\n");
+    try document.setDebugId(output_text_id, "output-text");
+    
+    const prompt_id = try document.addText("» ");
+    try document.setDebugId(prompt_id, "prompt");
+    
+    document.appendChild(child_id, prompt_id);
     document.appendChild(child_id, text_id);
 
     document.appendChild(wren_output_id, output_text_id);
@@ -71,7 +85,7 @@ pub fn run(allocator: std.mem.Allocator) !void {
         .output_text_id = output_text_id,
         .raster_front = null,
         .raster_back = null,
-        .log = null,
+        .log = @import("main.zig").g_log_file,
     };
     defer {
         if (ctx.raster_front) |*r| r.deinit(allocator);
@@ -81,16 +95,41 @@ pub fn run(allocator: std.mem.Allocator) !void {
     var editor = try LineEditor.init(allocator);
     defer editor.deinit(allocator);
 
-    // Persistent Wren VM for the session
-    var wren_output = std.ArrayList(u8).init(allocator);
-    defer wren_output.deinit();
-    
-    var wren_vm = try wren.VM.init(allocator, &wren_output);
-    defer wren_vm.deinit();
+    const ScriptContext = struct {
+        allocator: std.mem.Allocator,
+        out: *std.ArrayList(u8),
+
+        pub fn write(self: *@This(), text: []const u8) void {
+            self.out.appendSlice(text) catch @panic("appendSlice");
+            self.out.append('\n') catch @panic("append");
+        }
+
+        pub fn onError(self: *@This(), error_type: wren.WrenErrorType, module: []const u8, line: c_int, message: []const u8) void {
+            switch (error_type) {
+                wren.WREN_ERROR_COMPILE => {
+                    std.fmt.format(self.out.writer(), "[{s} line {d}] Compile error: {s}\n", .{ module, line, message }) catch @panic("appendSlice");
+                },
+                wren.WREN_ERROR_RUNTIME => {
+                    std.fmt.format(self.out.writer(), "[{s} line {d}] Runtime error: {s}\n", .{ module, line, message }) catch @panic("appendSlice");
+                },
+                wren.WREN_ERROR_STACK_TRACE => {
+                    std.fmt.format(self.out.writer(), "  [{s} line {d}] in {s}\n", .{ module, line, message }) catch @panic("appendSlice");
+                },
+                else => {},
+            }
+        }
+    };
 
     // Output log buffer backing the Prolog output box
     var out_log = std.ArrayList(u8).init(allocator);
     defer out_log.deinit();
+
+    var script_context = ScriptContext{
+        .out = &out_log,
+        .allocator = allocator,
+    };
+    var wren_vm = try wren.create(ScriptContext, &script_context);
+    defer wren_vm.deinit();
 
     while (true) {
         const maybe_line = try editor.prompt(&ctx);
@@ -101,17 +140,17 @@ pub fn run(allocator: std.mem.Allocator) !void {
         try out_log.appendSlice("> ");
         try out_log.appendSlice(line);
         try out_log.appendSlice("\n");
+
         // Evaluate via Wren VM
-        wren_output.clearRetainingCapacity();
         wren_vm.interpret("main", line) catch |err| {
             switch (err) {
-                error.CompileError => try wren_output.appendSlice("// Compile error\n"),
-                error.RuntimeError => try wren_output.appendSlice("// Runtime error\n"),
-                else => try wren_output.appendSlice("// Unknown error\n"),
+                error.CompileError => try out_log.appendSlice("// Compile error\n"),
+                error.RuntimeError => try out_log.appendSlice("// Runtime error\n"),
+                else => try out_log.appendSlice("// Unknown error\n"),
             }
         };
-        try out_log.appendSlice(wren_output.items);
-        // Update output area and redraw
+
+        // Update output area and redraw only once
         try setDomText(&ctx.dom, ctx.output_text_id, out_log.items);
         try renderDom(&ctx);
     }
@@ -169,6 +208,7 @@ fn ensureDoubleRaster(ctx: *RenderCtx) !struct { front: *Raster, back: *Raster }
 
 const pretty = @import("pretty");
 
+
 fn renderDom(ctx: *RenderCtx) !void {
     const al = ctx.allocator;
 
@@ -191,16 +231,30 @@ fn renderDom(ctx: *RenderCtx) !void {
 
     try paint.computePaintCommands(&dl, &ctx.dom, &tree, &glyphs);
 
+    // Log paint commands to file if log is enabled
+    if (ctx.log) |log_file| {
+        try dl.logToFile(log_file, &glyphs);
+    }
+
     // Double-buffered raster: render into back, diff against front, then swap
-    var rb = try ensureDoubleRaster(ctx);
-    rb.back.clear();
+    const rb = try ensureDoubleRaster(ctx);
     try tty.rasterizeDisplayList(rb.back, al, &glyphs, &dl);
 
+    // Use simple non-diffing raster output
+    try writeFullRaster(rb.back, &glyphs);
+
+    // Swap front/back for next frame
+    const tmp = ctx.raster_front.?;
+    ctx.raster_front = ctx.raster_back.?;
+    ctx.raster_back = tmp;
+}
+
+fn writeRasterDiff(front: *const Raster, back: *const Raster, glyphs: *const tty.GlyphTable) !void {
     // Emit diffs from front -> back directly to stdout
     var out_ansi = ansi.stdout();
     try out_ansi.resetStyle(); // reset styles; no clear, we'll position per change
 
-    var diff_iter = tty.RasterDiff.iterateChanges(rb.front, rb.back);
+    var diff_iter = tty.RasterDiff.iterateChanges(front, back);
     while (diff_iter.next()) |change_run| {
         // Move cursor to 1-based row/col
         try out_ansi.moveCursor(change_run.y + 1, change_run.x + 1);
@@ -219,15 +273,55 @@ fn renderDom(ctx: *RenderCtx) !void {
         }
 
         // Write the entire run of glyphs
-        try out_ansi.writeGlyphs(change_run.glyphs, &glyphs);
+        try out_ansi.writeGlyphs(change_run.glyphs, glyphs);
     }
 
     try out_ansi.resetStyle();
+}
 
-    // Swap front/back for next frame
-    const tmp = ctx.raster_front.?;
-    ctx.raster_front = ctx.raster_back.?;
-    ctx.raster_back = tmp;
+fn writeFullRaster(raster: *const Raster, glyphs: *const tty.GlyphTable) !void {
+    var out_ansi = ansi.stdout();
+    try out_ansi.resetStyle();
+    try out_ansi.moveCursor(1, 1); // Move to top-left
+
+    for (0..raster.height) |y| {
+        if (y > 0) {
+            try out_ansi.moveCursor(@intCast(y + 1), 1);
+        }
+
+        var current_bg: ?Rgba8 = null;
+        var current_fg: ?Rgba8 = null;
+
+        for (0..raster.width) |x| {
+            const cell = raster.getCell(x, y);
+
+            // Update background if needed
+            if (cell.bg != current_bg) {
+                if (cell.bg != tty.TERMINAL_DEFAULT_COLOR) {
+                    try out_ansi.setBackground(cell.bg);
+                } else {
+                    try out_ansi.resetBackground();
+                }
+                current_bg = cell.bg;
+            }
+
+            // Update foreground if needed
+            if (cell.fg != current_fg) {
+                if (cell.fg != tty.TERMINAL_DEFAULT_COLOR) {
+                    try out_ansi.setForeground(cell.fg);
+                } else {
+                    try out_ansi.resetForeground();
+                }
+                current_fg = cell.fg;
+            }
+
+            // Write the glyph
+            const glyph_slice = &[_]u32{cell.glyph};
+            try out_ansi.writeGlyphs(glyph_slice, glyphs);
+        }
+    }
+
+    try out_ansi.resetStyle();
 }
 
 fn updateTerminalSize(ctx: *RenderCtx) void {

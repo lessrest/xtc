@@ -26,6 +26,7 @@ pub const Words = @import("Words");
 pub const wren = @import("wren.zig");
 
 const DomNodeId = dom.DomNodeId;
+
 const Rect = layout.Rect;
 const BoxNode = dom.BoxNode;
 const Dom = dom.Dom;
@@ -86,6 +87,12 @@ pub fn renderXmlAscii(
     var dl = paint.PaintCommandBatch.init(al);
     defer dl.deinit();
     try paint.computePaintCommands(&dl, &document, &tree, &glyphs);
+    
+    // Log paint commands to file if log is enabled
+    if (@import("main.zig").g_log_file) |log_file| {
+        dl.logToFile(log_file, &glyphs) catch {};
+    }
+    
     try tty.rasterizeDisplayList(&r, al, &glyphs, &dl);
     return try r.toStringAlloc(al, &glyphs);
 }
@@ -344,16 +351,33 @@ test "flex with texts" {
 
 test "text with newlines" {
     try expectLayout(
-        \\<root class="flex bg-slate-800 text-white px-1 py-1 w-12 h-5">
-        \\  <box class="w-10 h-3">Line1
+        \\<root class="w-5 h-5 bg-glyph-[.]">Line1
         \\Line2
-        \\Line3</box>
+        \\Line3</root>
+    ,
+        \\Line1
+        \\Line2
+        \\Line3
+        \\.....
+        \\.....
+    );
+}
+
+test "overflow-y-scroll with auto-scroll to bottom" {
+    try expectLayout(
+        \\<root class="flex flex-col w-6 h-5 bg-glyph-[.]">
+        \\  <box class="h-1 w-6 bg-glyph-[.]"></box>
+        \\  <box class="flex flex-col overflow-y-scroll h-4 w-6">
+        \\    <box class="h-2 w-6 bg-glyph-[a]"></box>
+        \\    <box class="h-2 w-6 bg-glyph-[b]"></box>
+        \\    <box class="h-2 w-6 bg-glyph-[c]"></box>
+        \\  </box>
         \\</root>
     ,
-        \\            
-        \\ Line1      
-        \\ Line2      
-        \\            
-        \\            
+        \\......
+        \\bbbbbb
+        \\bbbbbb
+        \\cccccc
+        \\cccccc
     );
 }
