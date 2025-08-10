@@ -81,13 +81,26 @@ pub fn intrinsicSize(dom_: *const Dom, id: DomNodeId, max_w: usize, max_h: usize
     if (row.width != 0) w = row.width;
     if (row.height != 0) h = row.height;
 
-    // Text nodes: single-line measure via DisplayWidth; 1 row tall
+    // Text nodes: measure based on display width and a naive wrapping model.
+    // Without full line-breaking in layout, approximate height as the number of
+    // lines needed to fit the text in the available width (max_w), with at
+    // least one line. Width is clamped to max_w.
     if (w == 0 or h == 0) {
         if (kind == .text) {
             const slice = dom_.getTextSlice(id);
-            const content_w = @min(max_w, dw.strWidth(slice));
-            if (w == 0) w = @min(max_w, pad_x + content_w);
-            if (h == 0) h = @min(max_h, pad_y + 1);
+            const text_cols: usize = dw.strWidth(slice);
+            const clamp_w: usize = if (max_w == 0) 0 else @min(max_w, text_cols);
+            if (w == 0) {
+                w = @min(max_w, pad_x + clamp_w);
+            }
+            if (h == 0) {
+                var lines: usize = 1;
+                if (max_w > 0 and text_cols > 0) {
+                    // ceil(text_cols / max_w)
+                    lines = (text_cols + max_w - 1) / max_w;
+                }
+                h = @min(max_h, pad_y + lines);
+            }
         }
     }
 

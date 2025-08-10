@@ -3,13 +3,14 @@ const posix = std.posix;
 const Raster = @import("tty.zig").Raster;
 const Rgba8 = @import("tty.zig").Rgba8;
 const DisplayWidth = @import("lib.zig").DisplayWidth;
+const trealla = @import("trealla.zig");
 const allocateBoxTreeFromDOM = @import("layout.zig").allocateBoxTreeFromDOM;
 const Dom = @import("dom.zig").Dom;
 const Graphemes = @import("Graphemes");
 const PaintCommandBatch = @import("paint.zig").PaintCommandBatch;
 const rasterizeDisplayList = @import("tty.zig").rasterizeDisplayList;
 const computePaintCommands = @import("paint.zig").computePaintCommands;
-const layoutBoxesInPlace = @import("layout.zig").layoutBoxesInPlace;
+const layoutBoxesInPlaceNode = @import("layout.zig").layoutBoxesInPlaceNode;
 const GlyphTable = @import("tty.zig").GlyphTable;
 const DomNodeId = @import("dom.zig").DomNodeId;
 
@@ -35,34 +36,54 @@ pub fn run(allocator: std.mem.Allocator) !void {
         "flex flex-col bg-glyph-[.] items-center",
     );
     const container_id = try dom.addElement(
-        "flex flex-col grow-1 w-80 items-stretch border border-blue-200 bg-slate-700",
+        "flex flex-col grow-1 w-80 items-stretch border border-blue-200 bg-yellow-700",
     );
     const prolog_output_id = try dom.addElement(
-        "flex px-2 grow-1 bg-slate-400 text-slate-800",
+        "px-2 grow-1 bg-green-400 text-slate-800",
     );
     const child_id = try dom.addElement(
-        "px-2 flex items-center grow-0 h-3 bg-slate-700 text-slate-200",
+        "px-2 flex items-center grow-0 h-6 bg-slate-700 text-slate-200",
     );
 
     const text_id = try dom.addText("foo");
+    const output_text_id = try dom.addText("prolog");
     dom.appendChild(child_id, try dom.addText("» "));
     dom.appendChild(child_id, text_id);
 
+    dom.appendChild(prolog_output_id, output_text_id);
     dom.appendChild(container_id, prolog_output_id);
     dom.appendChild(container_id, child_id);
     dom.appendChild(root_id, container_id);
 
-    var ctx = RenderCtx{ .allocator = allocator, .display_width = &display_width, .width = 80, .height = 24, .dom = dom, .root_id = root_id, .text_id = text_id, .raster_front = null, .raster_back = null, .log = null };
+    var ctx = RenderCtx{ .allocator = allocator, .display_width = &display_width, .width = 80, .height = 24, .dom = dom, .root_id = root_id, .text_id = text_id, .output_text_id = output_text_id, .raster_front = null, .raster_back = null, .log = null };
 
     var editor = try LineEditor.init(allocator);
     defer editor.deinit(allocator);
+
+    // Persistent Trealla engine for the session
+    const pl = trealla.c.pl_create() orelse return error.CreateFailed;
+    defer trealla.c.pl_destroy(pl);
+
+    // Output log buffer backing the Prolog output box
+    var out_log = std.ArrayList(u8).init(allocator);
+    defer out_log.deinit();
 
     while (true) {
         const maybe_line = try editor.prompt(&ctx);
         if (maybe_line == null) break;
         const line = maybe_line.?;
         defer allocator.free(line);
-        // For now, we don't echo separately; DOM already reflects cleared line.
+        // Append prompt and query
+        try out_log.appendSlice("?- ");
+        try out_log.appendSlice(line);
+        try out_log.appendSlice("\n");
+        // Evaluate via Trealla, capturing stdout/err
+        const res = try trealla.evalToString(allocator, pl, line);
+        defer allocator.free(res);
+        try out_log.appendSlice(res);
+        // Update output area and redraw
+        try setDomText(&ctx.dom, ctx.output_text_id, out_log.items);
+        try renderDom(&ctx);
     }
 }
 
@@ -74,6 +95,7 @@ const RenderCtx = struct {
     dom: Dom,
     root_id: DomNodeId,
     text_id: DomNodeId,
+    output_text_id: DomNodeId,
     resized: bool = false,
     raster_front: ?Raster = null,
     raster_back: ?Raster = null,
@@ -123,7 +145,14 @@ fn renderDom(ctx: *RenderCtx) !void {
     var tree = try allocateBoxTreeFromDOM(al, &ctx.dom, ctx.root_id);
     defer tree.deinit();
 
-    try layoutBoxesInPlace(al, &tree, &ctx.dom, 0, .{ .x = 0, .y = 0, .w = ctx.width, .h = ctx.height }, ctx.display_width);
+    try layoutBoxesInPlaceNode(
+        al,
+        &tree,
+        &ctx.dom,
+        tree.getNodeMut(0),
+        .{ .x = 0, .y = 0, .w = ctx.width, .h = ctx.height },
+        ctx.display_width,
+    );
 
     var dl = PaintCommandBatch.init(al);
     defer dl.deinit();

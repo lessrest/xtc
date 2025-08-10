@@ -47,7 +47,7 @@ pub fn allocateBoxTreeFromDOMAutoRoot(alloc: std.mem.Allocator, dom: *const Dom)
     // Fallback: empty tree with root 0 if no element found
     return allocateBoxTreeFromDOM(alloc, dom, 0);
 }
-pub const layoutBoxesInPlace = @import("layout.zig").layoutBoxesInPlace;
+pub const computeFlexLayout = @import("layout.zig").computeFlexLayout;
 pub const computePaintCommands = @import("paint.zig").computePaintCommands;
 
 // --- Test helpers (compact and integration-focused) ---
@@ -75,11 +75,11 @@ pub fn renderXmlAscii(
     var dw = try DisplayWidth.init(al);
     defer dw.deinit(al);
 
-    try layoutBoxesInPlace(
+    try computeFlexLayout(
         al,
         &tree,
         &dom,
-        0,
+        tree.getNodeMut(0),
         .{ .x = 0, .y = 0, .w = width, .h = height },
         &dw,
     );
@@ -330,5 +330,19 @@ test "column grow distribution: only one tile grows to fill main axis, centered"
         \\..aaaa..
         \\..aaaa..
         \\..bbbb..
+    );
+}
+
+test "flex with texts" {
+    try expectLayout(
+        \\<root class="flex flex-col bg-glyph-[.] h-4">
+        \\  <box class="w-3 grow-1 bg-glyph-[a]">foo</box>
+        \\  <box class="w-3 grow-1 bg-glyph-[b]">bar</box>
+        \\</root>
+    ,
+        \\foo.
+        \\aaa.
+        \\bar.
+        \\bbb.
     );
 }

@@ -47,6 +47,8 @@ pub fn build(b: *std.Build) void {
             "deps/trealla/src/bif_sregex.c",
             "deps/trealla/src/bif_streams.c",
             "deps/trealla/src/bif_tasks.c",
+            // provide lock stubs and threads builtins table even when NOTHREADS
+            "deps/trealla/src/bif_threads.c",
             // exclude threads when NOTHREADS
             "deps/trealla/src/compile.c",
             "deps/trealla/src/heap.c",
@@ -73,6 +75,8 @@ pub fn build(b: *std.Build) void {
             "deps/trealla/src/isocline/src/isocline.c",
             // minimal embedded library shim (in-repo)
             "c/trealla_g_libs_empty.c",
+            // shims for interpreter-only globals not provided in lib build
+            "c/trealla_shims.c",
         },
         .flags = &.{
             "-std=c99",

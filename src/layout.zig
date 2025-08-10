@@ -8,6 +8,7 @@ const StyleAlign = @import("style.zig").StyleAlign;
 const StyleFlexDir = @import("style.zig").StyleFlexDir;
 const StyleJustify = @import("style.zig").StyleJustify;
 const StyleRow = @import("style.zig").StyleRow;
+const ContiguousTree = @import("tree.zig").ContiguousTree;
 const BoxSize = [2]usize;
 
 pub const Rect = struct { x: usize, y: usize, w: usize, h: usize };
@@ -41,462 +42,640 @@ fn tracePhase(comptime name: []const u8) void {
     g_trace_depth += 1;
 }
 
-pub const BoxHeader = struct {
+/// Data stored in each box node (layout information)
+pub const BoxData = struct {
     dom_id: DomNodeId,
     rect: Rect,
-    first_child: u32, // index into headers, or maxInt(u32) when no children
-    child_count: u32,
 };
 
-pub const BoxTree = struct {
-    boxes: std.ArrayList(BoxHeader),
+/// Specialized tree for layout boxes
+pub const BoxTree = ContiguousTree(BoxData);
 
-    pub fn init(alloc: std.mem.Allocator) BoxTree {
-        return .{
-            .boxes = std.ArrayList(BoxHeader).init(alloc),
-        };
-    }
+/// Compatibility alias for the old BoxHeader (now includes tree metadata)
+pub const BoxHeader = BoxTree.Node;
 
-    pub fn deinit(self: *BoxTree) void {
-        self.boxes.deinit();
-        self.* = undefined;
-    }
-
-    pub fn children(self: *const BoxTree, idx: usize) []const BoxHeader {
-        const h = self.boxes.items[idx];
-        if (h.child_count == 0) return &[_]BoxHeader{};
-        const start: usize = @intCast(h.first_child);
-        const end: usize = start + @as(usize, @intCast(h.child_count));
-        return self.boxes.items[start..end];
-    }
-};
-
-// --- Helpers to structure flex-like layout logic ---
-const ChildInfo = struct {
+// --- Flexbox layout data structures ---
+const FlexItem = struct {
     dom_id: DomNodeId,
-    orig_index: usize,
-    size: BoxSize,
-    order: i16,
-    @"align": ?StyleAlign,
-    margin_main_start: usize,
-    margin_main_end: usize,
-    grow: usize,
+    original_index: usize,
+    intrinsic_size: BoxSize,
+    flex_order: i16,
+    cross_axis_alignment: ?StyleAlign,
+    margin_main_axis_start: usize,
+    margin_main_axis_end: usize,
+    flex_grow_factor: usize,
+    trailing_space: i32, // Space after this item (for justify-content)
+    extra_main_size: i32, // Extra size from flex-grow distribution
 };
 
-fn computeInnerContentRect(parent_style: StyleRow, rect_: Rect) Rect {
-    const border_w: usize = @as(usize, @intCast(parent_style.border.width));
-    const pad_l: usize = @as(usize, @intCast(parent_style.padding.l)) + border_w;
-    const pad_r: usize = @as(usize, @intCast(parent_style.padding.r)) + border_w;
-    const pad_t: usize = @as(usize, @intCast(parent_style.padding.t)) + border_w;
-    const pad_b: usize = @as(usize, @intCast(parent_style.padding.b)) + border_w;
-    var inner_rect = rect_;
-    inner_rect.x = rect_.x + @min(rect_.w, pad_l);
-    inner_rect.y = rect_.y + @min(rect_.h, pad_t);
-    inner_rect.w = if (rect_.w > pad_l + pad_r) rect_.w - (pad_l + pad_r) else 0;
-    inner_rect.h = if (rect_.h > pad_t + pad_b) rect_.h - (pad_t + pad_b) else 0;
-    return inner_rect;
+const FlexItemMainSizeInfo = struct {
+    content_extent: i32,
+    total_grow_factor: usize,
+};
+
+fn computeInnerContentRect(container_style: StyleRow, container_rect: Rect) Rect {
+    const border_width: usize = @as(usize, @intCast(container_style.border.width));
+    const padding_left: usize = @as(usize, @intCast(container_style.padding.l)) + border_width;
+    const padding_right: usize = @as(usize, @intCast(container_style.padding.r)) + border_width;
+    const padding_top: usize = @as(usize, @intCast(container_style.padding.t)) + border_width;
+    const padding_bottom: usize = @as(usize, @intCast(container_style.padding.b)) + border_width;
+
+    var content_rect = container_rect;
+    content_rect.x = container_rect.x + @min(container_rect.w, padding_left);
+    content_rect.y = container_rect.y + @min(container_rect.h, padding_top);
+    content_rect.w = if (container_rect.w > padding_left + padding_right) container_rect.w - (padding_left + padding_right) else 0;
+    content_rect.h = if (container_rect.h > padding_top + padding_bottom) container_rect.h - (padding_top + padding_bottom) else 0;
+    return content_rect;
 }
 
-fn collectChildrenInfo(
-    alloc_: std.mem.Allocator,
-    tree_: *BoxTree,
-    dom_: *const Dom,
-    idx_: u32,
-    inner_rect: Rect,
-    dw_: *DisplayWidth,
-    parent_layout: StyleRow,
-) ![]ChildInfo {
-    const items = dom_.headers.slice();
-    const children_slice = tree_.children(@as(usize, @intCast(idx_)));
-    const n = children_slice.len;
-    var result = try alloc_.alloc(ChildInfo, n);
-    var i: usize = 0;
-    while (i < n) : (i += 1) {
-        const dom_id = children_slice[i].dom_id;
-        const sid = items.items(.style_id)[@as(usize, @intCast(dom_id))];
-        const style = dom_.styles.cols.items[@intCast(sid)];
+/// Computes intrinsic sizes for all flex items in the container.
+/// This is the first phase of CSS flexbox layout where we determine
+/// the natural size of each flex item before any flex adjustments.
+fn computeIntrinsicSizesForFlexItems(
+    allocator: std.mem.Allocator,
+    box_tree: *BoxTree,
+    dom: *const Dom,
+    container_node: *const BoxTree.Node,
+    content_rect: Rect,
+    display_width: *DisplayWidth,
+    flex_container_style: StyleRow,
+) ![]FlexItem {
+    tracePhase("intrinsic-sizing");
+    defer tracePop();
 
-        var measured = measure.intrinsicSize(dom_, dom_id, inner_rect.w, inner_rect.h, dw_);
-        if (style.width != 0) measured[0] = style.width;
-        if (style.height != 0) measured[1] = style.height;
+    const dom_headers = dom.headers.slice();
+    const flex_item_count = container_node.child_count;
+    var flex_items = try allocator.alloc(FlexItem, flex_item_count);
 
-        const margin_start: usize = if (parent_layout.flex_dir == .row)
-            @as(usize, @intCast(style.margin.l))
+    for (0..flex_item_count) |item_index| {
+        const flex_item_box = container_node.getChildNode(box_tree, item_index);
+        const item_dom_id = flex_item_box.data.dom_id;
+        const style_id = dom_headers.items(.style_id)[@as(usize, @intCast(item_dom_id))];
+        const item_style = dom.styles.cols.items[@intCast(style_id)];
+
+        var intrinsic_size = measure.intrinsicSize(dom, item_dom_id, content_rect.w, content_rect.h, display_width);
+        // Override with explicit width/height if specified
+        if (item_style.width != 0) intrinsic_size[0] = item_style.width;
+        if (item_style.height != 0) intrinsic_size[1] = item_style.height;
+
+        const main_axis_margin_start: usize = if (flex_container_style.flex_dir == .row)
+            @as(usize, @intCast(item_style.margin.l))
         else
-            @as(usize, @intCast(style.margin.t));
-        const margin_end: usize = if (parent_layout.flex_dir == .row)
-            @as(usize, @intCast(style.margin.r))
+            @as(usize, @intCast(item_style.margin.t));
+        const main_axis_margin_end: usize = if (flex_container_style.flex_dir == .row)
+            @as(usize, @intCast(item_style.margin.r))
         else
-            @as(usize, @intCast(style.margin.b));
-        const before_w = measured[0];
-        const before_h = measured[1];
-        result[i] = .{
-            .dom_id = dom_id,
-            .orig_index = i,
-            .size = measured,
-            .order = style.order,
-            .@"align" = if (style.align_self == .start) parent_layout.align_items else style.align_self,
-            .margin_main_start = margin_start,
-            .margin_main_end = margin_end,
-            .grow = style.flex.flexGrowFactor,
+            @as(usize, @intCast(item_style.margin.b));
+
+        const natural_width = intrinsic_size[0];
+        const natural_height = intrinsic_size[1];
+
+        flex_items[item_index] = .{
+            .dom_id = item_dom_id,
+            .original_index = item_index,
+            .intrinsic_size = intrinsic_size,
+            .flex_order = item_style.order,
+            .cross_axis_alignment = if (item_style.align_self == .start) flex_container_style.align_items else item_style.align_self,
+            .margin_main_axis_start = main_axis_margin_start,
+            .margin_main_axis_end = main_axis_margin_end,
+            .flex_grow_factor = item_style.flex.flexGrowFactor,
+            .trailing_space = 0, // Will be set later during space distribution
+            .extra_main_size = 0, // Will be set later during flex-grow distribution
         };
-        // Trace reasons for measured size
+
+        // Trace the sizing decisions
         if (g_layout_trace_enabled) {
-            if (style.width != 0 or style.height != 0) {
-                tracef("child[{d}] dom={d}: intrinsic=({d}x{d}) overridden to=({d}x{d}) by width_cells={d} height_cells={d}", .{
-                    i, dom_id, before_w, before_h, measured[0], measured[1], style.width, style.height,
+            if (item_style.width != 0 or item_style.height != 0) {
+                tracef("flex-item[{d}] dom={d}: natural=({d}x{d}) overridden=({d}x{d}) by width_cells={d} height_cells={d}", .{
+                    item_index, item_dom_id, natural_width, natural_height, intrinsic_size[0], intrinsic_size[1], item_style.width, item_style.height,
                 });
             } else {
-                tracef("child[{d}] dom={d}: intrinsic measured=({d}x{d})", .{ i, dom_id, measured[0], measured[1] });
+                tracef("flex-item[{d}] dom={d}: natural=({d}x{d})", .{ item_index, item_dom_id, intrinsic_size[0], intrinsic_size[1] });
             }
-            tracef("child[{d}]: order={d} grow={d} align_self={?} margins(main) start={d} end={d}", .{
-                i, style.order, style.flex.flexGrowFactor, style.align_self, margin_start, margin_end,
+            tracef("flex-item[{d}]: order={d} grow={d} align_self={?} main_margins start={d} end={d}", .{
+                item_index, item_style.order, item_style.flex.flexGrowFactor, item_style.align_self, main_axis_margin_start, main_axis_margin_end,
             });
         }
     }
-    return result;
+    return flex_items;
 }
 
-fn stableSortChildrenByOrderInPlace(children: []ChildInfo) void {
-    const n = children.len;
-    var j: usize = 0;
-    while (j < n) : (j += 1) {
-        var k: usize = j;
-        while (k > 0) : (k -= 1) {
-            const a = children[k - 1];
-            const bb = children[k];
-            if (a.order > bb.order or (a.order == bb.order and a.orig_index > bb.orig_index)) {
-                const tmp = children[k - 1];
-                children[k - 1] = children[k];
-                children[k] = tmp;
-            } else break;
+/// Resolves flex item order by stable-sorting items according to their order property.
+/// This implements the CSS flexbox order resolution phase where items are reordered
+/// according to their flex order value while preserving document order for equal values.
+fn resolveFlexItemOrder(flex_items: []FlexItem) void {
+    tracePhase("order-resolution");
+    defer tracePop();
+
+    const item_count = flex_items.len;
+
+    // Stable insertion sort based on flex order, preserving document order for equal values
+    for (1..item_count) |current_index| {
+        var insert_position = current_index;
+        while (insert_position > 0) {
+            const previous_item = flex_items[insert_position - 1];
+            const current_item = flex_items[insert_position];
+
+            const should_swap = previous_item.flex_order > current_item.flex_order or
+                (previous_item.flex_order == current_item.flex_order and previous_item.original_index > current_item.original_index);
+
+            if (should_swap) {
+                const temp = flex_items[insert_position - 1];
+                flex_items[insert_position - 1] = flex_items[insert_position];
+                flex_items[insert_position] = temp;
+                insert_position -= 1;
+            } else {
+                break;
+            }
         }
     }
 }
 
-fn computeContentExtentAndTotalGrow(children: []const ChildInfo, parent_layout: StyleRow) struct { content_extent: i32, total_grow: usize } {
-    var content_extent: i32 = 0;
-    var total_grow: usize = 0;
-    for (children) |cinfo| {
-        const main = if (parent_layout.flex_dir == .row) cinfo.size[0] else cinfo.size[1];
-        content_extent += @as(i32, @intCast(main + cinfo.margin_main_start + cinfo.margin_main_end));
-        total_grow += cinfo.grow;
+/// Resolves main axis sizes for flex items by computing natural content extent
+/// and total flex-grow factor. This is part of the CSS flexbox main size resolution phase.
+fn resolveFlexItemMainSizes(flex_items: []const FlexItem, flex_container_style: StyleRow) FlexItemMainSizeInfo {
+    tracePhase("main-size-resolution");
+    defer tracePop();
+
+    var total_content_extent: i32 = 0;
+    var total_grow_factor: usize = 0;
+
+    for (flex_items) |flex_item| {
+        const main_axis_size = if (flex_container_style.flex_dir == .row)
+            flex_item.intrinsic_size[0]
+        else
+            flex_item.intrinsic_size[1];
+
+        const item_total_main_size = main_axis_size + flex_item.margin_main_axis_start + flex_item.margin_main_axis_end;
+        total_content_extent += @as(i32, @intCast(item_total_main_size));
+        total_grow_factor += flex_item.flex_grow_factor;
     }
-    return .{ .content_extent = content_extent, .total_grow = total_grow };
+
+    return FlexItemMainSizeInfo{
+        .content_extent = total_content_extent,
+        .total_grow_factor = total_grow_factor,
+    };
 }
 
-fn computeExtraMainByOrig(
-    alloc_: std.mem.Allocator,
-    remaining: i32,
-    total_grow: usize,
-    children: []const ChildInfo,
-) ![]i32 {
-    const n = children.len;
-    if (!(remaining > 0 and total_grow > 0)) return &[_]i32{};
-    var extra = try alloc_.alloc(i32, n);
-    var i: usize = 0;
-    while (i < n) : (i += 1) extra[i] = 0;
-    var rem = remaining;
-    var idxg: usize = 0;
-    while (idxg < n) : (idxg += 1) {
-        const grow = @as(i32, @intCast(children[idxg].grow));
-        const share = @divTrunc(remaining * grow, @as(i32, @intCast(total_grow)));
-        extra[idxg] = share;
-        rem -= share;
+/// Distributes extra space among flex items based on their flex-grow factors.
+/// This implements the CSS flexbox flex-grow distribution algorithm.
+/// Sets the extra_main_size field directly on each flex item (no allocation needed).
+fn distributeFlexGrow(
+    available_space: i32,
+    total_grow_factor: usize,
+    flex_items: []FlexItem,
+) void {
+    tracePhase("flex-grow-distribution");
+    defer tracePop();
+
+    // If no space to distribute or no growing items, leave all extra sizes at 0
+    if (!(available_space > 0 and total_grow_factor > 0)) {
+        for (flex_items) |*flex_item| {
+            flex_item.extra_main_size = 0;
+        }
+        return;
     }
-    var idxr: usize = 0;
-    while (rem > 0) : (rem -= 1) {
-        if (idxr >= n) idxr = 0;
-        if (children[idxr].grow > 0) extra[idxr] += 1;
-        idxr += 1;
+
+    // Distribute proportional shares based on flex-grow factors
+    var remaining_space = available_space;
+    for (flex_items) |*flex_item| {
+        const item_grow_factor = @as(i32, @intCast(flex_item.flex_grow_factor));
+        const proportional_share = @divTrunc(available_space * item_grow_factor, @as(i32, @intCast(total_grow_factor)));
+        flex_item.extra_main_size = proportional_share;
+        remaining_space -= proportional_share;
     }
-    return extra;
+
+    // Distribute any remaining pixels one by one to items with grow factor > 0
+    var distribution_index: usize = 0;
+    while (remaining_space > 0) {
+        if (distribution_index >= flex_items.len) {
+            distribution_index = 0;
+        }
+
+        if (flex_items[distribution_index].flex_grow_factor > 0) {
+            flex_items[distribution_index].extra_main_size += 1;
+            remaining_space -= 1;
+        }
+
+        distribution_index += 1;
+    }
 }
 
-fn positionChildRect(
-    inner_rect: Rect,
-    parent_layout: StyleRow,
-    cursor_main: i32,
-    cinfo: ChildInfo,
-    extra_main_by_orig: []const i32,
-) struct { rect: Rect, advanced: usize } {
-    var cx: usize = inner_rect.x;
-    var cy: usize = inner_rect.y;
-    var cw: usize = cinfo.size[0];
-    var ch: usize = cinfo.size[1];
-    if (extra_main_by_orig.len != 0) {
-        const add = extra_main_by_orig[cinfo.orig_index];
-        if (parent_layout.flex_dir == .row) cw += @as(usize, @intCast(@max(0, add))) else ch += @as(usize, @intCast(@max(0, add)));
-    }
-    if (parent_layout.flex_dir == .row) {
-        cx = inner_rect.x + @as(usize, @intCast(cursor_main)) + cinfo.margin_main_start;
-        switch (cinfo.@"align" orelse .stretch) {
-            .start => {
-                cy = inner_rect.y;
-                ch = cinfo.size[1];
-                tracef("cross-align start: top of inner {d} with natural height {d}", .{ inner_rect.h, ch });
-            },
+const FlexItemPosition = struct {
+    final_rect: Rect,
+    main_axis_advance: usize,
+};
+
+/// Computes the cross-axis size and position for a flex item based on its alignment.
+fn computeCrossAxisAlignment(
+    content_rect: Rect,
+    flex_direction: StyleFlexDir,
+    cross_axis_alignment: StyleAlign,
+    natural_size: BoxSize,
+) struct { cross_position: usize, cross_size: usize } {
+    if (flex_direction == .row) {
+        // Cross-axis is vertical (height)
+        const available_height = content_rect.h;
+        const natural_height = natural_size[1];
+
+        switch (cross_axis_alignment) {
+            .start => return .{ .cross_position = content_rect.y, .cross_size = natural_height },
             .center => {
-                ch = if (cinfo.size[1] > inner_rect.h) inner_rect.h else cinfo.size[1];
-                cy = inner_rect.y + (inner_rect.h - ch) / 2;
-                tracef("cross-align center: vertical center, height clamped to {d}", .{ch});
+                const constrained_height = @min(natural_height, available_height);
+                const center_offset = (available_height - constrained_height) / 2;
+                return .{ .cross_position = content_rect.y + center_offset, .cross_size = constrained_height };
             },
             .end => {
-                ch = if (cinfo.size[1] > inner_rect.h) inner_rect.h else cinfo.size[1];
-                cy = inner_rect.y + (inner_rect.h - ch);
-                tracef("cross-align end: bottom align, height {d}", .{ch});
+                const constrained_height = @min(natural_height, available_height);
+                const end_offset = available_height - constrained_height;
+                return .{ .cross_position = content_rect.y + end_offset, .cross_size = constrained_height };
             },
-            .stretch => {
-                cy = inner_rect.y;
-                ch = inner_rect.h;
-                tracef("cross-align stretch: fill cross-axis to {d}", .{ch});
-            },
-            .baseline => {
-                cy = inner_rect.y;
-                ch = cinfo.size[1];
-                tracef("cross-align baseline: fallback to natural height {d}", .{ch});
-            },
+            .stretch => return .{ .cross_position = content_rect.y, .cross_size = available_height },
+            .baseline => return .{ .cross_position = content_rect.y, .cross_size = natural_height },
         }
     } else {
-        cy = inner_rect.y + @as(usize, @intCast(cursor_main)) + cinfo.margin_main_start;
-        switch (cinfo.@"align" orelse .stretch) {
-            .start => {
-                cx = inner_rect.x;
-                cw = cinfo.size[0];
-                tracef("cross-align start: left align with natural width {d}", .{cw});
-            },
+        // Cross-axis is horizontal (width)
+        const available_width = content_rect.w;
+        const natural_width = natural_size[0];
+
+        switch (cross_axis_alignment) {
+            .start => return .{ .cross_position = content_rect.x, .cross_size = natural_width },
             .center => {
-                cw = if (cinfo.size[0] > inner_rect.w) inner_rect.w else cinfo.size[0];
-                cx = inner_rect.x + (inner_rect.w - cw) / 2;
-                tracef("cross-align center: horizontal center, width clamped to {d}", .{cw});
+                const constrained_width = @min(natural_width, available_width);
+                const center_offset = (available_width - constrained_width) / 2;
+                return .{ .cross_position = content_rect.x + center_offset, .cross_size = constrained_width };
             },
             .end => {
-                cw = if (cinfo.size[0] > inner_rect.w) inner_rect.w else cinfo.size[0];
-                cx = inner_rect.x + (inner_rect.w - cw);
-                tracef("cross-align end: right align, width {d}", .{cw});
+                const constrained_width = @min(natural_width, available_width);
+                const end_offset = available_width - constrained_width;
+                return .{ .cross_position = content_rect.x + end_offset, .cross_size = constrained_width };
             },
-            .stretch => {
-                cx = inner_rect.x;
-                cw = inner_rect.w;
-                tracef("cross-align stretch: fill cross-axis to {d}", .{cw});
-            },
-            .baseline => {
-                cx = inner_rect.x;
-                cw = cinfo.size[0];
-                tracef("cross-align baseline: fallback to natural width {d}", .{cw});
-            },
+            .stretch => return .{ .cross_position = content_rect.x, .cross_size = available_width },
+            .baseline => return .{ .cross_position = content_rect.x, .cross_size = natural_width },
         }
     }
-    const rect = Rect{ .x = cx, .y = cy, .w = cw, .h = ch };
-    const advanced = if (parent_layout.flex_dir == .row) cw else ch;
-    return .{ .rect = rect, .advanced = advanced };
 }
+
+/// Aligns a flex item on both main and cross axes and computes its final rect.
+/// This implements CSS flexbox alignment including align-items and justify-content positioning.
+fn alignFlexItemOnBothAxes(
+    content_rect: Rect,
+    flex_container_style: StyleRow,
+    main_axis_cursor: i32,
+    flex_item: FlexItem,
+) FlexItemPosition {
+    tracePhase("cross-axis-alignment");
+    defer tracePop();
+
+    // Start with intrinsic size
+    var item_width = flex_item.intrinsic_size[0];
+    var item_height = flex_item.intrinsic_size[1];
+
+    // Apply any extra space from flex-grow
+    const extra_size = @max(0, flex_item.extra_main_size);
+    if (flex_container_style.flex_dir == .row) {
+        item_width += @as(usize, @intCast(extra_size));
+    } else {
+        item_height += @as(usize, @intCast(extra_size));
+    }
+
+    // Compute main axis position and cross axis alignment
+    var item_x: usize = undefined;
+    var item_y: usize = undefined;
+
+    if (flex_container_style.flex_dir == .row) {
+        // Main axis is horizontal
+        item_x = content_rect.x + @as(usize, @intCast(main_axis_cursor)) + flex_item.margin_main_axis_start;
+
+        const cross_alignment = flex_item.cross_axis_alignment orelse .stretch;
+        const cross_result = computeCrossAxisAlignment(
+            content_rect,
+            flex_container_style.flex_dir,
+            cross_alignment,
+            [2]usize{ item_width, item_height },
+        );
+
+        item_y = cross_result.cross_position;
+        item_height = cross_result.cross_size;
+
+        tracef("row flex-item: main_pos={d} cross_align={s} -> height={d}", .{ item_x, @tagName(cross_alignment), item_height });
+    } else {
+        // Main axis is vertical
+        item_y = content_rect.y + @as(usize, @intCast(main_axis_cursor)) + flex_item.margin_main_axis_start;
+
+        const cross_alignment = flex_item.cross_axis_alignment orelse .stretch;
+        const cross_result = computeCrossAxisAlignment(
+            content_rect,
+            flex_container_style.flex_dir,
+            cross_alignment,
+            [2]usize{ item_width, item_height },
+        );
+
+        item_x = cross_result.cross_position;
+        item_width = cross_result.cross_size;
+
+        tracef("column flex-item: main_pos={d} cross_align={s} -> width={d}", .{ item_y, @tagName(cross_alignment), item_width });
+    }
+
+    const final_rect = Rect{ .x = item_x, .y = item_y, .w = item_width, .h = item_height };
+    const main_axis_advance = if (flex_container_style.flex_dir == .row) item_width else item_height;
+
+    return FlexItemPosition{
+        .final_rect = final_rect,
+        .main_axis_advance = main_axis_advance,
+    };
+}
+
+/// Context for DOM tree traversal - no allocation needed
+const DOMTreeBuildContext = struct {
+    dom: *const Dom,
+
+    fn init(dom: *const Dom) DOMTreeBuildContext {
+        return .{ .dom = dom };
+    }
+
+    /// Returns the count of element children for a DOM node
+    pub fn getChildCount(self: *DOMTreeBuildContext, parent_id: DomNodeId) usize {
+        const items = self.dom.headers.slice();
+        const kind = items.items(.kind)[@as(usize, @intCast(parent_id))];
+        if (kind != .element) return 0;
+
+        return items.items(.child_count)[@as(usize, @intCast(parent_id))];
+    }
+
+    /// Returns the nth child of a DOM node (element children only)
+    pub fn getChild(self: *DOMTreeBuildContext, parent_id: DomNodeId, index: usize) DomNodeId {
+        const items = self.dom.headers.slice();
+        var i: usize = 0;
+        var c = items.items(.first_child)[@as(usize, @intCast(parent_id))];
+        while (i < index) : (i += 1) {
+            c = items.items(.next_sibling)[@as(usize, @intCast(c))];
+        }
+        return c;
+    }
+
+    /// Creates BoxData from a DOM node ID
+    pub fn createData(self: *DOMTreeBuildContext, dom_id: DomNodeId) BoxData {
+        _ = self;
+        return .{
+            .dom_id = dom_id,
+            .rect = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
+        };
+    }
+};
 
 pub fn allocateBoxTreeFromDOM(alloc: std.mem.Allocator, dom: *const Dom, root: DomNodeId) !BoxTree {
     var tree = BoxTree.init(alloc);
-    // Breadth-first construction so each node's immediate children are contiguous
-    const items = dom.headers.slice();
+    var context = DOMTreeBuildContext.init(dom);
 
-    const Pair = struct { dom_id: DomNodeId, tree_idx: u32 };
-    var queue = std.ArrayList(Pair).init(alloc);
-    defer queue.deinit();
-
-    // Append root header
-    try tree.boxes.append(.{ .dom_id = root, .rect = .{ .x = 0, .y = 0, .w = 0, .h = 0 }, .first_child = std.math.maxInt(u32), .child_count = 0 });
-    try queue.append(.{ .dom_id = root, .tree_idx = 0 });
-
-    var qi: usize = 0;
-    while (qi < queue.items.len) : (qi += 1) {
-        const cur = queue.items[qi];
-        const kind = items.items(.kind)[@as(usize, @intCast(cur.dom_id))];
-        if (kind != .element) continue;
-
-        const dom_child_count = items.items(.child_count)[@as(usize, @intCast(cur.dom_id))];
-        if (dom_child_count == 0) continue;
-
-        const first_child_index: u32 = @intCast(tree.boxes.items.len);
-        var i: usize = 0;
-        var c = items.items(.first_child)[@as(usize, @intCast(cur.dom_id))];
-        while (i < dom_child_count) : (i += 1) {
-            const child_tree_idx: u32 = @intCast(tree.boxes.items.len);
-            try tree.boxes.append(.{ .dom_id = c, .rect = .{ .x = 0, .y = 0, .w = 0, .h = 0 }, .first_child = std.math.maxInt(u32), .child_count = 0 });
-            try queue.append(.{ .dom_id = c, .tree_idx = child_tree_idx });
-            c = items.items(.next_sibling)[@as(usize, @intCast(c))];
-        }
-        var hdr_ptr = &tree.boxes.items[@as(usize, @intCast(cur.tree_idx))];
-        hdr_ptr.first_child = first_child_index;
-        hdr_ptr.child_count = @intCast(dom_child_count);
-    }
+    // Use the generic BFS construction
+    try tree.constructBFS(DomNodeId, root, &context);
 
     return tree;
 }
 
-pub fn layoutBoxesInPlaceNode(alloc_: std.mem.Allocator, tree_: *BoxTree, dom_: *const Dom, idx_: u32, rect_: Rect, dw_: *DisplayWidth) !void {
-    var hdr = &tree_.boxes.items[@as(usize, @intCast(idx_))];
-    const items = dom_.headers.slice();
-    const parent_sid = items.items(.style_id)[@as(usize, @intCast(hdr.dom_id))];
-    const parent_style = dom_.styles.cols.items[@intCast(parent_sid)];
+pub fn computeFlexLayout(
+    allocator: std.mem.Allocator,
+    box_tree: *BoxTree,
+    dom: *const Dom,
+    container_node: *BoxTree.Node,
+    container_rect: Rect,
+    display_width: *DisplayWidth,
+) !void {
+    tracePhase("flexbox-layout");
+    defer tracePop();
 
-    // this is suspicious! it's only based on style settings, it doesn't recurse or line wrap.
-    const inner_rect = computeInnerContentRect(parent_style, rect_);
-    hdr.rect = rect_;
-    if (hdr.child_count == 0) return;
+    var container_header = container_node;
+    const dom_headers = dom.headers.slice();
+    const container_style_id = dom_headers.items(.style_id)[@as(usize, @intCast(container_header.data.dom_id))];
+    const flex_container_style = dom.styles.cols.items[@intCast(container_style_id)];
 
-    const parent_layout = parent_style;
-    tracePhase("layout-node");
-    tracef("layout node dom={d} rect=({d},{d} {d}x{d}) inner=({d},{d} {d}x{d}) dir={s} justify={s} align_items={s}", .{
-        hdr.dom_id,
-        rect_.x,
-        rect_.y,
-        rect_.w,
-        rect_.h,
-        inner_rect.x,
-        inner_rect.y,
-        inner_rect.w,
-        inner_rect.h,
-        if (parent_layout.flex_dir == .row) "row" else "col",
-        @tagName(parent_layout.justify),
-        @tagName(parent_layout.align_items),
+    // Compute the inner content area after padding and border
+    const content_rect = computeInnerContentRect(flex_container_style, container_rect);
+    container_header.data.rect = container_rect;
+    if (container_header.child_count == 0) return;
+
+    tracef("flexbox-container dom={d} rect=({d},{d} {d}x{d}) content=({d},{d} {d}x{d}) dir={s} justify={s} align_items={s}", .{
+        container_header.data.dom_id,
+        container_rect.x,
+        container_rect.y,
+        container_rect.w,
+        container_rect.h,
+        content_rect.x,
+        content_rect.y,
+        content_rect.w,
+        content_rect.h,
+        if (flex_container_style.flex_dir == .row) "row" else "col",
+        @tagName(flex_container_style.justify),
+        @tagName(flex_container_style.align_items),
     });
-    const children = try collectChildrenInfo(alloc_, tree_, dom_, idx_, inner_rect, dw_, parent_layout);
-    defer alloc_.free(children);
-    const n = children.len;
 
-    tracePhase("stable-sort-by-order");
-    stableSortChildrenByOrderInPlace(children);
-    tracePop();
+    // Phase 1: Compute intrinsic sizes for all flex items
+    const flex_items = try computeIntrinsicSizesForFlexItems(
+        allocator,
+        box_tree,
+        dom,
+        container_header,
+        content_rect,
+        display_width,
+        flex_container_style,
+    );
+    defer allocator.free(flex_items);
+    const flex_item_count = flex_items.len;
 
-    tracePhase("compute-extents-and-grow");
-    const totals = computeContentExtentAndTotalGrow(children, parent_layout);
-    const container_extent: i32 = @as(i32, @intCast(if (parent_layout.flex_dir == .row) inner_rect.w else inner_rect.h));
-    tracef("content_extent={d} container_extent={d} gaps.main={d}", .{ totals.content_extent, container_extent, parent_style.gaps.main });
-    // Step 1: flex-grow distribution on remaining space
-    const remaining_initial: i32 = container_extent - totals.content_extent;
-    const extra_main_by_orig = try computeExtraMainByOrig(alloc_, remaining_initial, totals.total_grow, children);
-    defer if (extra_main_by_orig.len != 0) alloc_.free(extra_main_by_orig);
-    var added: i32 = 0;
-    if (extra_main_by_orig.len != 0) {
-        var t: usize = 0;
-        while (t < extra_main_by_orig.len) : (t += 1) added += @max(0, extra_main_by_orig[t]);
+    // Phase 2: Resolve flex item order (stable sort by order property)
+    resolveFlexItemOrder(flex_items);
+
+    // Phase 3: Resolve main axis sizes and compute flex-grow distribution
+    const main_size_info = resolveFlexItemMainSizes(flex_items, flex_container_style);
+    const container_main_size: i32 = @as(i32, @intCast(if (flex_container_style.flex_dir == .row) content_rect.w else content_rect.h));
+    tracef("total_content_extent={d} container_main_size={d} main_gap={d}", .{
+        main_size_info.content_extent,
+        container_main_size,
+        flex_container_style.gaps.main,
+    });
+
+    const available_space_for_growth: i32 = container_main_size - main_size_info.content_extent;
+    distributeFlexGrow(
+        available_space_for_growth,
+        main_size_info.total_grow_factor,
+        flex_items,
+    );
+
+    var total_distributed_space: i32 = 0;
+    for (flex_items) |flex_item| {
+        total_distributed_space += @max(0, flex_item.extra_main_size);
     }
-    const content_after_grow: i32 = totals.content_extent + added;
-    tracef("grow: remaining={d} total_grow={d} added={d} content_after_grow={d}", .{ remaining_initial, totals.total_grow, added, content_after_grow });
-    tracePop();
-    // Step 2: justify-content spacing on the (now grown) content extent
-    tracePhase("justify-spacing");
-    const dist = try calculateSpaces(alloc_, parent_layout.justify, container_extent, content_after_grow, n);
-    defer alloc_.free(dist.between_gaps);
+    const content_extent_after_grow: i32 = main_size_info.content_extent + total_distributed_space;
+    tracef("flex-grow: available={d} total_grow_factor={d} distributed={d} final_extent={d}", .{
+        available_space_for_growth,
+        main_size_info.total_grow_factor,
+        total_distributed_space,
+        content_extent_after_grow,
+    });
 
-    const main_gap: i32 = @as(i32, @intCast(parent_style.gaps.main));
-    var gi: usize = 0;
-    while (gi < dist.between_gaps.len) : (gi += 1) dist.between_gaps[gi] += main_gap;
+    // Phase 4: Distribute remaining space according to justify-content
+    const available_space_for_justify = container_main_size - content_extent_after_grow;
+    const spacing = computeJustifyContentSpacing(
+        flex_container_style.justify,
+        available_space_for_justify,
+        flex_item_count,
+    );
 
-    var cursor_main: i32 = dist.start_space;
-    tracef("justify: start_space={d} between_gaps={d}", .{ dist.start_space, @as(i32, @intCast(dist.between_gaps.len)) });
-    tracePop();
+    // Apply spacing directly to flex items (no separate allocation needed)
+    const main_axis_gap: i32 = @as(i32, @intCast(flex_container_style.gaps.main));
+    applyJustifyContentSpacing(flex_items, spacing, main_axis_gap);
 
-    var i: usize = 0;
-    while (i < n) : (i += 1) {
-        const cinfo = children[i];
-        tracePhase("position-child");
-        const pos = positionChildRect(inner_rect, parent_layout, cursor_main, cinfo, extra_main_by_orig);
-        const child_idx: u32 = @intCast(@as(usize, @intCast(hdr.first_child)) + cinfo.orig_index);
-        tracef("position child[{d}] dom={d}: order={d} grow_add={d} -> rect=({d},{d} {d}x{d}) advance={d}", .{
-            i,            cinfo.dom_id, cinfo.order, if (extra_main_by_orig.len != 0) @max(0, extra_main_by_orig[cinfo.orig_index]) else 0,
-            pos.rect.x,   pos.rect.y,   pos.rect.w,  pos.rect.h,
-            pos.advanced,
+    var main_axis_cursor: i32 = spacing.start_space;
+    tracef("justify-content: start_space={d} between_space={d} remaining_pixels={d}", .{
+        spacing.start_space,
+        spacing.between_space,
+        spacing.remaining_pixels,
+    });
+
+    // Phase 5: Position each flex item and recursively layout subtrees
+    for (flex_items, 0..) |flex_item, item_index| {
+        // Phase 5a: Align item on both axes and compute final rect
+        const item_position = alignFlexItemOnBothAxes(
+            content_rect,
+            flex_container_style,
+            main_axis_cursor,
+            flex_item,
+        );
+        const item_box_node = container_header.getChildNodeMut(box_tree, flex_item.original_index);
+
+        tracef("flex-item[{d}] dom={d}: order={d} extra_size={d} -> rect=({d},{d} {d}x{d}) advance={d}", .{
+            item_index,
+            flex_item.dom_id,
+            flex_item.flex_order,
+            @max(0, flex_item.extra_main_size),
+            item_position.final_rect.x,
+            item_position.final_rect.y,
+            item_position.final_rect.w,
+            item_position.final_rect.h,
+            item_position.main_axis_advance,
         });
-        tracePop();
-        try layoutBoxesInPlaceNode(alloc_, tree_, dom_, child_idx, pos.rect, dw_);
-        cursor_main += @as(i32, @intCast(pos.advanced)) + @as(i32, @intCast(cinfo.margin_main_start + cinfo.margin_main_end));
-        if (i < dist.between_gaps.len) cursor_main += dist.between_gaps[i];
+
+        // Phase 5b: Recursively layout the flex item's subtree
+        try computeFlexLayout(
+            allocator,
+            box_tree,
+            dom,
+            item_box_node,
+            item_position.final_rect,
+            display_width,
+        );
+
+        // Advance cursor for next item
+        main_axis_cursor += @as(i32, @intCast(item_position.main_axis_advance)) + @as(i32, @intCast(flex_item.margin_main_axis_start + flex_item.margin_main_axis_end));
+        main_axis_cursor += flex_item.trailing_space;
     }
-    tracePop();
-}
-pub fn layoutBoxesInPlace(alloc: std.mem.Allocator, tree: *BoxTree, dom: *const Dom, root_index: u32, root_rect: Rect, dw: *DisplayWidth) !void {
-    try layoutBoxesInPlaceNode(alloc, tree, dom, root_index, root_rect, dw);
 }
 
-pub const SpaceDistribution = struct {
+const JustifyContentSpacing = struct {
     start_space: i32,
-    between_gaps: []i32,
+    between_space: i32, // Space between each pair of items
+    remaining_pixels: i32, // Extra pixels to distribute
 };
 
-pub fn calculateSpaces(allocator: std.mem.Allocator, alignment: StyleJustify, container: i32, content: i32, count: usize) !SpaceDistribution {
-    @setEvalBranchQuota(5000);
-    const remaining = @max(0, container - content);
-    var dist = SpaceDistribution{
-        .start_space = 0,
-        .between_gaps = try allocator.alloc(i32, if (count == 0) 0 else if (count == 1) 0 else count - 1),
-    };
-    for (dist.between_gaps) |*g| g.* = 0;
-
-    switch (alignment) {
-        .start => dist.start_space = 0,
-        .end => dist.start_space = remaining,
-        .center => dist.start_space = @divTrunc(remaining, 2),
-        .space_between => if (count > 1) {
-            const gaps = count - 1;
-            const base = @divTrunc(remaining, @as(i32, @intCast(gaps)));
-            var rem = remaining - base * @as(i32, @intCast(gaps));
-            dist.start_space = 0;
-            var i: usize = 0;
-            while (i < gaps) : (i += 1) {
-                var add: i32 = base;
-                if (rem > 0) {
-                    add += 1;
-                    rem -= 1;
-                }
-                dist.between_gaps[i] = add;
-            }
-        } else {},
-        .space_around => if (count > 0) {
-            // Model space-around as 2*count half-slots: start (1), end (1), and two halves per between gap.
-            // Each half-slot gets base_half = remaining / (2*count). The spaces between items are 2*base_half,
-            // and the leading/trailing spaces are base_half. Distribute any remainder starting from start.
-            const half_slots: i32 = @as(i32, @intCast(2 * count));
-            const base_half: i32 = @divTrunc(remaining, half_slots);
-            var rem: i32 = remaining - base_half * half_slots;
-            dist.start_space = base_half;
-            var i: usize = 0;
-            while (i < dist.between_gaps.len) : (i += 1) {
-                dist.between_gaps[i] = base_half * 2;
-            }
-            // Distribute remainder: start first, then each between gap from left to right, then repeat if needed.
-            var idx: usize = 0;
-            while (rem > 0) {
-                if (idx == 0) {
-                    dist.start_space += 1;
-                } else {
-                    const gap_index = idx - 1;
-                    if (gap_index < dist.between_gaps.len) {
-                        dist.between_gaps[gap_index] += 1;
-                    } else {
-                        // wrap around to start again
-                        idx = 0;
-                        continue;
-                    }
-                }
-                idx += 1;
-                if (idx > dist.between_gaps.len) idx = 0; // cycle through start + gaps
-                rem -= 1;
-            }
-        } else {},
-        .space_evenly => if (count > 0) {
-            const slots = count + 1; // start + gaps + end
-            const base = @divTrunc(remaining, @as(i32, @intCast(slots)));
-            var rem = remaining - base * @as(i32, @intCast(slots));
-            dist.start_space = base;
-            var i: usize = 0;
-            while (i < dist.between_gaps.len) : (i += 1) {
-                var add: i32 = base;
-                if (rem > 0) {
-                    add += 1;
-                    rem -= 1;
-                }
-                dist.between_gaps[i] = add;
-            }
-        } else {},
+/// Computes justify-content spacing parameters without allocating arrays.
+/// Returns the base spacing values that can be applied directly to flex items.
+fn computeJustifyContentSpacing(
+    justify_content: StyleJustify,
+    available_space: i32,
+    item_count: usize,
+) JustifyContentSpacing {
+    if (item_count == 0) {
+        return JustifyContentSpacing{
+            .start_space = 0,
+            .between_space = 0,
+            .remaining_pixels = 0,
+        };
     }
-    return dist;
+
+    return switch (justify_content) {
+        .start => JustifyContentSpacing{
+            .start_space = 0,
+            .between_space = 0,
+            .remaining_pixels = 0,
+        },
+        .end => JustifyContentSpacing{
+            .start_space = available_space,
+            .between_space = 0,
+            .remaining_pixels = 0,
+        },
+        .center => JustifyContentSpacing{
+            .start_space = @divTrunc(available_space, 2),
+            .between_space = 0,
+            .remaining_pixels = 0,
+        },
+        .space_between => if (item_count > 1) blk: {
+            const gap_count = item_count - 1;
+            const base_between_space = @divTrunc(available_space, @as(i32, @intCast(gap_count)));
+            const remaining = available_space - base_between_space * @as(i32, @intCast(gap_count));
+            break :blk JustifyContentSpacing{
+                .start_space = 0,
+                .between_space = base_between_space,
+                .remaining_pixels = remaining,
+            };
+        } else JustifyContentSpacing{
+            .start_space = 0,
+            .between_space = 0,
+            .remaining_pixels = 0,
+        },
+        .space_around => blk: {
+            const total_half_slots: i32 = @as(i32, @intCast(2 * item_count));
+            const half_slot_size: i32 = @divTrunc(available_space, total_half_slots);
+            const remaining = available_space - half_slot_size * total_half_slots;
+            break :blk JustifyContentSpacing{
+                .start_space = half_slot_size,
+                .between_space = half_slot_size * 2,
+                .remaining_pixels = remaining,
+            };
+        },
+        .space_evenly => blk: {
+            const total_slots = item_count + 1;
+            const base_slot_size = @divTrunc(available_space, @as(i32, @intCast(total_slots)));
+            const remaining = available_space - base_slot_size * @as(i32, @intCast(total_slots));
+            break :blk JustifyContentSpacing{
+                .start_space = base_slot_size,
+                .between_space = base_slot_size,
+                .remaining_pixels = remaining,
+            };
+        },
+    };
+}
+
+/// Applies justify-content spacing to flex items by setting their trailing_space.
+/// This eliminates the need for a separate allocation for between_gaps.
+fn applyJustifyContentSpacing(
+    flex_items: []FlexItem,
+    spacing: JustifyContentSpacing,
+    main_axis_gap: i32,
+) void {
+    if (flex_items.len == 0) return;
+
+    // Add main axis gap to between space
+    const total_between_space = spacing.between_space + main_axis_gap;
+
+    // Distribute remaining pixels evenly among items that should have spacing
+    var remaining_pixels = spacing.remaining_pixels;
+
+    for (flex_items, 0..) |*flex_item, item_index| {
+        // All items except the last get trailing space
+        if (item_index < flex_items.len - 1) {
+            var item_trailing_space = total_between_space;
+
+            // Distribute extra pixels fairly
+            if (remaining_pixels > 0) {
+                item_trailing_space += 1;
+                remaining_pixels -= 1;
+            }
+
+            flex_item.trailing_space = item_trailing_space;
+        } else {
+            // Last item gets no trailing space
+            flex_item.trailing_space = 0;
+        }
+    }
 }

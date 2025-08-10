@@ -285,18 +285,18 @@ pub fn computePaintCommands(list: *PaintCommandBatch, document: *const dom.Dom, 
     defer dw.deinit(list.ops.allocator);
 
     var i: usize = 0;
-    while (i < tree.boxes.items.len) : (i += 1) {
-        const h = tree.boxes.items[i];
-        const sid = items.items(.style_id)[@as(usize, @intCast(h.dom_id))];
+    while (i < tree.nodeCount()) : (i += 1) {
+        const h = tree.getNode(@as(u32, @intCast(i)));
+        const sid = items.items(.style_id)[@as(usize, @intCast(h.data.dom_id))];
         const row: StyleRow = document.styles.cols.items[@intCast(sid)];
 
-        try emitGlyphTileFill(list, glyphs, h.rect, row);
-        try emitBackgroundFillIfAny(list, h.rect, row);
-        try emitBorderStrokeIfAny(list, h.rect, row);
+        try emitGlyphTileFill(list, glyphs, h.data.rect, row);
+        try emitBackgroundFillIfAny(list, h.data.rect, row);
+        try emitBorderStrokeIfAny(list, h.data.rect, row);
 
-        const kind = items.items(.kind)[@as(usize, @intCast(h.dom_id))];
+        const kind = items.items(.kind)[@as(usize, @intCast(h.data.dom_id))];
         if (kind == .text) {
-            try emitTextGlyphRuns(list, document, h.dom_id, h.rect, row, glyphs, &g, &dw);
+            try emitTextGlyphRuns(list, document, h.data.dom_id, h.data.rect, row, glyphs, &g, &dw);
         }
     }
 }
@@ -353,10 +353,19 @@ test "text color inheritance: parent element color applies to child text glyph r
 
     var tree = try layout.allocateBoxTreeFromDOM(al, &d, root);
     defer tree.deinit();
+
     // Perform layout so text node gets a non-zero rect
     var display_width = try @import("DisplayWidth").init(al);
     defer display_width.deinit(al);
-    try layout.layoutBoxesInPlace(al, &tree, &d, 0, .{ .x = 0, .y = 0, .w = 10, .h = 3 }, &display_width);
+    try layout.computeFlexLayout(
+        al,
+        &tree,
+        &d,
+        tree.getNodeMut(0),
+        .{ .x = 0, .y = 0, .w = 10, .h = 3 },
+        &display_width,
+    );
+
     var glyphs = try tty.GlyphTable.init(al);
     defer glyphs.deinit();
     var dl = PaintCommandBatch.init(al);
