@@ -76,6 +76,24 @@ Notes:
 - The current CLI runs the live demo. XML rendering is exercised in tests and
   available via the library API.
 
+### Non-interactive XML rendering (for testing)
+
+The CLI can also render an XML string to stdout and exit. This is useful for
+tests and quick checks.
+
+```sh
+zig-out/bin/xtc --xml '<root class="flex"><box class="w-4 h-2 bg-glyph-[a]"/></root>' --width 8 --height 4
+```
+
+Expected shape (letters indicate filled cells):
+
+```
+aaaa
+aaaa
+
+
+```
+
 ## Using XML + classes
 
 XTC can parse XML and map elements to DOM nodes, reading Tailwind-like classes
@@ -172,7 +190,26 @@ make install        # optional: copy CLI to bin/xtc
 CLI flags:
 
 - `--log <file>`: append logs to file (default: `xtc.log`)
+- `--xml <string>`: render the provided XML into ASCII and print to stdout, then
+  exit
+- `--width N`, `--height N`: viewport size for `--xml` mode (defaults 80x24)
+- `--unicode-boxes` / `--no-unicode-boxes`: prefer Unicode box-drawing glyphs
+  for borders (default on)
 - `-h`, `--help`
+
+### Border styles (Tailwind-like)
+
+- `border` / `border-N`: sets border width in cells.
+- `border-solid`, `border-double`, `border-dashed`: choose line styles. Line
+  styles render with Unicode box drawing by default; ASCII is used when
+  `--no-unicode-boxes` is set.
+- `border-block`: non-CSS extension; draws borders as filled blocks using
+  background fills of the specified border color.
+
+Notes:
+
+- Current implementation supports solid lines for both ASCII and Unicode.
+  Additional Unicode line variants may be added over time.
 
 ## Roadmap (selected)
 

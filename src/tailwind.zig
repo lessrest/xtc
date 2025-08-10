@@ -6,6 +6,7 @@ const StyleFlexDir = style.StyleFlexDir;
 const StyleFlexWrap = style.StyleFlexWrap;
 const StyleJustify = style.StyleJustify;
 const StyleAlign = style.StyleAlign;
+const BorderStyle = style.BorderStyle;
 const defaultStyleRow = style.defaultStyleRow;
 
 // --- Unified (parse+emit) Tailwind-like rules ---
@@ -53,7 +54,7 @@ fn ruleNumField(comptime prefix: []const u8, comptime field_name: []const u8) Ru
         .parse = struct {
             fn p(row: *StyleRow, tok: []const u8) bool {
                 if (!std.mem.startsWith(u8, tok, prefix)) return false;
-                const n = parseUint(tok[prefix.len..]) orelse 0;
+                const n = parseUint(tok[prefix.len..]) orelse return false;
                 const T = @TypeOf(@field(row, field_name));
                 const maxv: usize = @intCast(std.math.maxInt(T));
                 @field(row, field_name) = @intCast(if (n < maxv) n else maxv);
@@ -75,7 +76,7 @@ fn ruleNumNestedParseOnly(comptime prefix: []const u8, comptime field_a: []const
         .parse = struct {
             fn p(row: *StyleRow, tok: []const u8) bool {
                 if (!std.mem.startsWith(u8, tok, prefix)) return false;
-                const n = parseUint(tok[prefix.len..]) orelse 0;
+                const n = parseUint(tok[prefix.len..]) orelse return false;
                 const T = @TypeOf(@field(@field(row, field_a), field_b));
                 const maxv: usize = @intCast(std.math.maxInt(T));
                 @field(@field(row, field_a), field_b) = @intCast(if (n < maxv) n else maxv);
@@ -93,7 +94,7 @@ fn ruleNumCustomParseOnly(comptime prefix: []const u8, comptime set: fn (*StyleR
         .parse = struct {
             fn p(row: *StyleRow, tok: []const u8) bool {
                 if (!std.mem.startsWith(u8, tok, prefix)) return false;
-                const n = parseUint(tok[prefix.len..]) orelse 0;
+                const n = parseUint(tok[prefix.len..]) orelse return false;
                 set(row, n);
                 return true;
             }
@@ -109,7 +110,7 @@ fn ruleNumCustom(comptime prefix: []const u8, comptime set: fn (*StyleRow, usize
         .parse = struct {
             fn p(row: *StyleRow, tok: []const u8) bool {
                 if (!std.mem.startsWith(u8, tok, prefix)) return false;
-                const n = parseUint(tok[prefix.len..]) orelse 0;
+                const n = parseUint(tok[prefix.len..]) orelse return false;
                 set(row, n);
                 return true;
             }
@@ -255,13 +256,41 @@ const RULES = [_]Rule{
     ruleParseOnlyExact("border", struct {
         fn s(row: *StyleRow) void {
             row.border.width = 1;
+            if (row.border.style == BorderStyle.none) row.border.style = BorderStyle.solid;
         }
     }.s),
     ruleNumCustom("border-", struct {
         fn s(row: *StyleRow, n: usize) void {
             row.border.width = @intCast(@min(n, @as(usize, std.math.maxInt(@TypeOf(row.border.width)))));
+            if (row.border.style == BorderStyle.none) row.border.style = BorderStyle.solid;
         }
     }.s, get_border_w_gt1),
+    // border style variants
+    ruleParseOnlyExact("border-solid", struct {
+        fn s(row: *StyleRow) void {
+            row.border.style = BorderStyle.solid;
+            if (row.border.width == 0) row.border.width = 1;
+        }
+    }.s),
+    ruleParseOnlyExact("border-double", struct {
+        fn s(row: *StyleRow) void {
+            row.border.style = BorderStyle.double;
+            if (row.border.width == 0) row.border.width = 1;
+        }
+    }.s),
+    ruleParseOnlyExact("border-dashed", struct {
+        fn s(row: *StyleRow) void {
+            row.border.style = BorderStyle.dashed;
+            if (row.border.width == 0) row.border.width = 1;
+        }
+    }.s),
+    // non-CSS extension: block (filled cells)
+    ruleParseOnlyExact("border-block", struct {
+        fn s(row: *StyleRow) void {
+            row.border.style = BorderStyle.block;
+            if (row.border.width == 0) row.border.width = 1;
+        }
+    }.s),
     // justify-content
     ruleExactField("justify-start", "justify", StyleJustify.start, true),
     ruleExactField("justify-end", "justify", StyleJustify.end, true),

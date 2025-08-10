@@ -13,11 +13,12 @@ pub const StyleWhitespace = enum(u2) {
     nowrap,
     pre_wrap,
 };
-pub const BorderStyle = enum(u2) {
+pub const BorderStyle = enum(u3) {
     none,
     solid,
     double,
     dashed,
+    block,
 };
 pub const StyleFlexDir = enum(u2) {
     row,

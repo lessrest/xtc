@@ -1,5 +1,6 @@
 const std = @import("std");
 const PaintCommandBatch = @import("paint.zig").PaintCommandBatch;
+const PaintBorderStyle = @import("paint.zig").PaintBorderStyle;
 pub const Rgba8 = @import("paint.zig").Rgba8;
 pub const GlyphId = u32; // 0..=255 self-map to single-byte ASCII
 
@@ -180,20 +181,29 @@ pub const Raster = struct {
         }
     }
 
-    pub fn toStringAlloc(self: *const Raster, allocator: std.mem.Allocator) ![]u8 {
-        const line_len = self.width + 1; // + '\n'
-        var out = try allocator.alloc(u8, self.height * line_len);
+    pub fn writeToWriter(self: *const Raster, writer: anytype, glyphs: *const GlyphTable) !void {
         var y: usize = 0;
         while (y < self.height) : (y += 1) {
             var x: usize = 0;
             while (x < self.width) : (x += 1) {
                 const gid = self.cells[y * self.width + x];
-                // For ASCII ids (0..=255) we emit the single byte; otherwise, emit '?'
-                out[y * line_len + x] = if (gid <= 255) @as(u8, @intCast(gid)) else '?';
+                if (gid <= 255) {
+                    try writer.writeByte(@as(u8, @intCast(gid)));
+                } else if (glyphs.getSlice(gid)) |bytes| {
+                    try writer.writeAll(bytes);
+                } else {
+                    try writer.writeByte('?');
+                }
             }
-            out[y * line_len + self.width] = '\n';
+            try writer.writeByte('\n');
         }
-        return out;
+    }
+
+    pub fn toStringAlloc(self: *const Raster, allocator: std.mem.Allocator, glyphs: *const GlyphTable) ![]u8 {
+        var buf = std.ArrayList(u8).init(allocator);
+        defer buf.deinit();
+        try self.writeToWriter(buf.writer(), glyphs);
+        return buf.toOwnedSlice();
     }
 };
 
@@ -217,33 +227,92 @@ pub fn drawBorderAscii(r: *Raster, x: usize, y: usize, w: usize, h: usize) void 
     }
 }
 
-pub fn drawBorderUnicode(r: *Raster, allocator: std.mem.Allocator, glyphs: *GlyphTable, x: usize, y: usize, w: usize, h: usize) !void {
+const BorderBox = struct { grid: [3][3][]const u8 };
+
+fn templateFor(style: PaintBorderStyle) BorderBox {
+    return switch (style) {
+        .line_light => .{ .grid = .{
+            .{ "┌", "─", "┐" },
+            .{ "│", " ", "│" },
+            .{ "└", "─", "┘" },
+        } },
+        .line_heavy => .{ .grid = .{
+            .{ "┏", "━", "┓" },
+            .{ "┃", " ", "┃" },
+            .{ "┗", "━", "┛" },
+        } },
+        .line_double => .{ .grid = .{
+            .{ "╔", "═", "╗" },
+            .{ "║", " ", "║" },
+            .{ "╚", "═", "╝" },
+        } },
+        .line_dashed => .{ .grid = .{
+            .{ "┌", "╌", "┐" },
+            .{ "╎", " ", "╎" },
+            .{ "└", "╌", "┘" },
+        } },
+    };
+}
+
+fn drawBorderUnicodeStyled(r: *Raster, allocator: std.mem.Allocator, glyphs: *GlyphTable, style: PaintBorderStyle, x: usize, y: usize, w: usize, h: usize, color: Rgba8) !void {
     if (w == 0 or h == 0) return;
-    const tl = try glyphs.intern(allocator, "┌");
-    const tr = try glyphs.intern(allocator, "┐");
-    const bl = try glyphs.intern(allocator, "└");
-    const br = try glyphs.intern(allocator, "┘");
-    const hz = try glyphs.intern(allocator, "─");
-    const vt = try glyphs.intern(allocator, "│");
+    const tpl = templateFor(style);
+    const tl = try glyphs.intern(allocator, tpl.grid[0][0]);
+    const hz_top = try glyphs.intern(allocator, tpl.grid[0][1]);
+    const tr = try glyphs.intern(allocator, tpl.grid[0][2]);
+    const vt_left = try glyphs.intern(allocator, tpl.grid[1][0]);
+    const vt_right = try glyphs.intern(allocator, tpl.grid[1][2]);
+    const bl = try glyphs.intern(allocator, tpl.grid[2][0]);
+    const hz_bot = try glyphs.intern(allocator, tpl.grid[2][1]);
+    const br = try glyphs.intern(allocator, tpl.grid[2][2]);
+
     const x2 = if (x + w == 0) 0 else x + w - 1;
     const y2 = if (y + h == 0) 0 else y + h - 1;
+
     r.setGlyph(x, y, tl);
+    r.setFg(x, y, color);
     r.setGlyph(x2, y, tr);
+    r.setFg(x2, y, color);
     r.setGlyph(x, y2, bl);
+    r.setFg(x, y2, color);
     r.setGlyph(x2, y2, br);
+    r.setFg(x2, y2, color);
+
     var xi: usize = x + 1;
+    const dashed = style == .line_dashed;
+    var dash: bool = false;
     while (xi < x2) : (xi += 1) {
-        r.setGlyph(xi, y, hz);
-        r.setGlyph(xi, y2, hz);
+        if (!dashed or dash) {
+            r.setGlyph(xi, y, hz_top);
+            r.setFg(xi, y, color);
+        }
+        if (!dashed or dash) {
+            r.setGlyph(xi, y2, hz_bot);
+            r.setFg(xi, y2, color);
+        }
+        dash = !dash;
     }
     var yi: usize = y + 1;
+    dash = false;
     while (yi < y2) : (yi += 1) {
-        r.setGlyph(x, yi, vt);
-        r.setGlyph(x2, yi, vt);
+        if (!dashed or dash) {
+            r.setGlyph(x, yi, vt_left);
+            r.setFg(x, yi, color);
+        }
+        if (!dashed or dash) {
+            r.setGlyph(x2, yi, vt_right);
+            r.setFg(x2, yi, color);
+        }
+        dash = !dash;
     }
 }
 
-pub fn rasterizeDisplayListAscii(r: *Raster, alloc: std.mem.Allocator, glyphs: *GlyphTable, list: *const PaintCommandBatch) !void {
+pub var g_use_unicode_boxes: bool = true;
+pub fn setUseUnicodeBoxes(on: bool) void {
+    g_use_unicode_boxes = on;
+}
+
+pub fn rasterizeDisplayList(r: *Raster, alloc: std.mem.Allocator, glyphs: *GlyphTable, list: *const PaintCommandBatch) !void {
     for (list.ops.items) |op| switch (op) {
         .FillRect => |fr| {
             // Fill background color in cell buffer; keep ASCII glyphs as spaces
@@ -260,53 +329,69 @@ pub fn rasterizeDisplayListAscii(r: *Raster, alloc: std.mem.Allocator, glyphs: *
             r.fillGlyphRect(fg.x, fg.y, fg.w, fg.h, fg.glyph, fg.color);
         },
         .StrokeRect => |sr| {
-            switch (sr.style) {
-                .ascii => {
-                    drawBorderAscii(r, sr.x, sr.y, sr.w, sr.h);
+            if (!g_use_unicode_boxes) {
+                drawBorderAscii(r, sr.x, sr.y, sr.w, sr.h);
+                const x = sr.x;
+                const y = sr.y;
+                if (sr.w > 0 and sr.h > 0) {
+                    const x2: usize = if (x + sr.w == 0) 0 else x + sr.w - 1;
+                    const y2: usize = if (y + sr.h == 0) 0 else y + sr.h - 1;
+                    if (sr.bg_color) |bgc| {
+                        r.setBg(x, y, bgc);
+                        r.setBg(x2, y, bgc);
+                        r.setBg(x, y2, bgc);
+                        r.setBg(x2, y2, bgc);
+                        var xi2: usize = x + 1;
+                        while (xi2 < x2) : (xi2 += 1) {
+                            r.setBg(xi2, y, bgc);
+                            r.setBg(xi2, y2, bgc);
+                        }
+                        var yi2: usize = y + 1;
+                        while (yi2 < y2) : (yi2 += 1) {
+                            r.setBg(x, yi2, bgc);
+                            r.setBg(x2, yi2, bgc);
+                        }
+                    }
+                    r.setFg(x, y, sr.color);
+                    r.setFg(x2, y, sr.color);
+                    r.setFg(x, y2, sr.color);
+                    r.setFg(x2, y2, sr.color);
+                    var xi: usize = x + 1;
+                    while (xi < x2) : (xi += 1) {
+                        r.setFg(xi, y, sr.color);
+                        r.setFg(xi, y2, sr.color);
+                    }
+                    var yi: usize = y + 1;
+                    while (yi < y2) : (yi += 1) {
+                        r.setFg(x, yi, sr.color);
+                        r.setFg(x2, yi, sr.color);
+                    }
+                }
+            } else {
+                if (sr.bg_color) |bgc| {
+                    // Pre-fill border background cells before drawing glyphs
                     const x = sr.x;
                     const y = sr.y;
                     if (sr.w > 0 and sr.h > 0) {
                         const x2: usize = if (x + sr.w == 0) 0 else x + sr.w - 1;
                         const y2: usize = if (y + sr.h == 0) 0 else y + sr.h - 1;
-                        r.setFg(x, y, sr.color);
-                        r.setFg(x2, y, sr.color);
-                        r.setFg(x, y2, sr.color);
-                        r.setFg(x2, y2, sr.color);
-                        var xi: usize = x + 1;
-                        while (xi < x2) : (xi += 1) {
-                            r.setFg(xi, y, sr.color);
-                            r.setFg(xi, y2, sr.color);
+                        r.setBg(x, y, bgc);
+                        r.setBg(x2, y, bgc);
+                        r.setBg(x, y2, bgc);
+                        r.setBg(x2, y2, bgc);
+                        var xi2: usize = x + 1;
+                        while (xi2 < x2) : (xi2 += 1) {
+                            r.setBg(xi2, y, bgc);
+                            r.setBg(xi2, y2, bgc);
                         }
-                        var yi: usize = y + 1;
-                        while (yi < y2) : (yi += 1) {
-                            r.setFg(x, yi, sr.color);
-                            r.setFg(x2, yi, sr.color);
-                        }
-                    }
-                },
-                .unicode => {
-                    try drawBorderUnicode(r, alloc, glyphs, sr.x, sr.y, sr.w, sr.h);
-                    const x = sr.x;
-                    const y = sr.y;
-                    if (sr.w > 0 and sr.h > 0) {
-                        const x2: usize = if (x + sr.w == 0) 0 else x + sr.w - 1;
-                        const y2: usize = if (y + sr.h == 0) 0 else y + sr.h - 1;
-                        r.setFg(x, y, sr.color);
-                        r.setFg(x2, y, sr.color);
-                        r.setFg(x, y2, sr.color);
-                        r.setFg(x2, y2, sr.color);
-                        var xi: usize = x + 1;
-                        while (xi < x2) : (xi += 1) {
-                            r.setFg(xi, y, sr.color);
-                            r.setFg(xi, y2, sr.color);
-                        }
-                        var yi: usize = y + 1;
-                        while (yi < y2) : (yi += 1) {
-                            r.setFg(x, yi, sr.color);
-                            r.setFg(x2, yi, sr.color);
+                        var yi2: usize = y + 1;
+                        while (yi2 < y2) : (yi2 += 1) {
+                            r.setBg(x, yi2, bgc);
+                            r.setBg(x2, yi2, bgc);
                         }
                     }
-                },
+                }
+                try drawBorderUnicodeStyled(r, alloc, glyphs, sr.style, sr.x, sr.y, sr.w, sr.h, sr.color);
             }
         },
         .GlyphRun => |gr| {

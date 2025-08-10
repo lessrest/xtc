@@ -7,6 +7,7 @@ const Words = @import("Words");
 const tailwind = @import("tailwind.zig");
 const tty = @import("tty.zig");
 const StyleRow = @import("style.zig").StyleRow;
+const BorderStyle = @import("style.zig").BorderStyle;
 const StyleJustify = @import("style.zig").StyleJustify;
 
 // --- Paint stage: device-independent display list ---
@@ -42,12 +43,12 @@ pub fn blendOver(dst: *Rgba8, src: Rgba8) void {
     dst.a = out_a;
 }
 
-pub const PaintBorderStyle = enum { ascii, unicode };
+pub const PaintBorderStyle = enum { line_light, line_double, line_heavy, line_dashed };
 
 pub const PaintOpTag = enum { FillRect, StrokeRect, GlyphRun, FillGlyphRect };
 pub const PaintOp = union(PaintOpTag) {
     FillRect: struct { x: usize, y: usize, w: usize, h: usize, color: Rgba8 },
-    StrokeRect: struct { x: usize, y: usize, w: usize, h: usize, color: Rgba8, style: PaintBorderStyle },
+    StrokeRect: struct { x: usize, y: usize, w: usize, h: usize, color: Rgba8, style: PaintBorderStyle, bg_color: ?Rgba8 = null },
     GlyphRun: struct { x: usize, y: usize, glyphs: []const tty.GlyphId, color: Rgba8 },
     FillGlyphRect: struct { x: usize, y: usize, w: usize, h: usize, glyph: tty.GlyphId, color: Rgba8 },
 };
@@ -65,6 +66,8 @@ pub const PaintCommandBatch = struct {
         try self.ops.append(op);
     }
 };
+
+// No global rendering toggles here; the TTY backend chooses glyphs and fallbacks.
 /// Resolve effective foreground/background color along DOM ancestry, per CSS color inheritance.
 /// Nearest ancestor with an explicit value wins; returns null when no explicit color was found.
 fn resolveEffectiveFgBg(dref: *const dom.Dom, node_id: dom.DomNodeId) struct { fg: ?Rgba8, bg: ?Rgba8 } {
@@ -109,6 +112,25 @@ fn emitBackgroundFillIfAny(list: *PaintCommandBatch, rect: layout.Rect, row: Sty
 }
 
 /// Helper: border painting step. Color falls back to border_color, then fg, then white.
+fn emitBorderBlock(list: *PaintCommandBatch, rect: layout.Rect, color: Rgba8, thickness: usize) !void {
+    if (rect.w == 0 or rect.h == 0 or thickness == 0) return;
+    const t = @min(thickness, @min(rect.w, rect.h));
+    // Top band
+    try list.push(PaintOp{ .FillRect = .{ .x = rect.x, .y = rect.y, .w = rect.w, .h = t, .color = color } });
+    // Bottom band
+    if (rect.h > t) {
+        try list.push(PaintOp{ .FillRect = .{ .x = rect.x, .y = rect.y + rect.h - t, .w = rect.w, .h = t, .color = color } });
+    }
+    // Side bands (avoid double-filling corners if height <= 2*t, harmless otherwise)
+    const inner_h = if (rect.h > 2 * t) rect.h - 2 * t else 0;
+    if (inner_h > 0) {
+        try list.push(PaintOp{ .FillRect = .{ .x = rect.x, .y = rect.y + t, .w = t, .h = inner_h, .color = color } });
+        if (rect.w > t) {
+            try list.push(PaintOp{ .FillRect = .{ .x = rect.x + rect.w - t, .y = rect.y + t, .w = t, .h = inner_h, .color = color } });
+        }
+    }
+}
+
 fn emitBorderStrokeIfAny(list: *PaintCommandBatch, rect: layout.Rect, row: StyleRow) !void {
     if (!(row.border.width > 0 and rect.w > 0 and rect.h > 0)) return;
     const col: Rgba8 = blk: {
@@ -116,7 +138,17 @@ fn emitBorderStrokeIfAny(list: *PaintCommandBatch, rect: layout.Rect, row: Style
         if (row.fg.use_default == 0) break :blk .{ .r = row.fg.r, .g = row.fg.g, .b = row.fg.b, .a = 255 };
         break :blk .{ .r = 255, .g = 255, .b = 255, .a = 255 };
     };
-    try list.push(PaintOp{ .StrokeRect = .{ .x = rect.x, .y = rect.y, .w = rect.w, .h = rect.h, .color = col, .style = .ascii } });
+    const bg_for_border: ?Rgba8 = if (row.bg.use_default == 0)
+        .{ .r = row.bg.r, .g = row.bg.g, .b = row.bg.b, .a = 255 }
+    else
+        null;
+    switch (row.border.style) {
+        .block => try emitBorderBlock(list, rect, col, row.border.width),
+        .solid => try list.push(PaintOp{ .StrokeRect = .{ .x = rect.x, .y = rect.y, .w = rect.w, .h = rect.h, .color = col, .style = .line_light, .bg_color = bg_for_border } }),
+        .double => try list.push(PaintOp{ .StrokeRect = .{ .x = rect.x, .y = rect.y, .w = rect.w, .h = rect.h, .color = col, .style = .line_double, .bg_color = bg_for_border } }),
+        .dashed => try list.push(PaintOp{ .StrokeRect = .{ .x = rect.x, .y = rect.y, .w = rect.w, .h = rect.h, .color = col, .style = .line_dashed, .bg_color = bg_for_border } }),
+        .none => {},
+    }
 }
 
 /// Helper: compute text content box (padding + 1-cell inset if border present) and emit wrapped glyph runs.
@@ -289,9 +321,12 @@ test "paint: stroke rect via display list (ascii)" {
     defer glyphs.deinit();
     var dl = PaintCommandBatch.init(al);
     defer dl.deinit();
-    try dl.push(PaintOp{ .StrokeRect = .{ .x = 2, .y = 1, .w = 6, .h = 4, .color = .{ .r = 255, .g = 255, .b = 255, .a = 255 }, .style = .ascii } });
-    try tty.rasterizeDisplayListAscii(&r, al, &glyphs, &dl);
-    const got = try r.toStringAlloc(al);
+    try dl.push(PaintOp{ .StrokeRect = .{ .x = 2, .y = 1, .w = 6, .h = 4, .color = .{ .r = 255, .g = 255, .b = 255, .a = 255 }, .style = .line_light, .bg_color = .{ .r = 0, .g = 0, .b = 0, .a = 255 } } });
+    // Force ASCII fallback for this test
+    tty.setUseUnicodeBoxes(false);
+    defer tty.setUseUnicodeBoxes(true);
+    try tty.rasterizeDisplayList(&r, al, &glyphs, &dl);
+    const got = try r.toStringAlloc(al, &glyphs);
     defer al.free(got);
     const want =
         "          \n" ++

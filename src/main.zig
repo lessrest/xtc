@@ -2,6 +2,7 @@ const std = @import("std");
 const lib = @import("lib.zig");
 const Graphemes = @import("Graphemes");
 const live = @import("live.zig");
+const tty = @import("tty.zig");
 
 // Global logging options using std.log
 pub const std_options: std.Options = .{
@@ -56,6 +57,10 @@ pub fn main() !void {
     defer std.process.argsFree(al, args);
 
     var log_path: ?[]const u8 = "xtc.log";
+    var xml_input: ?[]const u8 = null;
+    var out_width: usize = 80;
+    var out_height: usize = 24;
+    var unicode_boxes: ?bool = null; // tri-state: null => default
 
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
@@ -67,9 +72,42 @@ pub fn main() !void {
             }
             log_path = args[i + 1];
             i += 1;
+        } else if (std.mem.eql(u8, a, "--xml")) {
+            if (i + 1 >= args.len) {
+                try std.io.getStdErr().writer().print("missing string after --xml\n", .{});
+                std.process.exit(2);
+            }
+            xml_input = args[i + 1];
+            i += 1;
+        } else if (std.mem.eql(u8, a, "--width")) {
+            if (i + 1 >= args.len) {
+                try std.io.getStdErr().writer().print("missing number after --width\n", .{});
+                std.process.exit(2);
+            }
+            out_width = std.fmt.parseUnsigned(usize, args[i + 1], 10) catch {
+                try std.io.getStdErr().writer().print("invalid --width value: {s}\n", .{args[i + 1]});
+                std.process.exit(2);
+                unreachable;
+            };
+            i += 1;
+        } else if (std.mem.eql(u8, a, "--height")) {
+            if (i + 1 >= args.len) {
+                try std.io.getStdErr().writer().print("missing number after --height\n", .{});
+                std.process.exit(2);
+            }
+            out_height = std.fmt.parseUnsigned(usize, args[i + 1], 10) catch {
+                try std.io.getStdErr().writer().print("invalid --height value: {s}\n", .{args[i + 1]});
+                std.process.exit(2);
+                unreachable;
+            };
+            i += 1;
+        } else if (std.mem.eql(u8, a, "--unicode-boxes")) {
+            unicode_boxes = true;
+        } else if (std.mem.eql(u8, a, "--no-unicode-boxes")) {
+            unicode_boxes = false;
         } else if (std.mem.eql(u8, a, "-h") or std.mem.eql(u8, a, "--help")) {
             try std.io.getStdOut().writer().print(
-                "usage: xtc [--log <file>]\n",
+                "usage: xtc [--log <file>] [--xml <string>] [--width N] [--height N] [--[no-]unicode-boxes]\n",
                 .{},
             );
             return;
@@ -95,5 +133,15 @@ pub fn main() !void {
         }
     }
     defer if (opened) |f| f.close();
+    // Apply unicode boxes preference if specified (applies to both modes)
+    if (unicode_boxes) |on| tty.setUseUnicodeBoxes(on);
+
+    if (xml_input) |xml| {
+        const out = try lib.renderXmlAscii(al, xml, out_width, out_height);
+        defer al.free(out);
+        _ = try std.io.getStdOut().write(out);
+        return;
+    }
+
     try live.run(al);
 }

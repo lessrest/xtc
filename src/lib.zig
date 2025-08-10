@@ -19,8 +19,7 @@ pub const StyleDisplay = @import("style.zig").StyleDisplay;
 pub const trealla = @import("trealla.zig");
 pub const PaintCommandBatch = @import("paint.zig").PaintCommandBatch;
 pub const drawBorderAscii = @import("tty.zig").drawBorderAscii;
-pub const drawBorderUnicode = @import("tty.zig").drawBorderUnicode;
-pub const rasterizeDisplayListAscii = @import("tty.zig").rasterizeDisplayListAscii;
+pub const rasterizeDisplayList = @import("tty.zig").rasterizeDisplayList;
 pub const Rgba8 = @import("paint.zig").Rgba8;
 pub const GlyphTable = @import("tty.zig").GlyphTable;
 pub const GlyphId = @import("tty.zig").GlyphId;
@@ -56,7 +55,7 @@ fn expectAsciiEqual(want: []const u8, got: []const u8) !void {
     try std.testing.expectEqualStrings(want, got);
 }
 
-fn renderXmlAscii(
+pub fn renderXmlAscii(
     al: std.mem.Allocator,
     xml_input: []const u8,
     width: usize,
@@ -92,8 +91,8 @@ fn renderXmlAscii(
     var dl = PaintCommandBatch.init(al);
     defer dl.deinit();
     try computePaintCommands(&dl, &dom, &tree, &glyphs);
-    try rasterizeDisplayListAscii(&r, al, &glyphs, &dl);
-    return try r.toStringAlloc(al);
+    try rasterizeDisplayList(&r, al, &glyphs, &dl);
+    return try r.toStringAlloc(al, &glyphs);
 }
 
 fn expectXmlAscii(xml_input: []const u8, width: usize, height: usize, want: []const u8) !void {

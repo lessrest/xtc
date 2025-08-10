@@ -7,7 +7,7 @@ const allocateBoxTreeFromDOM = @import("layout.zig").allocateBoxTreeFromDOM;
 const Dom = @import("dom.zig").Dom;
 const Graphemes = @import("Graphemes");
 const PaintCommandBatch = @import("paint.zig").PaintCommandBatch;
-const rasterizeDisplayListAscii = @import("tty.zig").rasterizeDisplayListAscii;
+const rasterizeDisplayList = @import("tty.zig").rasterizeDisplayList;
 const computePaintCommands = @import("paint.zig").computePaintCommands;
 const layoutBoxesInPlace = @import("layout.zig").layoutBoxesInPlace;
 const GlyphTable = @import("tty.zig").GlyphTable;
@@ -35,7 +35,7 @@ pub fn run(allocator: std.mem.Allocator) !void {
         "flex flex-col bg-glyph-[.] items-center",
     );
     const container_id = try dom.addElement(
-        "flex flex-col grow-1 w-80 items-stretch",
+        "flex flex-col grow-1 w-80 items-stretch border border-blue-200 bg-slate-700",
     );
     const prolog_output_id = try dom.addElement(
         "flex px-2 grow-1 bg-slate-400 text-slate-800",
@@ -134,7 +134,7 @@ fn renderDom(ctx: *RenderCtx) !void {
     // Double-buffered raster: render into back, diff against front, then swap
     var rb = try ensureDoubleRaster(ctx);
     rb.back.clear();
-    try rasterizeDisplayListAscii(rb.back, al, &glyphs, &dl);
+    try rasterizeDisplayList(rb.back, al, &glyphs, &dl);
 
     // Emit diffs from front -> back
     var out = std.ArrayList(u8).init(al);
