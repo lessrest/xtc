@@ -12,34 +12,32 @@ const BoxSize = [2]usize;
 
 pub const Rect = struct { x: usize, y: usize, w: usize, h: usize };
 
-// --- Lightweight, opt-in tracing for layout debugging ---
+// --- Structured, call-stack-based tracing for layout debugging ---
 var g_layout_trace_enabled: bool = true;
+var g_trace_depth: usize = 0;
 pub fn setLayoutTraceEnabled(on: bool) void {
     g_layout_trace_enabled = on;
 }
-
-fn traceIndent(depth: usize) []const u8 {
+fn traceIndent() []const u8 {
     const spaces = "                                                                                ";
-    const n = if (depth * 2 > spaces.len) spaces.len else depth * 2;
+    const n = if (g_trace_depth * 2 > spaces.len) spaces.len else g_trace_depth * 2;
     return spaces[0..n];
 }
-
-fn tracef(depth: usize, comptime fmt: []const u8, args: anytype) void {
+fn tracePush() void {
     if (!g_layout_trace_enabled) return;
-    std.log.info("{s}" ++ fmt ++ "\n", .{traceIndent(depth)} ++ args);
+    g_trace_depth += 1;
 }
-
-fn depthInDom(dom_: *const Dom, node_id: DomNodeId) usize {
-    const items = dom_.headers.slice();
-    var d: usize = 0;
-    var cur: DomNodeId = node_id;
-    while (true) {
-        const p = items.items(.parent)[@as(usize, @intCast(cur))];
-        if (p == Dom.NullId) break;
-        d += 1;
-        cur = p;
-    }
-    return d;
+fn tracePop() void {
+    if (!g_layout_trace_enabled) return;
+    if (g_trace_depth > 0) g_trace_depth -= 1;
+}
+fn tracef(comptime fmt: []const u8, args: anytype) void {
+    if (!g_layout_trace_enabled) return;
+    std.log.info("{s}" ++ fmt ++ "\n", .{traceIndent()} ++ args);
+}
+fn tracePhase(comptime name: []const u8) void {
+    if (!g_layout_trace_enabled) return;
+    std.log.info("{s}[phase] {s}\n", .{ traceIndent(), name });
 }
 
 pub const BoxHeader = struct {
@@ -143,15 +141,14 @@ fn collectChildrenInfo(
         };
         // Trace reasons for measured size
         if (g_layout_trace_enabled) {
-            const depth = depthInDom(dom_, @intCast(tree_.boxes.items[@as(usize, @intCast(idx_))].dom_id)) + 1;
             if (style.width != 0 or style.height != 0) {
-                tracef(depth, "child[{d}] dom={d}: intrinsic=({d}x{d}) overridden to=({d}x{d}) by width_cells={d} height_cells={d}", .{
+                tracef("child[{d}] dom={d}: intrinsic=({d}x{d}) overridden to=({d}x{d}) by width_cells={d} height_cells={d}", .{
                     i, dom_id, before_w, before_h, measured[0], measured[1], style.width, style.height,
                 });
             } else {
-                tracef(depth, "child[{d}] dom={d}: intrinsic measured=({d}x{d})", .{ i, dom_id, measured[0], measured[1] });
+                tracef("child[{d}] dom={d}: intrinsic measured=({d}x{d})", .{ i, dom_id, measured[0], measured[1] });
             }
-            tracef(depth, "child[{d}]: order={d} grow={d} align_self={?} margins(main) start={d} end={d}", .{
+            tracef("child[{d}]: order={d} grow={d} align_self={?} margins(main) start={d} end={d}", .{
                 i, style.order, style.flex.flexGrowFactor, style.align_self, margin_start, margin_end,
             });
         }
@@ -221,7 +218,6 @@ fn positionChildRect(
     cursor_main: i32,
     cinfo: ChildInfo,
     extra_main_by_orig: []const i32,
-    depth: usize,
 ) struct { rect: Rect, advanced: usize } {
     var cx: usize = inner_rect.x;
     var cy: usize = inner_rect.y;
@@ -237,27 +233,27 @@ fn positionChildRect(
             .start => {
                 cy = inner_rect.y;
                 ch = cinfo.size[1];
-                tracef(depth, "cross-align start: top of inner {d} with natural height {d}", .{ inner_rect.h, ch });
+                tracef("cross-align start: top of inner {d} with natural height {d}", .{ inner_rect.h, ch });
             },
             .center => {
                 ch = if (cinfo.size[1] > inner_rect.h) inner_rect.h else cinfo.size[1];
                 cy = inner_rect.y + (inner_rect.h - ch) / 2;
-                tracef(depth, "cross-align center: vertical center, height clamped to {d}", .{ch});
+                tracef("cross-align center: vertical center, height clamped to {d}", .{ch});
             },
             .end => {
                 ch = if (cinfo.size[1] > inner_rect.h) inner_rect.h else cinfo.size[1];
                 cy = inner_rect.y + (inner_rect.h - ch);
-                tracef(depth, "cross-align end: bottom align, height {d}", .{ch});
+                tracef("cross-align end: bottom align, height {d}", .{ch});
             },
             .stretch => {
                 cy = inner_rect.y;
                 ch = inner_rect.h;
-                tracef(depth, "cross-align stretch: fill cross-axis to {d}", .{ch});
+                tracef("cross-align stretch: fill cross-axis to {d}", .{ch});
             },
             .baseline => {
                 cy = inner_rect.y;
                 ch = cinfo.size[1];
-                tracef(depth, "cross-align baseline: fallback to natural height {d}", .{ch});
+                tracef("cross-align baseline: fallback to natural height {d}", .{ch});
             },
         }
     } else {
@@ -266,27 +262,27 @@ fn positionChildRect(
             .start => {
                 cx = inner_rect.x;
                 cw = cinfo.size[0];
-                tracef(depth, "cross-align start: left align with natural width {d}", .{cw});
+                tracef("cross-align start: left align with natural width {d}", .{cw});
             },
             .center => {
                 cw = if (cinfo.size[0] > inner_rect.w) inner_rect.w else cinfo.size[0];
                 cx = inner_rect.x + (inner_rect.w - cw) / 2;
-                tracef(depth, "cross-align center: horizontal center, width clamped to {d}", .{cw});
+                tracef("cross-align center: horizontal center, width clamped to {d}", .{cw});
             },
             .end => {
                 cw = if (cinfo.size[0] > inner_rect.w) inner_rect.w else cinfo.size[0];
                 cx = inner_rect.x + (inner_rect.w - cw);
-                tracef(depth, "cross-align end: right align, width {d}", .{cw});
+                tracef("cross-align end: right align, width {d}", .{cw});
             },
             .stretch => {
                 cx = inner_rect.x;
                 cw = inner_rect.w;
-                tracef(depth, "cross-align stretch: fill cross-axis to {d}", .{cw});
+                tracef("cross-align stretch: fill cross-axis to {d}", .{cw});
             },
             .baseline => {
                 cx = inner_rect.x;
                 cw = cinfo.size[0];
-                tracef(depth, "cross-align baseline: fallback to natural width {d}", .{cw});
+                tracef("cross-align baseline: fallback to natural width {d}", .{cw});
             },
         }
     }
@@ -345,8 +341,9 @@ pub fn layoutBoxesInPlaceNode(alloc_: std.mem.Allocator, tree_: *BoxTree, dom_: 
     if (hdr.child_count == 0) return;
 
     const parent_layout = parent_style;
-    const depth = depthInDom(dom_, hdr.dom_id);
-    tracef(depth, "layout node dom={d} rect=({d},{d} {d}x{d}) inner=({d},{d} {d}x{d}) dir={s} justify={s} align_items={s}", .{
+    tracePhase("layout-node");
+    tracePush();
+    tracef("layout node dom={d} rect=({d},{d} {d}x{d}) inner=({d},{d} {d}x{d}) dir={s} justify={s} align_items={s}", .{
         hdr.dom_id,
         rect_.x,
         rect_.y,
@@ -364,11 +361,16 @@ pub fn layoutBoxesInPlaceNode(alloc_: std.mem.Allocator, tree_: *BoxTree, dom_: 
     defer alloc_.free(children);
     const n = children.len;
 
+    tracePhase("stable-sort-by-order");
+    tracePush();
     stableSortChildrenByOrderInPlace(children);
+    tracePop();
 
+    tracePhase("compute-extents-and-grow");
+    tracePush();
     const totals = computeContentExtentAndTotalGrow(children, parent_layout);
     const container_extent: i32 = @as(i32, @intCast(if (parent_layout.flex_dir == .row) inner_rect.w else inner_rect.h));
-    tracef(depth, "content_extent={d} container_extent={d} gaps.main={d}", .{ totals.content_extent, container_extent, parent_style.gaps.main });
+    tracef("content_extent={d} container_extent={d} gaps.main={d}", .{ totals.content_extent, container_extent, parent_style.gaps.main });
     // Step 1: flex-grow distribution on remaining space
     const remaining_initial: i32 = container_extent - totals.content_extent;
     const extra_main_by_orig = try computeExtraMainByOrig(alloc_, remaining_initial, totals.total_grow, children);
@@ -379,8 +381,11 @@ pub fn layoutBoxesInPlaceNode(alloc_: std.mem.Allocator, tree_: *BoxTree, dom_: 
         while (t < extra_main_by_orig.len) : (t += 1) added += @max(0, extra_main_by_orig[t]);
     }
     const content_after_grow: i32 = totals.content_extent + added;
-    tracef(depth, "grow: remaining={d} total_grow={d} added={d} content_after_grow={d}", .{ remaining_initial, totals.total_grow, added, content_after_grow });
+    tracef("grow: remaining={d} total_grow={d} added={d} content_after_grow={d}", .{ remaining_initial, totals.total_grow, added, content_after_grow });
+    tracePop();
     // Step 2: justify-content spacing on the (now grown) content extent
+    tracePhase("justify-spacing");
+    tracePush();
     const dist = try calculateSpaces(alloc_, parent_layout.justify, container_extent, content_after_grow, n);
     defer alloc_.free(dist.between_gaps);
 
@@ -389,96 +394,30 @@ pub fn layoutBoxesInPlaceNode(alloc_: std.mem.Allocator, tree_: *BoxTree, dom_: 
     while (gi < dist.between_gaps.len) : (gi += 1) dist.between_gaps[gi] += main_gap;
 
     var cursor_main: i32 = dist.start_space;
-    tracef(depth, "justify: start_space={d} between_gaps={d}", .{ dist.start_space, @as(i32, @intCast(dist.between_gaps.len)) });
+    tracef("justify: start_space={d} between_gaps={d}", .{ dist.start_space, @as(i32, @intCast(dist.between_gaps.len)) });
+    tracePop();
 
     var i: usize = 0;
     while (i < n) : (i += 1) {
         const cinfo = children[i];
-        const pos = positionChildRect(inner_rect, parent_layout, cursor_main, cinfo, extra_main_by_orig, depth + 1);
+        tracePhase("position-child");
+        tracePush();
+        const pos = positionChildRect(inner_rect, parent_layout, cursor_main, cinfo, extra_main_by_orig);
         const child_idx: u32 = @intCast(@as(usize, @intCast(hdr.first_child)) + cinfo.orig_index);
-        tracef(depth + 1, "position child[{d}] dom={d}: order={d} grow_add={d} -> rect=({d},{d} {d}x{d}) advance={d}", .{
+        tracef("position child[{d}] dom={d}: order={d} grow_add={d} -> rect=({d},{d} {d}x{d}) advance={d}", .{
             i,            cinfo.dom_id, cinfo.order, if (extra_main_by_orig.len != 0) @max(0, extra_main_by_orig[cinfo.orig_index]) else 0,
             pos.rect.x,   pos.rect.y,   pos.rect.w,  pos.rect.h,
             pos.advanced,
         });
+        tracePop();
         try layoutBoxesInPlaceNode(alloc_, tree_, dom_, child_idx, pos.rect, dw_);
         cursor_main += @as(i32, @intCast(pos.advanced)) + @as(i32, @intCast(cinfo.margin_main_start + cinfo.margin_main_end));
         if (i < dist.between_gaps.len) cursor_main += dist.between_gaps[i];
     }
+    tracePop();
 }
 pub fn layoutBoxesInPlace(alloc: std.mem.Allocator, tree: *BoxTree, dom: *const Dom, root_index: u32, root_rect: Rect, dw: *DisplayWidth) !void {
     try layoutBoxesInPlaceNode(alloc, tree, dom, root_index, root_rect, dw);
-}
-pub fn layoutFixedBoxesAlloc(
-    allocator: std.mem.Allocator,
-    inner_x: usize,
-    inner_y: usize,
-    inner_w: usize,
-    inner_h: usize,
-    layout: Layout,
-    children: []const BoxSize,
-) ![]Rect {
-    var rects = try allocator.alloc(Rect, children.len);
-    var content_extent: i32 = 0;
-    for (children) |c| content_extent += @as(i32, @intCast(if (layout.flex_dir == .row) c.width else c.height));
-    const container_extent: i32 = @as(i32, @intCast(if (layout.flex_dir == .row) inner_w else inner_h));
-    const dist = try calculateSpaces(allocator, layout.align_items, container_extent, content_extent, children.len);
-    defer allocator.free(dist.between_gaps);
-
-    var cursor_main: i32 = dist.start_space;
-    var i: usize = 0;
-    while (i < children.len) : (i += 1) {
-        const c = children[i];
-        var x: usize = inner_x;
-        var y: usize = inner_y;
-        var w: usize = c.width;
-        var h: usize = c.height;
-        if (layout.flex_dir == .row) {
-            x = inner_x + @as(usize, @intCast(cursor_main));
-            switch (layout.cross_align) {
-                .start => {
-                    y = inner_y;
-                    h = c.height;
-                },
-                .center => {
-                    h = if (c.height > inner_h) inner_h else c.height;
-                    y = inner_y + (inner_h - h) / 2;
-                },
-                .end => {
-                    h = if (c.height > inner_h) inner_h else c.height;
-                    y = inner_y + (inner_h - h);
-                },
-                .stretch => {
-                    y = inner_y;
-                    h = inner_h;
-                },
-            }
-        } else {
-            y = inner_y + @as(usize, @intCast(cursor_main));
-            switch (layout.cross_align) {
-                .start => {
-                    x = inner_x;
-                    w = c.width;
-                },
-                .center => {
-                    w = if (c.width > inner_w) inner_w else c.width;
-                    x = inner_x + (inner_w - w) / 2;
-                },
-                .end => {
-                    w = if (c.width > inner_w) inner_w else c.width;
-                    x = inner_x + (inner_w - w);
-                },
-                .stretch => {
-                    x = inner_x;
-                    w = inner_w;
-                },
-            }
-        }
-        rects[i] = .{ .x = x, .y = y, .w = w, .h = h };
-        cursor_main += @as(i32, @intCast(if (layout.flex_dir == .row) c.width else c.height));
-        if (i < dist.between_gaps.len) cursor_main += dist.between_gaps[i];
-    }
-    return rects;
 }
 
 pub const SpaceDistribution = struct {
