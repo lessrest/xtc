@@ -4,6 +4,7 @@ const StyleTable = @import("style.zig").StyleTable;
 const parseUtilityClassList = @import("tailwind.zig").parseUtilityClassList;
 const defaultStyleRow = @import("style.zig").defaultStyleRow;
 const Rect = @import("layout.zig").Rect;
+const EventRegistry = @import("events.zig").EventRegistry;
 
 pub const DomNodeId = u32;
 pub const DomNodeKind = enum { element, text };
@@ -26,6 +27,7 @@ pub const Dom = struct {
     styles: StyleTable,
     text_arena: std.ArrayList(u8),
     debug_ids: std.AutoHashMap(DomNodeId, []const u8),
+    event_registry: EventRegistry,
 
     pub fn init(alloc: std.mem.Allocator) Dom {
         return .{
@@ -34,6 +36,7 @@ pub const Dom = struct {
             .styles = StyleTable.init(alloc),
             .text_arena = std.ArrayList(u8).init(alloc),
             .debug_ids = std.AutoHashMap(DomNodeId, []const u8).init(alloc),
+            .event_registry = EventRegistry.init(alloc),
         };
     }
 
@@ -46,6 +49,7 @@ pub const Dom = struct {
             self.alloc.free(kv.value_ptr.*);
         }
         self.debug_ids.deinit();
+        self.event_registry.deinit();
         self.* = undefined;
     }
 

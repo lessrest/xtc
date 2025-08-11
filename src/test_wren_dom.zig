@@ -22,19 +22,19 @@ test "xml <script> executes and manipulates DOM" {
         pub const Modules = struct {
             pub const dom = struct {
                 pub const DOM = struct {
-                    pub fn root(_: *SC) DomNodeId {
+                    pub fn root(_: *wren.c.WrenVM, _: *SC) DomNodeId {
                         return 0;
                     }
-                    pub fn createElement(ctx: *SC, style: []const u8) DomNodeId {
+                    pub fn createElement(_: *wren.c.WrenVM, ctx: *SC, style: []const u8) DomNodeId {
                         return ctx.document.addElement(style) catch @panic("createElement");
                     }
-                    pub fn createText(ctx: *SC, text: []const u8) DomNodeId {
+                    pub fn createText(_: *wren.c.WrenVM, ctx: *SC, text: []const u8) DomNodeId {
                         return ctx.document.addText(text) catch @panic("createText");
                     }
-                    pub fn appendChild(ctx: *SC, p: DomNodeId, c: DomNodeId) void {
+                    pub fn appendChild(_: *wren.c.WrenVM, ctx: *SC, p: DomNodeId, c: DomNodeId) void {
                         ctx.document.appendChild(p, c);
                     }
-                    pub fn setDebugId(ctx: *SC, id: DomNodeId, label: []const u8) void {
+                    pub fn setDebugId(_: *wren.c.WrenVM, ctx: *SC, id: DomNodeId, label: []const u8) void {
                         ctx.document.setDebugId(id, label) catch @panic("setDebugId");
                     }
                 };

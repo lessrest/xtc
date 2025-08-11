@@ -213,9 +213,9 @@ const ffi = struct {
         full_return_type: type,
 
         fn arity(this: @This()) usize {
-            // First parameter is always *T (ScriptContext)
-            if (this.params.len == 0) return 0;
-            return this.params.len - 1;
+            // First two parameters are always *c.WrenVM and *T (ScriptContext)
+            if (this.params.len <= 2) return 0;
+            return this.params.len - 2;
         }
     };
 
@@ -277,7 +277,7 @@ const ffi = struct {
                 else => {},
             }
 
-            const arity = if (params.len == 0) 0 else params.len - 1;
+            const arity = if (params.len <= 2) 0 else params.len - 2;
             const sig = switch (arity) {
                 0 => decl.name ++ "()",
                 1 => decl.name ++ "(_)",
@@ -350,73 +350,75 @@ const ffi = struct {
                 // Build the function type from spec
                 const params = spec.params;
                 const R = spec.return_type;
-                const arity = if (params.len == 0) 0 else params.len - 1;
+                // Now we expect functions to have signature: fn(vm: *c.WrenVM, ctx: *T, ...) 
+                // So arity is params.len - 2 (excluding vm and ctx)
+                const arity = if (params.len <= 2) 0 else params.len - 2;
                 switch (arity) {
                     0 => {
                         const Fun = if (spec.is_error_union)
-                            *const fn (*T) R
+                            *const fn (*c.WrenVM, *T) R
                         else
-                            *const fn (*T) R;
+                            *const fn (*c.WrenVM, *T) R;
                         const func: Fun = @ptrCast(@alignCast(spec.func));
                         if (spec.is_error_union) {
-                            const result = func(data);
+                            const result = func(vm, data);
                             if (@typeInfo(R) != .void) writeReturn(vm, R, result);
                         } else {
-                            const result = func(data);
+                            const result = func(vm, data);
                             if (@typeInfo(R) != .void) writeReturn(vm, R, result);
                         }
                     },
                     1 => {
-                        const P1 = params[1].type.?;
+                        const P1 = params[2].type.?;
                         const Fun = if (spec.is_error_union)
-                            *const fn (*T, P1) R
+                            *const fn (*c.WrenVM, *T, P1) R
                         else
-                            *const fn (*T, P1) R;
+                            *const fn (*c.WrenVM, *T, P1) R;
                         const func: Fun = @ptrCast(@alignCast(spec.func));
                         const a1 = readParam(vm, P1, 1);
                         if (spec.is_error_union) {
-                            const result = func(data, a1);
+                            const result = func(vm, data, a1);
                             if (@typeInfo(R) != .void) writeReturn(vm, R, result);
                         } else {
-                            const result = func(data, a1);
+                            const result = func(vm, data, a1);
                             if (@typeInfo(R) != .void) writeReturn(vm, R, result);
                         }
                     },
                     2 => {
-                        const P1 = params[1].type.?;
-                        const P2 = params[2].type.?;
+                        const P1 = params[2].type.?;
+                        const P2 = params[3].type.?;
                         const Fun = if (spec.is_error_union)
-                            *const fn (*T, P1, P2) R
+                            *const fn (*c.WrenVM, *T, P1, P2) R
                         else
-                            *const fn (*T, P1, P2) R;
+                            *const fn (*c.WrenVM, *T, P1, P2) R;
                         const func: Fun = @ptrCast(@alignCast(spec.func));
                         const a1 = readParam(vm, P1, 1);
                         const a2 = readParam(vm, P2, 2);
                         if (spec.is_error_union) {
-                            const result = func(data, a1, a2);
+                            const result = func(vm, data, a1, a2);
                             if (@typeInfo(R) != .void) writeReturn(vm, R, result);
                         } else {
-                            const result = func(data, a1, a2);
+                            const result = func(vm, data, a1, a2);
                             if (@typeInfo(R) != .void) writeReturn(vm, R, result);
                         }
                     },
                     3 => {
-                        const P1 = params[1].type.?;
-                        const P2 = params[2].type.?;
-                        const P3 = params[3].type.?;
+                        const P1 = params[2].type.?;
+                        const P2 = params[3].type.?;
+                        const P3 = params[4].type.?;
                         const Fun = if (spec.is_error_union)
-                            *const fn (*T, P1, P2, P3) R
+                            *const fn (*c.WrenVM, *T, P1, P2, P3) R
                         else
-                            *const fn (*T, P1, P2, P3) R;
+                            *const fn (*c.WrenVM, *T, P1, P2, P3) R;
                         const func: Fun = @ptrCast(@alignCast(spec.func));
                         const a1 = readParam(vm, P1, 1);
                         const a2 = readParam(vm, P2, 2);
                         const a3 = readParam(vm, P3, 3);
                         if (spec.is_error_union) {
-                            const result = func(data, a1, a2, a3);
+                            const result = func(vm, data, a1, a2, a3);
                             if (@typeInfo(R) != .void) writeReturn(vm, R, result);
                         } else {
-                            const result = func(data, a1, a2, a3);
+                            const result = func(vm, data, a1, a2, a3);
                             if (@typeInfo(R) != .void) writeReturn(vm, R, result);
                         }
                     },
