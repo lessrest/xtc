@@ -142,7 +142,7 @@ pub fn renderDocumentToWriter(
 
     try paint.computePaintCommands(&ctx, document, &tree, &glyphs);
     try tty.rasterizeDisplayList(&r, al, &glyphs, &ctx);
-    try r.writeToWriter(writer, &glyphs);
+    try r.writeAnsiToWriter(writer, &glyphs);
 }
 
 fn expectXmlAscii(xml_input: []const u8, width: usize, height: usize, want: []const u8) !void {

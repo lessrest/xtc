@@ -305,47 +305,8 @@ fn writeRasterDiff(front: *const Raster, back: *const Raster, glyphs: *const tty
 
 fn writeFullRaster(raster: *const Raster, glyphs: *const tty.GlyphTable) !void {
     var out_ansi = ansi.stdout();
-    try out_ansi.resetStyle();
     try out_ansi.moveCursor(1, 1); // Move to top-left
-
-    for (0..raster.height) |y| {
-        if (y > 0) {
-            try out_ansi.moveCursor(@intCast(y + 1), 1);
-        }
-
-        var current_bg: ?Rgba8 = null;
-        var current_fg: ?Rgba8 = null;
-
-        for (0..raster.width) |x| {
-            const cell = raster.getCell(x, y);
-
-            // Update background if needed
-            if (cell.bg != current_bg) {
-                if (cell.bg != tty.TERMINAL_DEFAULT_COLOR) {
-                    try out_ansi.setBackground(cell.bg);
-                } else {
-                    try out_ansi.resetBackground();
-                }
-                current_bg = cell.bg;
-            }
-
-            // Update foreground if needed
-            if (cell.fg != current_fg) {
-                if (cell.fg != tty.TERMINAL_DEFAULT_COLOR) {
-                    try out_ansi.setForeground(cell.fg);
-                } else {
-                    try out_ansi.resetForeground();
-                }
-                current_fg = cell.fg;
-            }
-
-            // Write the glyph
-            const glyph_slice = &[_]u32{cell.glyph};
-            try out_ansi.writeGlyphs(glyph_slice, glyphs);
-        }
-    }
-
-    try out_ansi.resetStyle();
+    try raster.writeAnsiToWriter(out_ansi.writer, glyphs);
 }
 
 fn updateTerminalSize(ctx: *RenderCtx) void {

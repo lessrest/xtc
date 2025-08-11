@@ -209,6 +209,51 @@ pub const Raster = struct {
         }
     }
 
+
+    pub fn writeAnsiToWriter(self: *const Raster, writer: anytype, glyphs: *const GlyphTable) !void {
+        const ansi = @import("ansi.zig");
+        var out_ansi = ansi.AnsiWriter(@TypeOf(writer)).init(writer);
+        try out_ansi.resetStyle();
+        
+        for (0..self.height) |y| {
+            var current_bg: ?Rgba8 = null;
+            var current_fg: ?Rgba8 = null;
+            
+            for (0..self.width) |x| {
+                const cell = self.getCell(x, y);
+                
+                // Update background if needed
+                if (cell.bg != current_bg) {
+                    if (cell.bg != TERMINAL_DEFAULT_COLOR) {
+                        try out_ansi.setBackground(cell.bg);
+                    } else {
+                        try out_ansi.resetBackground();
+                    }
+                    current_bg = cell.bg;
+                }
+                
+                // Update foreground if needed
+                if (cell.fg != current_fg) {
+                    if (cell.fg != TERMINAL_DEFAULT_COLOR) {
+                        try out_ansi.setForeground(cell.fg);
+                    } else {
+                        try out_ansi.resetForeground();
+                    }
+                    current_fg = cell.fg;
+                }
+                
+                // Write the glyph
+                const glyph_slice = &[_]u32{cell.glyph};
+                try out_ansi.writeGlyphs(glyph_slice, glyphs);
+            }
+            if (y < self.height - 1) {
+                try writer.writeByte('\n');
+            }
+        }
+        
+        try out_ansi.resetStyle();
+    }
+
     pub fn toStringAlloc(self: *const Raster, allocator: std.mem.Allocator, glyphs: *const GlyphTable) ![]u8 {
         var buf = std.ArrayList(u8).init(allocator);
         defer buf.deinit();
