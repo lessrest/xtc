@@ -14,7 +14,7 @@ pub fn buildDomAndRunScripts(
     comptime UserData: type,
     allocator: std.mem.Allocator,
     xml_doc: *const xmlparse.Document,
-    vm: *wren.VM(UserData),
+    vm: *wren.ScriptEngine(UserData),
     dom: *Dom,
 ) !void {
     xml_doc.acquire();
@@ -28,7 +28,7 @@ fn buildElement(
     comptime UserData: type,
     allocator: std.mem.Allocator,
     element: xmlparse.Element,
-    vm: *wren.VM(UserData),
+    vm: *wren.ScriptEngine(UserData),
     dom: *Dom,
     parent: ?DomNodeId,
 ) !DomNodeId {
@@ -79,7 +79,7 @@ fn processScriptElement(
     comptime UserData: type,
     allocator: std.mem.Allocator,
     element: xmlparse.Element,
-    vm: *wren.VM(UserData),
+    vm: *wren.ScriptEngine(UserData),
     self_id: DomNodeId,
 ) !void {
     _ = self_id;
@@ -119,7 +119,7 @@ fn processScriptElement(
     // Execute the script directly
     if (source_buf.items.len > 0) {
         const script_module = module_name orelse "global-script";
-        
+
         // For inline scripts, ensure imports are available
         if (module_name == null) {
             // Make Document and Element available in the inline script
@@ -127,20 +127,12 @@ fn processScriptElement(
             defer full_script.deinit();
             try full_script.appendSlice("import \"dom\" for Document, Element\n");
             try full_script.appendSlice(source_buf.items);
-            
+
             vm.interpret(script_module, full_script.items) catch |err| {
-                std.debug.print("Script error: {}\n", .{err});
-                if (vm.user_data.output.items.len > 0) {
-                    std.debug.print("Wren output: {s}\n", .{vm.user_data.output.items});
-                }
                 return err;
             };
         } else {
             vm.interpret(script_module, source_buf.items) catch |err| {
-                std.debug.print("Script error: {}\n", .{err});
-                if (vm.user_data.output.items.len > 0) {
-                    std.debug.print("Wren output: {s}\n", .{vm.user_data.output.items});
-                }
                 return err;
             };
         }

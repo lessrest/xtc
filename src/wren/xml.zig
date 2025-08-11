@@ -18,7 +18,7 @@ pub fn buildDomIntoAndRunScripts(
     comptime UserData: type,
     allocator: std.mem.Allocator,
     doc: *const xmlparse.Document,
-    vm: *wren.VM(UserData),
+    vm: *wren.ScriptEngine(UserData),
     document: *Dom,
 ) !void {
     try wren_xml_clean.buildDomAndRunScripts(UserData, allocator, doc, vm, document);

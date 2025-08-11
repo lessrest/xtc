@@ -2,7 +2,7 @@ const std = @import("std");
 const dom = @import("../dom.zig");
 const xmlparse = @import("../xmlparse.zig");
 const wren_xml = @import("xml.zig");
-const WrenRunner = @import("runner.zig");
+const WrenRunner = @import("runtime.zig");
 
 const Dom = dom.Dom;
 const DomNodeId = dom.DomNodeId;
@@ -14,7 +14,7 @@ test "xml <script> executes and manipulates DOM" {
 
     var doc = Dom.init(al);
     // Note: WrenRunner.deinit() will handle document.deinit()
-    
+
     var runner = try WrenRunner.init(al, &doc);
     defer runner.deinit();
 
@@ -39,7 +39,6 @@ test "xml <script> executes and manipulates DOM" {
 
     // TODO: Fix test - getElementById is returning wrong node
     // For now, just check that the script executed and created nodes
-    const items = doc.headers.slice();
     try std.testing.expect(doc.headers.len >= 2); // At least root and one created element
 
     // There should be a node with debug id "child"

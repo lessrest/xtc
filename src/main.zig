@@ -4,7 +4,7 @@ const Graphemes = @import("Graphemes");
 const live = @import("live.zig");
 const FormatTrace = @import("FormatTrace.zig");
 const tty = @import("tty.zig");
-const WrenRunner = @import("wren/runner.zig");
+const WrenRunner = @import("wren/runtime.zig");
 const dom = @import("dom.zig");
 const xmlparse = @import("xmlparse.zig");
 const wren_xml = @import("wren/xml.zig");
@@ -12,7 +12,7 @@ const ticket = @import("ticket.zig");
 
 // Global logging options using std.log
 pub const std_options: std.Options = .{
-    .log_level = .info,
+    .log_level = .debug,
     .logFn = myLogFn,
 };
 
@@ -231,7 +231,7 @@ pub fn main() !void {
             try wren_xml.buildDomIntoAndRunScripts(WrenRunner.ScriptContext, al, &xml_doc, &runner.vm, &document);
 
             // Print any Wren output to stderr for debugging
-            const wren_output = runner.getOutput();
+            const wren_output = runner.output.items;
             if (wren_output.len > 0) {
                 _ = try std.io.getStdErr().write(wren_output);
             }
@@ -252,24 +252,24 @@ pub fn main() !void {
 
             const script_id = ticket.from(script_content) catch @panic("Failed to generate script ID");
 
-            runner.runScript(&script_id, script_content) catch |err| {
-                // Print output to stdout
-                const output = runner.getOutput();
-                if (output.len > 0) {
-                    _ = try std.io.getStdOut().write(output);
-                }
-
+            runner.vm.interpret(&script_id, script_content) catch |err| {
                 try std.io.getStdErr().writer().print("Wren script error: {}\n", .{err});
                 std.process.exit(1);
             };
 
             // Print output to stdout
-            const output = runner.getOutput();
+            const output = runner.output.items;
             if (output.len > 0) {
                 _ = try std.io.getStdOut().write(output);
             }
 
-            try lib.renderDocumentToWriter(al, runner.getDom(), std.io.getStdOut().writer(), out_width, out_height);
+            try lib.renderDocumentToWriter(
+                al,
+                runner.document,
+                std.io.getStdOut().writer(),
+                out_width,
+                out_height,
+            );
 
             return;
         }

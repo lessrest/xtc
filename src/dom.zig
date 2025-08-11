@@ -17,7 +17,7 @@ pub const DomNodeHeader = struct {
     first_child: DomNodeId,
     child_count: u32,
     style_id: u32,
-    clock_tick: u64 = 0,  // For clock nodes, tracks the current tick count
+    clock_tick: u64 = 0, // For clock nodes, tracks the current tick count
 };
 
 pub const Dom = struct {
@@ -31,7 +31,7 @@ pub const Dom = struct {
     event_registry: EventRegistry,
 
     pub fn init(alloc: std.mem.Allocator) Dom {
-        return .{
+        var dom = Dom{
             .alloc = alloc,
             .headers = .{},
             .styles = StyleTable.init(alloc),
@@ -39,6 +39,22 @@ pub const Dom = struct {
             .debug_ids = std.AutoHashMap(DomNodeId, []const u8).init(alloc),
             .event_registry = EventRegistry.init(alloc),
         };
+
+        // Create the implicit document root node at index 0
+        // This node should always exist and serves as the container for all content
+        const root_idx = dom.headers.addOne(alloc) catch unreachable;
+        std.debug.assert(root_idx == 0); // Document root must be at index 0
+        dom.headers.set(0, .{
+            .kind = .element,
+            .parent = NullId,
+            .prev_sibling = NullId,
+            .next_sibling = NullId,
+            .first_child = NullId,
+            .child_count = 0,
+            .style_id = 0, // No style for document root
+        });
+
+        return dom;
     }
 
     pub fn deinit(self: *Dom) void {
@@ -118,31 +134,31 @@ pub const Dom = struct {
         const len: usize = @intCast(items.items(.child_count)[@intCast(id)]);
         return self.text_arena.items[off .. off + len];
     }
-    
+
     pub fn updateText(self: *Dom, id: DomNodeId, new_text: []const u8) !void {
         const idx: usize = @intCast(id);
         var items = self.headers.slice();
-        
+
         // Only works on text nodes
         if (items.items(.kind)[idx] != .text) return;
-        
+
         // Append new text to arena
         const off = self.text_arena.items.len;
         try self.text_arena.appendSlice(new_text);
         const len = new_text.len;
-        
+
         // Update the text node's offset and length
         items.items(.first_child)[idx] = @intCast(off);
         items.items(.child_count)[idx] = @intCast(len);
     }
-    
+
     pub fn updateClass(self: *Dom, id: DomNodeId, new_class: []const u8) !void {
         const idx: usize = @intCast(id);
         var items = self.headers.slice();
-        
-        // Only works on element nodes  
+
+        // Only works on element nodes
         if (items.items(.kind)[idx] != .element) return;
-        
+
         // Parse utility-class list and intern the new style
         const style_row = parseUtilityClassList(new_class);
         const new_style_id = try self.styles.intern(self.alloc, style_row);
@@ -175,20 +191,20 @@ pub const Dom = struct {
         const p: usize = @intCast(parent_id);
         const c: usize = @intCast(child_id);
         var items = self.headers.slice();
-        
+
         // Check if child is actually a child of parent
         if (items.items(.parent)[c] != parent_id) return;
-        
+
         const p_first = &items.items(.first_child)[p];
         const p_count = &items.items(.child_count)[p];
         const c_prev = items.items(.prev_sibling)[c];
         const c_next = items.items(.next_sibling)[c];
-        
+
         // Update parent's first_child if needed
         if (p_first.* == child_id) {
             p_first.* = c_next;
         }
-        
+
         // Update sibling links
         if (c_prev != NullId) {
             items.items(.next_sibling)[@intCast(c_prev)] = c_next;
@@ -196,12 +212,12 @@ pub const Dom = struct {
         if (c_next != NullId) {
             items.items(.prev_sibling)[@intCast(c_next)] = c_prev;
         }
-        
+
         // Clear child's parent and sibling links
         items.items(.parent)[c] = NullId;
         items.items(.prev_sibling)[c] = NullId;
         items.items(.next_sibling)[c] = NullId;
-        
+
         // Decrement parent's child count
         if (p_count.* > 0) {
             p_count.* -= 1;
@@ -233,7 +249,7 @@ pub const Dom = struct {
         var items = self.headers.slice();
         items.items(.clock_tick)[@as(usize, @intCast(id))] = tick;
     }
-    
+
     pub fn getClockTick(self: *const Dom, id: DomNodeId) u64 {
         const items = self.headers.slice();
         return items.items(.clock_tick)[@as(usize, @intCast(id))];

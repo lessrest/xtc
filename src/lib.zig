@@ -9,7 +9,8 @@ pub usingnamespace @import("FormatTrace.zig");
 
 comptime {
     _ = @import("wren/test_dom.zig");
-    _ = @import("test_events.zig");
+    _ = @import("events.zig");
+    _ = @import("xml.zig");
 }
 
 const std = @import("std");

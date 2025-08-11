@@ -1,5 +1,5 @@
 const std = @import("std");
-const ansi = @import("ansi.zig");
+const ansi = @import("../ansi.zig");
 
 pub const TreePrinter = struct {
     allocator: std.mem.Allocator,

@@ -170,23 +170,23 @@ pub const ScriptExecutor = struct {
         return std.mem.indexOf(u8, source, "class Script") != null;
     }
 
-    /// Execute a script module 
+    /// Execute a script module
     pub fn executeModule(
         comptime UserData: type,
-        vm: *wren.VM(UserData),
+        vm: *wren.ScriptEngine(UserData),
         module_name: []const u8,
         self_id: DomNodeId,
     ) !void {
         _ = self_id; // Scripts use getElementById instead
         std.debug.print("Executing module '{s}'\n", .{module_name});
-        
+
         // Get the module source from registry
         const registry = vm.user_data.module_registry;
         const source = registry.getSource(module_name) orelse {
             std.debug.print("Module '{s}' not found in registry\n", .{module_name});
             return error.ModuleNotFound;
         };
-        
+
         // Just run the script directly
         vm.interpret("main", source) catch |err| {
             std.debug.print("Failed to interpret module: {}\n", .{err});
@@ -200,7 +200,7 @@ pub const ScriptExecutor = struct {
     /// Execute inline script (backward compatibility)
     pub fn executeInline(
         comptime UserData: type,
-        vm: *wren.VM(UserData),
+        vm: *wren.ScriptEngine(UserData),
         source: []const u8,
         self_id: DomNodeId,
     ) !void {
@@ -216,7 +216,7 @@ pub const ScriptExecutor = struct {
     /// Process a script element - register and execute appropriately
     pub fn processScript(
         comptime UserData: type,
-        vm: *wren.VM(UserData),
+        vm: *wren.ScriptEngine(UserData),
         source: []const u8,
         self_id: DomNodeId,
         name: ?[]const u8,

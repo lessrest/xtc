@@ -119,9 +119,9 @@ pub const StyleRow = struct {
     order: i16,
     // ASCII raster test helper: when non-zero, paint stage tiles this glyph in the element's border-box
     fill_glyph: u32 = 0,
-    
+
     // Clock properties
-    clock_interval_ms: u32 = 0,  // 0 means not a clock
+    clock_interval_ms: u32 = 0, // 0 means not a clock
     clock_visual: ClockVisualStyle = .hidden,
 };
 
@@ -165,6 +165,10 @@ pub const StyleTable = struct {
         try self.row_hash.append(h);
         try self.map.put(h, id);
         return id;
+    }
+
+    pub fn get(self: *const StyleTable, id: u32) StyleRow {
+        return self.cols.items[@intCast(id)];
     }
 };
 

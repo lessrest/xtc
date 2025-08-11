@@ -1,479 +1,19 @@
 const std = @import("std");
 
-// Raw C bindings - direct mappings to wren.h
-pub const c = struct {
-    // Opaque types
-    pub const WrenVM = opaque {};
-    pub const WrenHandle = opaque {};
+pub const c = @import("c.zig");
 
-    // Error types
-    pub const ErrorType = enum(c_int) {
-        compile = 0,
-        runtime = 1,
-        stack_trace = 2,
-    };
+const TrackedAllocator = @import("../lib/TrackingAllocator.zig");
+const ffi = @import("ffi.zig");
 
-    // Result types
-    pub const InterpretResult = enum(c_uint) {
-        success = 0,
-        compile_error = 1,
-        runtime_error = 2,
-    };
-
-    // Value types
-    pub const Type = enum(c_uint) {
-        bool = 0,
-        num = 1,
-        foreign = 2,
-        list = 3,
-        map = 4,
-        null = 5,
-        string = 6,
-        unknown = 7,
-    };
-
-    // Function pointer types
-    pub const ReallocateFn = ?*const fn (?*anyopaque, usize, *anyopaque) callconv(.C) ?*anyopaque;
-    pub const ForeignMethodFn = ?*const fn (*WrenVM) callconv(.C) void;
-    pub const FinalizerFn = ?*const fn (?*anyopaque) callconv(.C) void;
-    pub const ResolveModuleFn = ?*const fn (*WrenVM, [*:0]const u8, [*:0]const u8) callconv(.C) [*:0]const u8;
-    pub const LoadModuleCompleteFn = ?*const fn (*WrenVM, [*:0]const u8, LoadModuleResult) callconv(.C) void;
-    pub const LoadModuleFn = ?*const fn (*WrenVM, [*:0]const u8) callconv(.C) LoadModuleResult;
-    pub const BindForeignMethodFn = ?*const fn (*WrenVM, [*:0]const u8, [*:0]const u8, bool, [*:0]const u8) callconv(.C) ForeignMethodFn;
-    pub const WriteFn = ?*const fn (*WrenVM, [*:0]const u8) callconv(.C) void;
-    pub const ErrorFn = ?*const fn (*WrenVM, ErrorType, [*:0]const u8, c_int, [*:0]const u8) callconv(.C) void;
-    pub const BindForeignClassFn = ?*const fn (*WrenVM, [*:0]const u8, [*:0]const u8) callconv(.C) ForeignClassMethods;
-
-    // Structs
-    pub const LoadModuleResult = extern struct {
-        source: ?[*:0]const u8 = null,
-        onComplete: LoadModuleCompleteFn = null,
-        userData: ?*anyopaque = null,
-    };
-
-    pub const ForeignClassMethods = extern struct {
-        allocate: ForeignMethodFn = null,
-        finalize: FinalizerFn = null,
-    };
-
-    pub const Configuration = extern struct {
-        reallocateFn: ReallocateFn = null,
-        resolveModuleFn: ResolveModuleFn = null,
-        loadModuleFn: LoadModuleFn = null,
-        bindForeignMethodFn: BindForeignMethodFn = null,
-        bindForeignClassFn: BindForeignClassFn = null,
-        writeFn: WriteFn = null,
-        errorFn: ErrorFn = null,
-        initialHeapSize: usize = 0,
-        minHeapSize: usize = 0,
-        heapGrowthPercent: c_int = 0,
-        userData: ?*anyopaque = null,
-    };
-
-    // Core API functions
-    pub extern fn wrenGetVersionNumber(...) c_int;
-    pub extern fn wrenInitConfiguration(configuration: *Configuration) void;
-    pub extern fn wrenNewVM(configuration: *Configuration) ?*WrenVM;
-    pub extern fn wrenFreeVM(vm: *WrenVM) void;
-    pub extern fn wrenCollectGarbage(vm: *WrenVM) void;
-    pub extern fn wrenInterpret(vm: *WrenVM, module: [*:0]const u8, source: [*:0]const u8) c_uint;
-
-    // Handle management
-    pub extern fn wrenMakeCallHandle(vm: *WrenVM, signature: [*:0]const u8) ?*WrenHandle;
-    pub extern fn wrenCall(vm: *WrenVM, method: *WrenHandle) c_uint;
-    pub extern fn wrenReleaseHandle(vm: *WrenVM, handle: *WrenHandle) void;
-
-    // Slot management
-    pub extern fn wrenGetSlotCount(vm: *WrenVM) c_int;
-    pub extern fn wrenEnsureSlots(vm: *WrenVM, numSlots: c_int) void;
-    pub extern fn wrenGetSlotType(vm: *WrenVM, slot: c_int) c_uint;
-
-    // Slot getters
-    pub extern fn wrenGetSlotBool(vm: *WrenVM, slot: c_int) bool;
-    pub extern fn wrenGetSlotBytes(vm: *WrenVM, slot: c_int, length: *c_int) [*]const u8;
-    pub extern fn wrenGetSlotDouble(vm: *WrenVM, slot: c_int) f64;
-    pub extern fn wrenGetSlotForeign(vm: *WrenVM, slot: c_int) ?*anyopaque;
-    pub extern fn wrenGetSlotString(vm: *WrenVM, slot: c_int) [*:0]const u8;
-    pub extern fn wrenGetSlotHandle(vm: *WrenVM, slot: c_int) ?*WrenHandle;
-
-    // Slot setters
-    pub extern fn wrenSetSlotBool(vm: *WrenVM, slot: c_int, value: bool) void;
-    pub extern fn wrenSetSlotBytes(vm: *WrenVM, slot: c_int, bytes: [*]const u8, length: usize) void;
-    pub extern fn wrenSetSlotDouble(vm: *WrenVM, slot: c_int, value: f64) void;
-    pub extern fn wrenSetSlotNewForeign(vm: *WrenVM, slot: c_int, classSlot: c_int, size: usize) ?*anyopaque;
-    pub extern fn wrenSetSlotNewList(vm: *WrenVM, slot: c_int) void;
-    pub extern fn wrenSetSlotNewMap(vm: *WrenVM, slot: c_int) void;
-    pub extern fn wrenSetSlotNull(vm: *WrenVM, slot: c_int) void;
-    pub extern fn wrenSetSlotString(vm: *WrenVM, slot: c_int, text: [*:0]const u8) void;
-    pub extern fn wrenSetSlotHandle(vm: *WrenVM, slot: c_int, handle: *WrenHandle) void;
-
-    // List operations
-    pub extern fn wrenGetListCount(vm: *WrenVM, slot: c_int) c_int;
-    pub extern fn wrenGetListElement(vm: *WrenVM, listSlot: c_int, index: c_int, elementSlot: c_int) void;
-    pub extern fn wrenSetListElement(vm: *WrenVM, listSlot: c_int, index: c_int, elementSlot: c_int) void;
-    pub extern fn wrenInsertInList(vm: *WrenVM, listSlot: c_int, index: c_int, elementSlot: c_int) void;
-
-    // Map operations
-    pub extern fn wrenGetMapCount(vm: *WrenVM, slot: c_int) c_int;
-    pub extern fn wrenGetMapContainsKey(vm: *WrenVM, mapSlot: c_int, keySlot: c_int) bool;
-    pub extern fn wrenGetMapValue(vm: *WrenVM, mapSlot: c_int, keySlot: c_int, valueSlot: c_int) void;
-    pub extern fn wrenSetMapValue(vm: *WrenVM, mapSlot: c_int, keySlot: c_int, valueSlot: c_int) void;
-    pub extern fn wrenRemoveMapValue(vm: *WrenVM, mapSlot: c_int, keySlot: c_int, removedValueSlot: c_int) void;
-
-    // Variable operations
-    pub extern fn wrenGetVariable(vm: *WrenVM, module: [*:0]const u8, name: [*:0]const u8, slot: c_int) void;
-    pub extern fn wrenHasVariable(vm: *WrenVM, module: [*:0]const u8, name: [*:0]const u8) bool;
-    pub extern fn wrenHasModule(vm: *WrenVM, module: [*:0]const u8) bool;
-
-    // VM operations
-    pub extern fn wrenAbortFiber(vm: *WrenVM, slot: c_int) void;
-    pub extern fn wrenGetUserData(vm: *WrenVM) *anyopaque;
-    pub extern fn wrenSetUserData(vm: *WrenVM, userData: *anyopaque) void;
-};
-
-// Memory tracking for Wren allocations
-const TrackedAllocator = struct {
-    allocator: std.mem.Allocator,
-
-    const Header = struct {
-        size: u64, // Use u64 to guarantee 8-byte alignment for data that follows
-    };
-
-    const header_size = @sizeOf(Header);
-    const alignment = std.mem.Alignment.fromByteUnits(8);
-
-    fn alloc(self: TrackedAllocator, size: usize) ?[*]u8 {
-        const total_size = header_size + size;
-        const slice = self.allocator.rawAlloc(total_size, alignment, @returnAddress()) orelse return null;
-
-        const header: *Header = @ptrCast(@alignCast(slice));
-        header.size = @intCast(size);
-
-        return slice + header_size;
-    }
-
-    fn realloc(self: TrackedAllocator, old_ptr: [*]u8, new_size: usize) ?[*]u8 {
-        // Get old size from header
-        const old_header_ptr = old_ptr - header_size;
-        const old_header: *Header = @ptrCast(@alignCast(old_header_ptr));
-        const old_size: usize = @intCast(old_header.size);
-
-        // Allocate new memory
-        const new_ptr = self.alloc(new_size) orelse return null;
-
-        // Copy old data
-        const copy_size = @min(old_size, new_size);
-        @memcpy(new_ptr[0..copy_size], old_ptr[0..copy_size]);
-
-        // Free old allocation
-        const old_slice = old_header_ptr[0 .. header_size + old_size];
-        self.allocator.rawFree(old_slice, alignment, @returnAddress());
-
-        return new_ptr;
-    }
-
-    fn free(self: TrackedAllocator, ptr: [*]u8) void {
-        const header_ptr = ptr - header_size;
-        const header: *Header = @ptrCast(@alignCast(header_ptr));
-        const size: usize = @intCast(header.size);
-
-        const slice = header_ptr[0 .. header_size + size];
-        self.allocator.rawFree(slice, alignment, @returnAddress());
-    }
-};
-
-// FFI metadata structures for automatic binding generation
-const ffi = struct {
-    const ModuleSpec = struct {
-        module_name: []const u8,
-        module_info: std.builtin.Type,
-        module_classes: []const ClassSpec,
-    };
-
-    const ClassSpec = struct {
-        class_name: []const u8,
-        class_info: std.builtin.Type,
-        class_functions: []const FunctionSpec,
-    };
-
-    const FunctionSpec = struct {
-        // Zig method name, e.g. "say"
-        name: []const u8,
-        // Fully qualified Wren signature, e.g. "say(_)" or "hello()"
-        wren_signature: []const u8,
-        // Pointer to the Zig function
-        func: *const anyopaque,
-        // Full parameter list including the leading ScriptContext pointer
-        params: []const std.builtin.Type.Fn.Param,
-        // Return payload type (if the function returns an error union, this is the payload)
-        return_type: type,
-        // Whether the Zig function returns an error union
-        is_error_union: bool,
-        // Full return type (may be error union)
-        full_return_type: type,
-
-        fn arity(this: @This()) usize {
-            // First two parameters are always *c.WrenVM and *T (ScriptContext)
-            if (this.params.len <= 2) return 0;
-            return this.params.len - 2;
-        }
-    };
-
-    const ForeignFunction = struct {
-        module_name: []const u8,
-        class_name: []const u8,
-        wren_signature: []const u8,
-        func: c.ForeignMethodFn,
-    };
-
-    // Generate module specs from a type's Modules struct
-    fn moduleSpecs(comptime T: type) [@typeInfo(T.Modules).@"struct".decls.len]ModuleSpec {
-        const decls = std.meta.declarations(T.Modules);
-        var specs: [decls.len]ModuleSpec = undefined;
-        var i = 0;
-        inline for (decls) |decl| {
-            specs[i] = .{
-                .module_name = decl.name,
-                .module_info = @typeInfo(@field(T.Modules, decl.name)),
-                .module_classes = classSpecs(@field(T.Modules, decl.name)),
-            };
-            i += 1;
-        }
-        return specs;
-    }
-
-    fn classSpecs(comptime T: type) []const ClassSpec {
-        const decls = std.meta.declarations(T);
-        var specs: [decls.len]ClassSpec = undefined;
-        var i = 0;
-        inline for (decls) |decl| {
-            specs[i] = .{
-                .class_name = decl.name,
-                .class_info = @typeInfo(@field(T, decl.name)),
-                .class_functions = functionSpecs(@field(T, decl.name)),
-            };
-            i += 1;
-        }
-        const specs_final = specs;
-        return &specs_final;
-    }
-
-    fn functionSpecs(comptime T: type) []const FunctionSpec {
-        const decls = std.meta.declarations(T);
-        var specs: [decls.len]FunctionSpec = undefined;
-        var i = 0;
-        inline for (decls) |decl| {
-            const fn_type = @typeInfo(@TypeOf(@field(T, decl.name))).@"fn";
-            const params = fn_type.params;
-            const full_return_type = fn_type.return_type.?;
-            const ret_info = @typeInfo(full_return_type);
-            var is_error_union = false;
-            var R: type = full_return_type;
-            switch (ret_info) {
-                .error_union => |eu| {
-                    is_error_union = true;
-                    R = eu.payload;
-                },
-                else => {},
-            }
-
-            const arity = if (params.len <= 2) 0 else params.len - 2;
-            const sig = switch (arity) {
-                0 => decl.name ++ "()",
-                1 => decl.name ++ "(_)",
-                2 => decl.name ++ "(_,_)",
-                3 => decl.name ++ "(_,_,_)",
-                else => @compileError("Unsupported arity (>3) for Wren signature generation"),
-            };
-
-            specs[i] = .{
-                .name = decl.name,
-                .wren_signature = sig,
-                .func = @field(T, decl.name),
-                .params = params,
-                .return_type = R,
-                .is_error_union = is_error_union,
-                .full_return_type = full_return_type,
-            };
-            i += 1;
-        }
-        const specs_final = specs;
-        return &specs_final;
-    }
-
-    // Generate a foreign function wrapper for a specific function spec
-    fn generateForeignFunction(comptime T: type, comptime module_name: []const u8, comptime class_name: []const u8, comptime spec: FunctionSpec) ForeignFunction {
-        const container = struct {
-            inline fn readParam(vm: *c.WrenVM, comptime P: type, slot_index: c_int) P {
-                if (P == []const u8) {
-                    var len: c_int = 0;
-                    const ptr = c.wrenGetSlotBytes(vm, slot_index, &len);
-                    return ptr[0..@intCast(len)];
-                }
-                if (P == f64) return c.wrenGetSlotDouble(vm, slot_index);
-                if (P == bool) return c.wrenGetSlotBool(vm, slot_index);
-                if (P == *c.WrenHandle) {
-                    // Get a handle to a Wren object (function, class, etc)
-                    return c.wrenGetSlotHandle(vm, slot_index) orelse @panic("Invalid Wren handle");
-                }
-
-                switch (@typeInfo(P)) {
-                    .int => {
-                        const n = c.wrenGetSlotDouble(vm, slot_index);
-                        return @as(P, @intFromFloat(n));
-                    },
-                    else => @compileError("Unsupported parameter type for Wren foreign method"),
-                }
-            }
-
-            inline fn writeReturn(vm: *c.WrenVM, comptime R: type, value: R) void {
-                if (R == void) return;
-                if (R == []const u8) {
-                    c.wrenSetSlotBytes(vm, 0, value.ptr, value.len);
-                    return;
-                }
-                if (R == f64) {
-                    c.wrenSetSlotDouble(vm, 0, value);
-                    return;
-                }
-                if (R == bool) {
-                    c.wrenSetSlotBool(vm, 0, value);
-                    return;
-                }
-                switch (@typeInfo(R)) {
-                    .int => {
-                        const d: f64 = @floatFromInt(value);
-                        c.wrenSetSlotDouble(vm, 0, d);
-                    },
-                    else => @compileError("Unsupported return type for Wren foreign method"),
-                }
-            }
-
-            pub fn invoke(vm: *c.WrenVM) callconv(.C) void {
-                const data: *T = @ptrCast(@alignCast(c.wrenGetUserData(vm)));
-                // Build the function type from spec
-                const params = spec.params;
-                const R = spec.return_type;
-                // Now we expect functions to have signature: fn(vm: *c.WrenVM, ctx: *T, ...)
-                // So arity is params.len - 2 (excluding vm and ctx)
-                const arity = if (params.len <= 2) 0 else params.len - 2;
-                switch (arity) {
-                    0 => {
-                        const Fun = if (spec.is_error_union)
-                            *const fn (*c.WrenVM, *T) R
-                        else
-                            *const fn (*c.WrenVM, *T) R;
-                        const func: Fun = @ptrCast(@alignCast(spec.func));
-                        if (spec.is_error_union) {
-                            const result = func(vm, data);
-                            if (@typeInfo(R) != .void) writeReturn(vm, R, result);
-                        } else {
-                            const result = func(vm, data);
-                            if (@typeInfo(R) != .void) writeReturn(vm, R, result);
-                        }
-                    },
-                    1 => {
-                        const P1 = params[2].type.?;
-                        const Fun = if (spec.is_error_union)
-                            *const fn (*c.WrenVM, *T, P1) R
-                        else
-                            *const fn (*c.WrenVM, *T, P1) R;
-                        const func: Fun = @ptrCast(@alignCast(spec.func));
-                        const a1 = readParam(vm, P1, 1);
-                        if (spec.is_error_union) {
-                            const result = func(vm, data, a1);
-                            if (@typeInfo(R) != .void) writeReturn(vm, R, result);
-                        } else {
-                            const result = func(vm, data, a1);
-                            if (@typeInfo(R) != .void) writeReturn(vm, R, result);
-                        }
-                    },
-                    2 => {
-                        const P1 = params[2].type.?;
-                        const P2 = params[3].type.?;
-                        const Fun = if (spec.is_error_union)
-                            *const fn (*c.WrenVM, *T, P1, P2) R
-                        else
-                            *const fn (*c.WrenVM, *T, P1, P2) R;
-                        const func: Fun = @ptrCast(@alignCast(spec.func));
-                        const a1 = readParam(vm, P1, 1);
-                        const a2 = readParam(vm, P2, 2);
-                        if (spec.is_error_union) {
-                            const result = func(vm, data, a1, a2);
-                            if (@typeInfo(R) != .void) writeReturn(vm, R, result);
-                        } else {
-                            const result = func(vm, data, a1, a2);
-                            if (@typeInfo(R) != .void) writeReturn(vm, R, result);
-                        }
-                    },
-                    3 => {
-                        const P1 = params[2].type.?;
-                        const P2 = params[3].type.?;
-                        const P3 = params[4].type.?;
-                        const Fun = if (spec.is_error_union)
-                            *const fn (*c.WrenVM, *T, P1, P2, P3) R
-                        else
-                            *const fn (*c.WrenVM, *T, P1, P2, P3) R;
-                        const func: Fun = @ptrCast(@alignCast(spec.func));
-                        const a1 = readParam(vm, P1, 1);
-                        const a2 = readParam(vm, P2, 2);
-                        const a3 = readParam(vm, P3, 3);
-                        if (spec.is_error_union) {
-                            const result = func(vm, data, a1, a2, a3);
-                            if (@typeInfo(R) != .void) writeReturn(vm, R, result);
-                        } else {
-                            const result = func(vm, data, a1, a2, a3);
-                            if (@typeInfo(R) != .void) writeReturn(vm, R, result);
-                        }
-                    },
-                    else => @compileError("Unsupported arity (>3) for Wren foreign method"),
-                }
-            }
-        };
-
-        return .{
-            .module_name = module_name,
-            .class_name = class_name,
-            .wren_signature = spec.wren_signature,
-            .func = container.invoke,
-        };
-    }
-};
-
-// Main VM wrapper type
-pub fn VM(comptime UserData: type) type {
+pub fn ScriptEngine(comptime ScriptContext: type) type {
     return struct {
-        ptr: *c.WrenVM,
-        user_data: *UserData,
+        vm: *c.VM,
+        ctx: *ScriptContext,
         allocator: std.mem.Allocator,
 
         const Self = @This();
 
-        const foreign_function_count = blk: {
-            var i = 0;
-            for (ffi.moduleSpecs(UserData)) |module_spec| {
-                for (module_spec.module_classes) |class| {
-                    i += class.class_functions.len;
-                }
-            }
-            break :blk i;
-        };
-
-        const foreign_functions: [foreign_function_count]ffi.ForeignFunction = blk: {
-            var fns: [foreign_function_count]ffi.ForeignFunction = undefined;
-            var i = 0;
-            for (ffi.moduleSpecs(UserData)) |module| {
-                for (module.module_classes) |class| {
-                    for (class.class_functions) |spec| {
-                        fns[i] = ffi.generateForeignFunction(UserData, module.module_name, class.class_name, spec);
-                        i += 1;
-                    }
-                }
-            }
-            break :blk fns;
-        };
-
-        pub fn init(user_data: *UserData) !Self {
+        pub fn init(ctx: *ScriptContext) !Self {
             var config: c.Configuration = .{};
             c.wrenInitConfiguration(&config);
 
@@ -483,19 +23,19 @@ pub fn VM(comptime UserData: type) type {
             config.bindForeignMethodFn = bindForeignMethodFn;
             config.bindForeignClassFn = null;
             config.reallocateFn = reallocateFn;
-            config.userData = user_data;
+            config.userData = ctx;
 
             const vm_ptr = c.wrenNewVM(&config) orelse return error.VMCreationFailed;
 
             return Self{
-                .ptr = vm_ptr,
-                .user_data = user_data,
-                .allocator = user_data.allocator,
+                .vm = vm_ptr,
+                .ctx = ctx,
+                .allocator = ctx.allocator,
             };
         }
 
         pub fn deinit(self: *Self) void {
-            c.wrenFreeVM(self.ptr);
+            c.wrenFreeVM(self.vm);
         }
 
         pub fn interpret(self: *Self, module_name: []const u8, source: []const u8) !void {
@@ -505,24 +45,20 @@ pub fn VM(comptime UserData: type) type {
             const source_z = try self.allocator.dupeZ(u8, source);
             defer self.allocator.free(source_z);
 
-            const result = c.wrenInterpret(self.ptr, module_z, source_z);
+            const result = c.wrenInterpret(self.vm, module_z, source_z);
 
             switch (@as(c.InterpretResult, @enumFromInt(result))) {
                 .success => {},
                 .compile_error => {
-                    std.debug.print("Compile error: {s}\n", .{source_z});
-                    std.io.getStdErr().writeAll(self.user_data.output.items) catch {};
                     return error.CompileError;
                 },
                 .runtime_error => {
-                    std.debug.print("Runtime error: {s}\n", .{source_z});
-                    std.io.getStdErr().writeAll(self.user_data.output.items) catch {};
                     return error.RuntimeError;
                 },
             }
         }
 
-        fn setValueSlot(vm: *c.WrenVM, slot: c_int, value: anytype) void {
+        fn setValueSlot(vm: *c.VM, slot: c_int, value: anytype) void {
             const T = @TypeOf(value);
             switch (@typeInfo(T)) {
                 .pointer => |p| {
@@ -550,7 +86,13 @@ pub fn VM(comptime UserData: type) type {
             }
         }
 
-        pub fn callStatic(self: *Self, module: []const u8, class_name: []const u8, signature: []const u8, args: anytype) !void {
+        pub fn callStatic(
+            self: *Self,
+            module: []const u8,
+            class_name: []const u8,
+            signature: []const u8,
+            args: anytype,
+        ) !void {
             const module_z = try self.allocator.dupeZ(u8, module);
             defer self.allocator.free(module_z);
             const class_z = try self.allocator.dupeZ(u8, class_name);
@@ -560,20 +102,20 @@ pub fn VM(comptime UserData: type) type {
 
             const arg_types = @typeInfo(@TypeOf(args)).@"struct".fields;
             const arg_count: c_int = @intCast(@min(arg_types.len, std.math.maxInt(c_int)));
-            c.wrenEnsureSlots(self.ptr, arg_count + 1);
-            c.wrenGetVariable(self.ptr, module_z, class_z, 0);
+            c.wrenEnsureSlots(self.vm, arg_count + 1);
+            c.wrenGetVariable(self.vm, module_z, class_z, 0);
 
             var i: c_int = 1;
             inline for (arg_types) |a| {
                 const arg_name = a.name;
                 const arg_value = @field(args, arg_name);
-                setValueSlot(self.ptr, i, arg_value);
+                setValueSlot(self.vm, i, arg_value);
                 i += 1;
             }
 
-            const handle = c.wrenMakeCallHandle(self.ptr, sig_z) orelse return error.CallHandleCreateFailed;
-            defer c.wrenReleaseHandle(self.ptr, handle);
-            const result = c.wrenCall(self.ptr, handle);
+            const handle = c.wrenMakeCallHandle(self.vm, sig_z) orelse return error.CallHandleCreateFailed;
+            defer c.wrenReleaseHandle(self.vm, handle);
+            const result = c.wrenCall(self.vm, handle);
             switch (@as(c.InterpretResult, @enumFromInt(result))) {
                 .success => {},
                 .compile_error => return error.CompileError,
@@ -581,7 +123,13 @@ pub fn VM(comptime UserData: type) type {
             }
         }
 
-        pub fn callStaticGetNumber(self: *Self, module: []const u8, class_name: []const u8, signature: []const u8, args: anytype) !f64 {
+        pub fn callStaticGetNumber(
+            self: *Self,
+            module: []const u8,
+            class_name: []const u8,
+            signature: []const u8,
+            args: anytype,
+        ) !f64 {
             const module_z = try self.allocator.dupeZ(u8, module);
             defer self.allocator.free(module_z);
             const class_z = try self.allocator.dupeZ(u8, class_name);
@@ -591,41 +139,40 @@ pub fn VM(comptime UserData: type) type {
 
             const arg_types = @typeInfo(@TypeOf(args)).@"struct".fields;
             const arg_count: c_int = @intCast(@min(arg_types.len, std.math.maxInt(c_int)));
-            c.wrenEnsureSlots(self.ptr, arg_count + 1);
-            c.wrenGetVariable(self.ptr, module_z, class_z, 0);
+            c.wrenEnsureSlots(self.vm, arg_count + 1);
+            c.wrenGetVariable(self.vm, module_z, class_z, 0);
 
             var i: c_int = 0;
             inline for (arg_types, 0..) |a, idx| {
                 _ = idx;
                 const arg_name = a.name;
                 const arg_value = @field(args, arg_name);
-                setValueSlot(self.ptr, i, arg_value);
+                setValueSlot(self.vm, i, arg_value);
                 i += 1;
             }
 
-            const handle = c.wrenMakeCallHandle(self.ptr, sig_z) orelse return error.CallHandleCreateFailed;
-            defer c.wrenReleaseHandle(self.ptr, handle);
-            const result = c.wrenCall(self.ptr, handle);
+            const handle = c.wrenMakeCallHandle(self.vm, sig_z) orelse return error.CallHandleCreateFailed;
+            defer c.wrenReleaseHandle(self.vm, handle);
+            const result = c.wrenCall(self.vm, handle);
             switch (@as(c.InterpretResult, @enumFromInt(result))) {
                 .success => {},
                 .compile_error => return error.CompileError,
                 .runtime_error => return error.RuntimeError,
             }
-            return c.wrenGetSlotDouble(self.ptr, 0);
+            return c.wrenGetSlotDouble(self.vm, 0);
         }
 
         // Auto-generate and register Wren classes for all foreign modules/classes/methods
         pub fn registerForeignModules(self: *Self) !void {
-            const specs = comptime ffi.moduleSpecs(UserData);
+            const specs = comptime ffi.moduleSpecs(ScriptContext);
             inline for (specs) |mod_spec| {
                 var src = std.ArrayList(u8).init(self.allocator);
                 defer src.deinit();
 
                 var w = src.writer();
-                // Generate all classes for this module
+
                 inline for (mod_spec.module_classes) |cls| {
                     try w.print("class {s} {s}\n", .{ cls.class_name, "{" });
-                    // Generate foreign static methods
                     inline for (cls.class_functions) |fn_spec| {
                         const ar = fn_spec.arity();
                         switch (ar) {
@@ -644,10 +191,9 @@ pub fn VM(comptime UserData: type) type {
             }
         }
 
-        // Callback functions
-        fn reallocateFn(memory: ?*anyopaque, new_size: usize, user_data_ptr: *anyopaque) callconv(.C) ?*anyopaque {
-            const user_data: *UserData = @ptrCast(@alignCast(user_data_ptr));
-            const allocator = user_data.allocator;
+        fn reallocateFn(memory: ?*anyopaque, new_size: usize, ctxptr: *anyopaque) callconv(.C) ?*anyopaque {
+            const ctx: *ScriptContext = @ptrCast(@alignCast(ctxptr));
+            const allocator = ctx.allocator;
             const tracked = TrackedAllocator{ .allocator = allocator };
 
             if (new_size == 0) {
@@ -666,34 +212,63 @@ pub fn VM(comptime UserData: type) type {
             }
         }
 
-        fn writeFn(vm: *c.WrenVM, text: [*:0]const u8) callconv(.C) void {
+        fn writeFn(vm: *c.VM, text: [*:0]const u8) callconv(.C) void {
             const ptr = c.wrenGetUserData(vm);
-            const user_data: *UserData = @ptrCast(@alignCast(ptr));
+            const ctx: *ScriptContext = @ptrCast(@alignCast(ptr));
             const str = std.mem.span(text);
-            user_data.write(str);
+            ctx.write(str);
         }
 
         fn errorFn(
-            vm: *c.WrenVM,
+            vm: *c.VM,
             error_type: c.ErrorType,
             module: ?[*:0]const u8,
             line: c_int,
             message: ?[*:0]const u8,
         ) callconv(.C) void {
             const ptr = c.wrenGetUserData(vm);
-            const user_data: *UserData = @ptrCast(@alignCast(ptr));
+            const ctx: *ScriptContext = @ptrCast(@alignCast(ptr));
             const module_str = if (module) |m| std.mem.span(m) else "";
             const msg_str = if (message) |m| std.mem.span(m) else "";
-            user_data.onError(error_type, module_str, line, msg_str);
+            ctx.onError(error_type, module_str, line, msg_str);
         }
 
-        fn abortWithError(vm: *c.WrenVM, msg: []const u8) void {
+        fn abortWithError(vm: *c.VM, msg: []const u8) void {
             c.wrenSetSlotBytes(vm, 0, msg.ptr, msg.len);
             c.wrenAbortFiber(vm, 0);
         }
 
+        const foreign_function_count = blk: {
+            var i = 0;
+            for (ffi.moduleSpecs(ScriptContext)) |module_spec| {
+                for (module_spec.module_classes) |class| {
+                    i += class.class_functions.len;
+                }
+            }
+            break :blk i;
+        };
+
+        const foreign_functions: [foreign_function_count]ffi.ForeignFunction = blk: {
+            var fns: [foreign_function_count]ffi.ForeignFunction = undefined;
+            var i = 0;
+            for (ffi.moduleSpecs(ScriptContext)) |module| {
+                for (module.module_classes) |class| {
+                    for (class.class_functions) |spec| {
+                        fns[i] = ffi.generateForeignFunction(
+                            ScriptContext,
+                            module.module_name,
+                            class.class_name,
+                            spec,
+                        );
+                        i += 1;
+                    }
+                }
+            }
+            break :blk fns;
+        };
+
         fn bindForeignMethodFn(
-            vm: *c.WrenVM,
+            vm: *c.VM,
             module: [*:0]const u8,
             className: [*:0]const u8,
             isStatic: bool,
@@ -721,8 +296,8 @@ pub fn VM(comptime UserData: type) type {
 }
 
 // Simple wrapper for creating a VM
-pub fn create(t: type, x: *t) !VM(t) {
-    return try VM(t).init(x);
+pub fn create(t: type, x: *t) !ScriptEngine(t) {
+    return try ScriptEngine(t).init(x);
 }
 
 // Simple wrapper for one-shot evaluation
@@ -757,7 +332,7 @@ pub fn eval(allocator: std.mem.Allocator, source: []const u8) ![]u8 {
             _ = message;
         }
     };
-    const WrenVMType = VM(Handlers);
+    const WrenVMType = ScriptEngine(Handlers);
     var handlers = Handlers{ .allocator = allocator, .output = &output };
     var vm = try WrenVMType.init(&handlers);
     defer vm.deinit();

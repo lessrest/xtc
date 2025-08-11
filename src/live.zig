@@ -11,7 +11,7 @@ const ansi = @import("ansi.zig");
 const Trace = @import("Trace.zig");
 const xmlparse = @import("xmlparse.zig");
 const wren_xml = @import("wren/xml.zig");
-const WrenRunner = @import("wren/runner.zig");
+const WrenRunner = @import("wren/runtime.zig");
 const event_dispatch = @import("event_dispatch.zig");
 const clock = @import("clock.zig");
 const ticket = @import("ticket.zig");
@@ -164,7 +164,7 @@ pub fn run(allocator: std.mem.Allocator, xml_path: ?[]const u8, wren_path: ?[]co
 
                 // Dispatch tick event to the clock node
                 event_dispatch.dispatchTick(
-                    runner.vm.ptr,
+                    runner.vm.vm,
                     ctx.dom,
                     event.node_id,
                     event.tick_count,
@@ -254,7 +254,7 @@ pub fn run(allocator: std.mem.Allocator, xml_path: ?[]const u8, wren_path: ?[]co
 
             // Dispatch keypress event to any registered handlers
             event_dispatch.dispatchKeypress(
-                runner.vm.ptr,
+                runner.vm.vm,
                 ctx.dom,
                 key_str,
             ) catch |err| {

@@ -4,7 +4,7 @@
 const std = @import("std");
 const xmlparse = @import("xmlparse.zig");
 const ansi = @import("ansi.zig");
-const tree_mod = @import("TreePrinter.zig");
+const tree_mod = @import("lib/TreePrinter.zig");
 
 const Formatter = struct {
     allocator: std.mem.Allocator,
