@@ -91,12 +91,14 @@ pub fn intrinsicSize(dom_: *const Dom, id: DomNodeId, max_w: usize, max_h: usize
         if (kind == .text) {
             const slice = dom_.getTextSlice(id);
             const text_cols: usize = unicode.monospacedTextWidth(slice);
-            const clamp_w: usize = if (max_w == 0) 0 else @min(max_w, text_cols);
+            // Use the actual text width when max_w is 0 (unconstrained)
+            const clamp_w: usize = if (max_w == 0) text_cols else @min(max_w, text_cols);
 
             const old_h = h;
 
             if (w == 0) {
-                w = @min(max_w, pad_x + clamp_w);
+                // When unconstrained (max_w == 0), use natural text width
+                w = if (max_w == 0) (pad_x + text_cols) else @min(max_w, pad_x + clamp_w);
             }
             if (h == 0) {
                 // Count actual newlines in the text, not just character width-based wrapping
@@ -107,7 +109,8 @@ pub fn intrinsicSize(dom_: *const Dom, id: DomNodeId, max_w: usize, max_h: usize
                         lines += 1;
                     }
                 }
-                h = @min(max_h, pad_y + lines);
+                // When unconstrained (max_h == 0), use natural line count
+                h = if (max_h == 0) (pad_y + lines) else @min(max_h, pad_y + lines);
             }
 
             // Log the text measurement calculation
