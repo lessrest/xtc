@@ -354,7 +354,7 @@ const ffi = struct {
                 // Build the function type from spec
                 const params = spec.params;
                 const R = spec.return_type;
-                // Now we expect functions to have signature: fn(vm: *c.WrenVM, ctx: *T, ...) 
+                // Now we expect functions to have signature: fn(vm: *c.WrenVM, ctx: *T, ...)
                 // So arity is params.len - 2 (excluding vm and ctx)
                 const arity = if (params.len <= 2) 0 else params.len - 2;
                 switch (arity) {
@@ -509,8 +509,16 @@ pub fn VM(comptime UserData: type) type {
 
             switch (@as(c.InterpretResult, @enumFromInt(result))) {
                 .success => {},
-                .compile_error => return error.CompileError,
-                .runtime_error => return error.RuntimeError,
+                .compile_error => {
+                    std.debug.print("Compile error: {s}\n", .{source_z});
+                    std.io.getStdErr().writeAll(self.user_data.output.items) catch {};
+                    return error.CompileError;
+                },
+                .runtime_error => {
+                    std.debug.print("Runtime error: {s}\n", .{source_z});
+                    std.io.getStdErr().writeAll(self.user_data.output.items) catch {};
+                    return error.RuntimeError;
+                },
             }
         }
 

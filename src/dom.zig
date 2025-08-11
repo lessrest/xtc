@@ -17,6 +17,7 @@ pub const DomNodeHeader = struct {
     first_child: DomNodeId,
     child_count: u32,
     style_id: u32,
+    clock_tick: u64 = 0,  // For clock nodes, tracks the current tick count
 };
 
 pub const Dom = struct {
@@ -228,6 +229,16 @@ pub const Dom = struct {
     }
 
     /// Get the style row for a node
+    pub fn updateClockTick(self: *Dom, id: DomNodeId, tick: u64) void {
+        var items = self.headers.slice();
+        items.items(.clock_tick)[@as(usize, @intCast(id))] = tick;
+    }
+    
+    pub fn getClockTick(self: *const Dom, id: DomNodeId) u64 {
+        const items = self.headers.slice();
+        return items.items(.clock_tick)[@as(usize, @intCast(id))];
+    }
+
     pub fn getNodeStyle(self: *const Dom, id: DomNodeId) StyleRow {
         const items = self.headers.slice();
         const style_id = items.items(.style_id)[@as(usize, @intCast(id))];

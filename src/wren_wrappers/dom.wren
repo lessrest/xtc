@@ -14,6 +14,10 @@ class Document {
 
   root { Element.new(_root) }
 
+  // Host viewport size
+  width { DOM.viewportWidth() }
+  height { DOM.viewportHeight() }
+
   createElement(style) {
     return Element.new(DOM.createElement(style))
   }
@@ -21,13 +25,13 @@ class Document {
   createText(text) {
     return Element.new(DOM.createText(text))
   }
-  
+
   createClock(style) {
     // Create a clock node with the given style
     // The style should include interval (e.g., "clock interval-500 clock-spinner")
     return Element.new(DOM.createClock(style))
   }
-  
+
   getElementById(id) {
     var nodeId = DOM.getElementById(id)
     if (nodeId == 4294967295) return null  // maxInt means not found
@@ -70,11 +74,11 @@ class Element {
   setDebugId(name) {
     DOM.setDebugId(_id, name)
   }
-  
+
   updateText(text) {
     DOM.updateText(_id, text)
   }
-  
+
   updateClass(className) {
     DOM.updateClass(_id, className)
   }
@@ -99,9 +103,9 @@ class ScriptRunner {
   // Execute a module that follows the Script.start(self) convention
   static executeModule(moduleName, selfId) {
     System.print("[ScriptRunner] Starting module '%(moduleName)' with selfId=%(selfId)")
-    
+
     var element = Element.new(selfId)
-    
+
     Meta.eval(
       "import \"dom\" for Element\n" +
       "import \"%(moduleName)\" for Script\n" +

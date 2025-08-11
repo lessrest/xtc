@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root class="flex flex-col">
+    <!-- Hypnotic spiral demo -->
+    <script type="text/wren" class="flex flex-col" id="spiral" src="spiral.wren" />
+</root>

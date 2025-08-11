@@ -25,7 +25,7 @@ const Rgba8 = tty.Rgba8;
 const Dom = dom.Dom;
 const DomNodeId = dom.DomNodeId;
 
-pub fn run(allocator: std.mem.Allocator, xml_path: ?[]const u8) !void {
+pub fn run(allocator: std.mem.Allocator, xml_path: ?[]const u8, wren_path: ?[]const u8) !void {
     // Initialize application-level trace that spans the entire live session
     const app_trace = Trace.init(false); // Disabled for performance
     const session_trace = app_trace.enter();
@@ -77,14 +77,25 @@ pub fn run(allocator: std.mem.Allocator, xml_path: ?[]const u8) !void {
             // Create a default root if XML was empty
             root_id = try document.addElement("flex bg-slate-900");
         }
+    } else if (wren_path) |path| {
+        // Load and run Wren script
+        const wren_content = try std.fs.cwd().readFileAlloc(allocator, path, 1024 * 1024);
+        defer allocator.free(wren_content);
+        
+        // Create a basic root element
+        root_id = try document.addElement("flex");
+        try document.setDebugId(root_id, "root");
+        
+        // Run the Wren script which will populate the DOM
+        try runner.vm.interpret("main", wren_content);
     } else {
-        // Default demo UI when no XML provided
+        // Default demo UI when no XML or Wren provided
         root_id = try document.addElement(
             "flex flex-col bg-slate-900 items-center justify-center",
         );
         try document.setDebugId(root_id, "root");
 
-        const text_id = try document.addText("No XML file provided. Use --xml <file> to load content.");
+        const text_id = try document.addText("No XML or Wren file provided. Use --xml <file> or --wren <file> to load content.");
         document.appendChild(root_id, text_id);
     }
 
@@ -99,14 +110,19 @@ pub fn run(allocator: std.mem.Allocator, xml_path: ?[]const u8) !void {
         .raster_back = null,
         .log = @import("main.zig").g_log_file,
         .clock_registry = &clock_registry,
+        .glyphs = try tty.GlyphTable.init(allocator),
     };
     defer {
         if (ctx.raster_front) |*r| r.deinit(allocator);
         if (ctx.raster_back) |*r| r.deinit(allocator);
+        ctx.glyphs.deinit();
     }
 
     // Initial render
     updateTerminalSize(&ctx);
+    // Expose viewport to Wren scripts
+    runner.script_context.viewport_width = ctx.width;
+    runner.script_context.viewport_height = ctx.height;
     try renderDom(&ctx, session_trace);
 
     // Start clock threads for any clock nodes in the DOM
@@ -117,6 +133,17 @@ pub fn run(allocator: std.mem.Allocator, xml_path: ?[]const u8) !void {
     var key_buf: [8]u8 = undefined; // Buffer for multi-byte sequences
 
     while (true) {
+        // Check for terminal resize every loop and re-render immediately on change
+        const prev_w = ctx.width;
+        const prev_h = ctx.height;
+        updateTerminalSize(&ctx);
+        if (ctx.width != prev_w or ctx.height != prev_h) {
+            runner.script_context.viewport_width = ctx.width;
+            runner.script_context.viewport_height = ctx.height;
+            try renderDom(&ctx, session_trace);
+            continue;
+        }
+
         // Check for clock events with a 10ms timeout
         if (ctx.clock_registry.waitForEvents(10)) {
             // Process clock events
@@ -125,6 +152,9 @@ pub fn run(allocator: std.mem.Allocator, xml_path: ?[]const u8) !void {
 
             const events = try ctx.clock_registry.processEvents(temp_arena.allocator());
             for (events) |event| {
+                // Update the DOM node's tick count
+                ctx.dom.updateClockTick(event.node_id, event.tick_count);
+                
                 // Dispatch tick event to the clock node
                 event_dispatch.dispatchTick(
                     runner.vm.ptr,
@@ -152,6 +182,9 @@ pub fn run(allocator: std.mem.Allocator, xml_path: ?[]const u8) !void {
                 };
 
                 if (should_render) {
+                    // Keep Wren viewport in sync
+                    runner.script_context.viewport_width = ctx.width;
+                    runner.script_context.viewport_height = ctx.height;
                     try renderDom(&ctx, session_trace);
                 }
             }
@@ -222,6 +255,8 @@ pub fn run(allocator: std.mem.Allocator, xml_path: ?[]const u8) !void {
             };
 
             // Re-render the DOM after event handling (in case handlers modified it)
+            runner.script_context.viewport_width = ctx.width;
+            runner.script_context.viewport_height = ctx.height;
             try renderDom(&ctx, session_trace);
 
             // Check if 'q' was pressed to exit (after dispatching the event)
@@ -244,6 +279,7 @@ const RenderCtx = struct {
     raster_back: ?Raster = null,
     log: ?std.fs.File = null,
     clock_registry: *clock.ClockRegistry,
+    glyphs: tty.GlyphTable,
 };
 
 fn startClockNodes(ctx: *RenderCtx, document: *Dom) !void {
@@ -334,17 +370,15 @@ fn renderDom(ctx: *RenderCtx, parent_trace: Trace) !void {
 
     var paint_ctx = paint.PaintContext.init(al, ctx.unicode, render_trace);
     defer paint_ctx.deinit();
-    var glyphs = try tty.GlyphTable.init(al);
-    defer glyphs.deinit();
 
-    try paint.computePaintCommands(&paint_ctx, ctx.dom, &tree, &glyphs);
+    try paint.computePaintCommands(&paint_ctx, ctx.dom, &tree, &ctx.glyphs);
 
     // Double-buffered raster: render into back, diff against front, then swap
     const rb = try ensureDoubleRaster(ctx);
-    try tty.rasterizeDisplayList(rb.back, al, &glyphs, &paint_ctx);
+    try tty.rasterizeDisplayList(rb.back, al, &ctx.glyphs, &paint_ctx);
 
     // Use diffing for better performance
-    try writeRasterDiff(rb.front, rb.back, &glyphs);
+    try writeRasterDiff(rb.front, rb.back, &ctx.glyphs);
 
     // Swap front/back for next frame
     const tmp = ctx.raster_front.?;

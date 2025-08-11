@@ -84,6 +84,7 @@ pub const PaintOp = union(PaintOpTag) {
 pub const UnicodeData = struct {
     graphemes: Graphemes,
     display_width: DisplayWidth,
+    words: Words,
 
     pub fn init(allocator: std.mem.Allocator) !UnicodeData {
         var graphemes = try Graphemes.init(allocator);
@@ -92,15 +93,20 @@ pub const UnicodeData = struct {
         var display_width = try DisplayWidth.init(allocator);
         errdefer display_width.deinit(allocator);
 
+        var words = try Words.init(allocator);
+        errdefer words.deinit(allocator);
+
         return .{
             .graphemes = graphemes,
             .display_width = display_width,
+            .words = words,
         };
     }
 
     pub fn deinit(self: *UnicodeData, allocator: std.mem.Allocator) void {
         self.graphemes.deinit(allocator);
         self.display_width.deinit(allocator);
+        self.words.deinit(allocator);
     }
 
     pub fn monospacedTextWidth(self: *const UnicodeData, text: []const u8) usize {
@@ -109,6 +115,10 @@ pub const UnicodeData = struct {
 
     pub fn graphemeClusterIterator(self: *const UnicodeData, text: []const u8) @TypeOf(self.graphemes.iterator(text)) {
         return self.graphemes.iterator(text);
+    }
+
+    pub fn wordIterator(self: *const UnicodeData, text: []const u8) @TypeOf(self.words.iterator(text)) {
+        return self.words.iterator(text);
     }
 };
 
@@ -411,24 +421,23 @@ fn emitClockVisuals(
     span.info("Emitting clock visuals");
     _ = span.put("rect", rect)
         .put("visual style", row.clock_visual);
-    
+
     if (!(rect.w > 0 and rect.h > 0)) {
         span.decision("Zero rect dimensions, no clock to emit");
         return;
     }
-    
+
     const cb = computeContentBox(rect, row);
     if (cb.rect.w == 0 or cb.rect.h == 0) {
         span.decision("Zero content box dimensions, no space for clock");
         return;
     }
-    
+
     const color = computeTextColor(document, node_id, row);
-    
-    // Get clock state from somewhere (for now, use a placeholder)
-    // In real implementation, we'd get the tick count from the clock registry
-    const tick_count: u64 = 0; // TODO: Get from clock registry
-    
+
+    // Get the tick count directly from the DOM node
+    const tick_count = document.getClockTick(node_id);
+
     switch (row.clock_visual) {
         .spinner => {
             const spinner_chars = [_][]const u8{ "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" };
@@ -475,18 +484,18 @@ fn emitClockVisuals(
             // Build glyph run for the text
             var glyph_ids = std.ArrayList(tty.GlyphId).init(ctx.ops.allocator);
             defer glyph_ids.deinit();
-            
+
             var it = ctx.unicode.graphemeClusterIterator(text);
             while (it.next()) |grapheme| {
                 const grapheme_bytes = grapheme.bytes(text);
                 const glyph_id = try glyphs.intern(ctx.ops.allocator, grapheme_bytes);
                 try glyph_ids.append(glyph_id);
             }
-            
+
             if (glyph_ids.items.len > 0) {
                 const final_run = try ctx.ops.allocator.alloc(tty.GlyphId, glyph_ids.items.len);
                 std.mem.copyForwards(tty.GlyphId, final_run, glyph_ids.items);
-                
+
                 try ctx.push(PaintOp{ .GlyphRun = .{
                     .x = cb.rect.x,
                     .y = cb.rect.y,
@@ -556,9 +565,7 @@ fn emitTextGlyphRuns(
         var line_start: usize = 0;
         var line_width: usize = 0;
         var last_break_bytes: ?usize = null;
-        var word_iter = Words.init(ctx.ops.allocator) catch unreachable;
-        defer word_iter.deinit(ctx.ops.allocator);
-        var witer = word_iter.iterator(line);
+        var witer = ctx.unicode.wordIterator(line);
         var wrapped_segments: usize = 0;
 
         while (witer.next()) |seg| {

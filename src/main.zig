@@ -273,5 +273,5 @@ pub fn main() !void {
     }
 
     // Live mode (default if no xml/wren, or if --live is specified)
-    try live.run(al, xml_input);
+    try live.run(al, xml_input, wren_script);
 }

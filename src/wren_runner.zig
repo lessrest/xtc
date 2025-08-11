@@ -19,12 +19,22 @@ pub const ScriptContext = struct {
     document: *Dom,
     output: *std.ArrayList(u8),
     event_handles: *std.ArrayList(*wren.c.WrenHandle),
+    viewport_width: usize = 80,
+    viewport_height: usize = 24,
 
     pub const Modules = struct {
         pub const dom = struct {
             pub const DOM = struct {
                 pub fn root(_: *wren.c.WrenVM, _: *ScriptContext) DomNodeId {
                     return 0;
+                }
+
+                pub fn viewportWidth(_: *wren.c.WrenVM, ctx: *ScriptContext) u32 {
+                    return @intCast(ctx.viewport_width);
+                }
+
+                pub fn viewportHeight(_: *wren.c.WrenVM, ctx: *ScriptContext) u32 {
+                    return @intCast(ctx.viewport_height);
                 }
 
                 pub fn createElement(_: *wren.c.WrenVM, ctx: *ScriptContext, style: []const u8) DomNodeId {
@@ -48,15 +58,15 @@ pub const ScriptContext = struct {
                 pub fn setDebugId(_: *wren.c.WrenVM, ctx: *ScriptContext, id: DomNodeId, label: []const u8) void {
                     ctx.document.setDebugId(id, label) catch @panic("setDebugId");
                 }
-                
+
                 pub fn updateText(_: *wren.c.WrenVM, ctx: *ScriptContext, id: DomNodeId, text: []const u8) void {
                     ctx.document.updateText(id, text) catch @panic("updateText");
                 }
-                
+
                 pub fn updateClass(_: *wren.c.WrenVM, ctx: *ScriptContext, id: DomNodeId, class: []const u8) void {
                     ctx.document.updateClass(id, class) catch @panic("updateClass");
                 }
-                
+
                 pub fn getElementById(_: *wren.c.WrenVM, ctx: *ScriptContext, idStr: []const u8) DomNodeId {
                     // Search through debug_ids HashMap to find matching ID
                     var it = ctx.document.debug_ids.iterator();
@@ -89,7 +99,7 @@ pub const ScriptContext = struct {
                         wren.c.wrenAbortFiber(vm, 0);
                         return 0;
                     };
-                    
+
                     const handler_id = ctx.document.event_registry.addEventListener(
                         node_id,
                         event_type,
@@ -99,14 +109,14 @@ pub const ScriptContext = struct {
                         wren.c.wrenAbortFiber(vm, 0);
                         return 0;
                     };
-                    
+
                     // Store handle to prevent GC
                     ctx.event_handles.append(handler) catch {
                         wren.c.wrenSetSlotString(vm, 0, "Failed to store event handle");
                         wren.c.wrenAbortFiber(vm, 0);
                         return 0;
                     };
-                    
+
                     return handler_id;
                 }
 
@@ -137,7 +147,6 @@ pub const ScriptContext = struct {
     }
 };
 
-
 pub fn init(allocator: std.mem.Allocator, document: *Dom) !*@This() {
     var this = try allocator.create(@This());
     this.* = .{
@@ -160,7 +169,7 @@ pub fn init(allocator: std.mem.Allocator, document: *Dom) !*@This() {
     try this.vm.registerForeignModules();
     // Provide Wren convenience wrappers around DOM ids via embedded file
     try this.vm.interpret("dom", @embedFile("wren_wrappers/dom.wren"));
-    
+
     // Import dom classes into main so scripts can use them
     try this.vm.interpret("main", "import \"dom\" for Document, Element");
     return this;
