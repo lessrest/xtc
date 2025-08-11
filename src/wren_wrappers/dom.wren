@@ -14,6 +14,9 @@ class Document {
   }
 }
 
+var document = Document.new()
+var self = null
+
 class Element {
   id { _id }
   id=(value) { _id = value }
@@ -32,10 +35,11 @@ class Element {
 class ScriptRunner {
   static run(selfId, source) {
     var code = ""
-    code = "var self = Element.new(%(selfId))\n"
-    code = code + "var document = Document.new()\n"
-    code = code + source
-
+    code = "{
+      var self = Element.new(%(selfId))
+      %(source)
+    }"
+    System.print(code)
     var closure = Meta.compile(code)
     var fiber = Fiber.new(closure)
     var error = fiber.try()

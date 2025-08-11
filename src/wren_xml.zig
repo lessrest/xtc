@@ -26,7 +26,13 @@ fn collectScriptText(el: xmlparse.Element, out: *std.ArrayList(u8)) !void {
     }
 }
 
-pub fn buildDomIntoAndRunScripts(comptime UserData: type, allocator: std.mem.Allocator, doc: *const xmlparse.Document, vm: *wren.VM(UserData), document: *Dom) !void {
+pub fn buildDomIntoAndRunScripts(
+    comptime UserData: type,
+    allocator: std.mem.Allocator,
+    doc: *const xmlparse.Document,
+    vm: *wren.VM(UserData),
+    document: *Dom,
+) !void {
     doc.acquire();
     defer doc.release();
 
@@ -42,7 +48,15 @@ pub fn buildDomIntoAndRunScripts(comptime UserData: type, allocator: std.mem.All
                 var buf = std.ArrayList(u8).init(a);
                 defer buf.deinit();
                 try collectScriptText(el, &buf);
-                try the_vm.callStatic("dom", "ScriptRunner", "run(_,_)", .{ id, buf.items });
+                the_vm.callStatic("dom", "ScriptRunner", "run(_,_)", .{ id, buf.items }) catch |err| {
+                    const output = the_vm.user_data.output.items;
+                    if (output.len > 0) {
+                        _ = try std.io.getStdOut().write(output);
+                    }
+
+                    try std.io.getStdErr().writer().print("Wren script error: {}\n", .{err});
+                    std.process.exit(1);
+                };
             }
 
             if (el.content) |_| {

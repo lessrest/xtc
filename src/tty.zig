@@ -246,7 +246,7 @@ pub const Raster = struct {
                 const glyph_slice = &[_]u32{cell.glyph};
                 try out_ansi.writeGlyphs(glyph_slice, glyphs);
             }
-            // Write newline after each line (including the last one for proper terminal output)
+            // Write newline after each line (for normal output to stdout)
             try out_ansi.writeAll("\n");
         }
         

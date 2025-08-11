@@ -9,6 +9,9 @@ const dom = @import("dom.zig");
 const paint = @import("paint.zig");
 const ansi = @import("ansi.zig");
 const Trace = @import("Trace.zig");
+const xmlparse = @import("xmlparse.zig");
+const wren_xml = @import("wren_xml.zig");
+const WrenRunner = @import("wren_runner.zig");
 
 // External dependencies
 const Graphemes = @import("Graphemes");
@@ -20,7 +23,7 @@ const Rgba8 = tty.Rgba8;
 const Dom = dom.Dom;
 const DomNodeId = dom.DomNodeId;
 
-pub fn run(allocator: std.mem.Allocator) !void {
+pub fn run(allocator: std.mem.Allocator, xml_path: ?[]const u8) !void {
     // Initialize application-level trace that spans the entire live session
     const app_trace = Trace.init(true);
     const session_trace = app_trace.enter();
@@ -42,44 +45,43 @@ pub fn run(allocator: std.mem.Allocator) !void {
     defer unicode.deinit(allocator);
 
     var document = Dom.init(allocator);
-    defer document.deinit();
-
-    const root_id = try document.addElement(
-        "flex flex-col bg-glyph-[.] items-center",
-    );
-    try document.setDebugId(root_id, "root");
-
-    const container_id = try document.addElement(
-        "flex flex-col grow-1 w-80 items-stretch border border-blue-200 bg-yellow-700",
-    );
-    try document.setDebugId(container_id, "container");
-
-    const wren_output_id = try document.addElement(
-        "px-2 grow-1 bg-green-400 text-slate-800 overflow-y-scroll",
-    );
-    try document.setDebugId(wren_output_id, "wren-output");
-
-    const child_id = try document.addElement(
-        "px-2 flex items-center grow-0 h-6 bg-slate-700 text-slate-200",
-    );
-    try document.setDebugId(child_id, "input-line");
-
-    const text_id = try document.addText("foo");
-    try document.setDebugId(text_id, "input-text");
-
-    const output_text_id = try document.addText("wren\n");
-    try document.setDebugId(output_text_id, "output-text");
-
-    const prompt_id = try document.addText("» ");
-    try document.setDebugId(prompt_id, "prompt");
-
-    document.appendChild(child_id, prompt_id);
-    document.appendChild(child_id, text_id);
-
-    document.appendChild(wren_output_id, output_text_id);
-    document.appendChild(container_id, wren_output_id);
-    document.appendChild(container_id, child_id);
-    document.appendChild(root_id, container_id);
+    // Note: WrenRunner.deinit() will handle document.deinit()
+    
+    var runner = try WrenRunner.init(allocator, &document);
+    defer runner.deinit();
+    
+    var root_id: DomNodeId = undefined;
+    
+    if (xml_path) |path| {
+        // Load and parse XML file
+        const xml_content = try std.fs.cwd().readFileAlloc(allocator, path, 1024 * 1024);
+        defer allocator.free(xml_content);
+        
+        var reader = std.io.fixedBufferStream(xml_content);
+        var xml_doc = try xmlparse.parse(allocator, path, reader.reader());
+        defer xml_doc.deinit();
+        
+        // Build DOM and execute any embedded scripts
+        try wren_xml.buildDomIntoAndRunScripts(WrenRunner.ScriptContext, allocator, &xml_doc, &runner.vm, &document);
+        
+        // Get root element (assuming it's the first element)
+        const headers = document.headers.slice();
+        if (headers.len > 0) {
+            root_id = 0;
+        } else {
+            // Create a default root if XML was empty
+            root_id = try document.addElement("flex bg-slate-900");
+        }
+    } else {
+        // Default demo UI when no XML provided
+        root_id = try document.addElement(
+            "flex flex-col bg-slate-900 items-center justify-center",
+        );
+        try document.setDebugId(root_id, "root");
+        
+        const text_id = try document.addText("No XML file provided. Use --xml <file> to load content.");
+        document.appendChild(root_id, text_id);
+    }
 
     var ctx = RenderCtx{
         .allocator = allocator,
@@ -88,8 +90,6 @@ pub fn run(allocator: std.mem.Allocator) !void {
         .height = 24,
         .dom = document,
         .root_id = root_id,
-        .text_id = text_id,
-        .output_text_id = output_text_id,
         .raster_front = null,
         .raster_back = null,
         .log = @import("main.zig").g_log_file,
@@ -99,83 +99,26 @@ pub fn run(allocator: std.mem.Allocator) !void {
         if (ctx.raster_back) |*r| r.deinit(allocator);
     }
 
-    var editor = try LineEditor.init(allocator);
-    defer editor.deinit(allocator);
-
-    const ScriptContext = struct {
-        allocator: std.mem.Allocator,
-        out: *std.ArrayList(u8),
-        dom: *Dom,
-
-        pub const Modules = struct {};
-
-        pub fn write(self: *@This(), text: []const u8) void {
-            self.out.appendSlice(text) catch @panic("appendSlice");
-            self.out.append('\n') catch @panic("append");
-        }
-
-        pub fn onError(self: *@This(), error_type: wren.WrenErrorType, module: []const u8, line: c_int, message: []const u8) void {
-            switch (error_type) {
-                .compile => {
-                    std.fmt.format(self.out.writer(), "[{s} line {d}] Compile error: {s}\n", .{ module, line, message }) catch @panic("appendSlice");
-                },
-                .runtime => {
-                    std.fmt.format(self.out.writer(), "[{s} line {d}] Runtime error: {s}\n", .{ module, line, message }) catch @panic("appendSlice");
-                },
-                .stack_trace => {
-                    std.fmt.format(self.out.writer(), "  [{s} line {d}] in {s}\n", .{ module, line, message }) catch @panic("appendSlice");
-                },
-            }
-        }
-    };
-
-    // Output log buffer backing the Prolog output box
-    var out_log = std.ArrayList(u8).init(allocator);
-    defer out_log.deinit();
-
-    var script_context = ScriptContext{
-        .out = &out_log,
-        .allocator = allocator,
-        .dom = &document,
-    };
-    var wren_vm = try wren.create(ScriptContext, &script_context);
-    defer wren_vm.deinit();
-
+    // Initial render
+    updateTerminalSize(&ctx);
+    try renderDom(&ctx, session_trace);
+    
+    // Main event loop - wait for exit keys
+    var in_buf: [64]u8 = undefined;
     while (true) {
-        const maybe_line = try editor.prompt(&ctx, session_trace);
-        if (maybe_line == null) break;
-        const line = maybe_line.?;
-        defer allocator.free(line);
-
-        // Create a command trace for this iteration
-        const command_trace = session_trace.enter();
-        defer command_trace.exit();
-        command_trace.info("Processing command");
-        command_trace.data("command-input").put("command", line).end();
-
-        // Append prompt and code
-        try out_log.appendSlice("> ");
-        try out_log.appendSlice(line);
-        try out_log.appendSlice("\n");
-
-        // Evaluate via Wren VM
-        const vm_trace = command_trace.enter();
-        defer vm_trace.exit();
-        vm_trace.info("Evaluating Wren script");
-
-        wren_vm.interpret("main", line) catch |err| {
-            vm_trace.decision("Script execution failed");
-            vm_trace.data("script-error").put("error", @errorName(err)).end();
-            switch (err) {
-                error.CompileError => try out_log.appendSlice("// Compile error\n"),
-                error.RuntimeError => try out_log.appendSlice("// Runtime error\n"),
-                else => try out_log.appendSlice("// Unknown error\n"),
-            }
+        const nread = posix.read(posix.STDIN_FILENO, &in_buf) catch |e| switch (e) {
+            error.InputOutput => continue,
+            else => return e,
         };
-
-        // Update output area and redraw only once
-        try setDomText(&ctx.dom, ctx.output_text_id, out_log.items);
-        try renderDom(&ctx, command_trace);
+        if (nread == 0) continue;
+        
+        for (in_buf[0..nread]) |b| {
+            switch (b) {
+                // Escape, Ctrl-C, or 'q' to exit
+                0x1b, 0x03, 'q', 'Q' => return,
+                else => {},
+            }
+        }
     }
 }
 
@@ -186,8 +129,6 @@ const RenderCtx = struct {
     height: usize = 24,
     dom: Dom,
     root_id: DomNodeId,
-    text_id: DomNodeId,
-    output_text_id: DomNodeId,
     resized: bool = false,
     raster_front: ?Raster = null,
     raster_back: ?Raster = null,
@@ -306,14 +247,55 @@ fn writeRasterDiff(front: *const Raster, back: *const Raster, glyphs: *const tty
 fn writeFullRaster(raster: *const Raster, glyphs: *const tty.GlyphTable) !void {
     var out_ansi = ansi.stdout();
     try out_ansi.moveCursor(1, 1); // Move to top-left
-    try raster.writeAnsiToWriter(out_ansi.writer, glyphs);
+    try out_ansi.resetStyle();
+    
+    // Write the raster without line endings for alternate screen buffer
+    for (0..raster.height) |y| {
+        var current_bg: ?tty.Rgba8 = null;
+        var current_fg: ?tty.Rgba8 = null;
+        
+        // Move cursor to beginning of line
+        if (y > 0) {
+            try out_ansi.moveCursor(@intCast(y + 1), 1);
+        }
+        
+        for (0..raster.width) |x| {
+            const cell = raster.getCell(x, y);
+            
+            // Update background if needed
+            if (cell.bg != current_bg) {
+                if (cell.bg != tty.TERMINAL_DEFAULT_COLOR) {
+                    try out_ansi.setBackground(cell.bg);
+                } else {
+                    try out_ansi.resetBackground();
+                }
+                current_bg = cell.bg;
+            }
+            
+            // Update foreground if needed  
+            if (cell.fg != current_fg) {
+                if (cell.fg != tty.TERMINAL_DEFAULT_COLOR) {
+                    try out_ansi.setForeground(cell.fg);
+                } else {
+                    try out_ansi.resetForeground();
+                }
+                current_fg = cell.fg;
+            }
+            
+            // Write the glyph
+            const glyph_slice = &[_]u32{cell.glyph};
+            try out_ansi.writeGlyphs(glyph_slice, glyphs);
+        }
+    }
+    
+    try out_ansi.resetStyle();
 }
 
 fn updateTerminalSize(ctx: *RenderCtx) void {
     var ws: posix.winsize = .{ .col = 0, .row = 0, .xpixel = 0, .ypixel = 0 };
 
-    if (posix.system.ioctl(std.io.getStdOut().handle, posix.T.IOCGWINSZ, &ws) >= 0) {
-        std.log.info("terminal size: {d}x{d}", .{ ws.col, ws.row });
+    const result = posix.system.ioctl(std.io.getStdOut().handle, posix.T.IOCGWINSZ, &ws);
+    if (result >= 0) {
         if (ws.col > 0 and ws.row > 0) {
             ctx.width = ws.col;
             ctx.height = ws.row;

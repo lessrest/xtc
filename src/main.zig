@@ -147,9 +147,12 @@ pub fn main() !void {
             }
             wren_script = args[i + 1];
             i += 1;
+        } else if (std.mem.eql(u8, a, "--live")) {
+            // Flag is handled later, just skip it here
         } else if (std.mem.eql(u8, a, "-h") or std.mem.eql(u8, a, "--help")) {
             try std.io.getStdOut().writer().print(
-                "usage: xtc [--log <file>] [--xml <string>] [--wren <file|script>] [--width N] [--height N] [--[no-]unicode-boxes] [--debug]\n",
+                "usage: xtc [--live] [--log <file>] [--xml <string>] [--wren <file|script>] [--width N] [--height N] [--[no-]unicode-boxes] [--debug]\n" ++
+                "  --live: Run in live mode with alternate screen buffer (use with --xml)\n",
                 .{},
             );
             return;
@@ -194,62 +197,75 @@ pub fn main() !void {
     // Apply unicode boxes preference if specified (applies to both modes)
     if (unicode_boxes) |on| tty.setUseUnicodeBoxes(on);
 
-    if (xml_input) |xml| {
-        // Check if it's a file path or XML content
-        const xml_content = if (std.fs.cwd().readFileAlloc(al, xml, 1024 * 1024)) |content|
-            content
-        else |_|
-            xml; // If file read fails, treat it as inline XML
-        
-        // Parse XML and use Wren integration (handles both with and without scripts)
-        var reader = std.io.fixedBufferStream(xml_content);
-        var xml_doc = try xmlparse.parse(al, "inline", reader.reader());
-        defer xml_doc.deinit();
-        
-        var document = dom.Dom.init(al);
-        // Note: WrenRunner.deinit() will handle document.deinit()
-        
-        var runner = try WrenRunner.init(al, &document);
-        defer runner.deinit();
-        
-        // Build DOM and execute scripts (if any)
-        try wren_xml.buildDomIntoAndRunScripts(WrenRunner.ScriptContext, al, &xml_doc, &runner.vm, &document);
-        
-        // Render the resulting DOM
-        try lib.renderDocumentToWriter(al, &document, std.io.getStdOut().writer(), out_width, out_height);
-        return;
+    // Check for --live flag to determine mode
+    var is_live_mode = false;
+    for (args) |arg| {
+        if (std.mem.eql(u8, arg, "--live")) {
+            is_live_mode = true;
+            break;
+        }
     }
 
-    if (wren_script) |script_input| {
-        // Check if it's a file path or inline script
-        const script_content = if (std.fs.cwd().readFileAlloc(al, script_input, 1024 * 1024)) |content| content else |_| script_input;
-        defer if (script_content.ptr != script_input.ptr) al.free(script_content);
+    // If not explicitly live mode, check if we have xml or wren for one-shot mode
+    if (!is_live_mode) {
+        if (xml_input) |xml| {
+            // Check if it's a file path or XML content
+            const xml_content = if (std.fs.cwd().readFileAlloc(al, xml, 1024 * 1024)) |content|
+                content
+            else |_|
+                xml; // If file read fails, treat it as inline XML
+            
+            // Parse XML and use Wren integration (handles both with and without scripts)
+            var reader = std.io.fixedBufferStream(xml_content);
+            var xml_doc = try xmlparse.parse(al, "inline", reader.reader());
+            defer xml_doc.deinit();
+            
+            var document = dom.Dom.init(al);
+            // Note: WrenRunner.deinit() will handle document.deinit()
+            
+            var runner = try WrenRunner.init(al, &document);
+            defer runner.deinit();
+            
+            // Build DOM and execute scripts (if any)
+            try wren_xml.buildDomIntoAndRunScripts(WrenRunner.ScriptContext, al, &xml_doc, &runner.vm, &document);
+            
+            // Render the resulting DOM
+            try lib.renderDocumentToWriter(al, &document, std.io.getStdOut().writer(), out_width, out_height);
+            return;
+        }
 
-        var document = dom.Dom.init(al);
-        var runner = try WrenRunner.init(al, &document);
-        defer runner.deinit();
+        if (wren_script) |script_input| {
+            // Check if it's a file path or inline script
+            const script_content = if (std.fs.cwd().readFileAlloc(al, script_input, 1024 * 1024)) |content| content else |_| script_input;
+            defer if (script_content.ptr != script_input.ptr) al.free(script_content);
 
-        runner.runScript(script_content) catch |err| {
+            var document = dom.Dom.init(al);
+            var runner = try WrenRunner.init(al, &document);
+            defer runner.deinit();
+
+            runner.runScript(script_content) catch |err| {
+                // Print output to stdout
+                const output = runner.getOutput();
+                if (output.len > 0) {
+                    _ = try std.io.getStdOut().write(output);
+                }
+
+                try std.io.getStdErr().writer().print("Wren script error: {}\n", .{err});
+                std.process.exit(1);
+            };
+
             // Print output to stdout
             const output = runner.getOutput();
             if (output.len > 0) {
                 _ = try std.io.getStdOut().write(output);
             }
 
-            try std.io.getStdErr().writer().print("Wren script error: {}\n", .{err});
-            std.process.exit(1);
-        };
+            try lib.renderDocumentToWriter(al, runner.getDom(), std.io.getStdOut().writer(), out_width, out_height);
 
-        // Print output to stdout
-        const output = runner.getOutput();
-        if (output.len > 0) {
-            _ = try std.io.getStdOut().write(output);
+            return;
         }
-
-        try lib.renderDocumentToWriter(al, runner.getDom(), std.io.getStdOut().writer(), out_width, out_height);
-
-        return;
     }
 
-    try live.run(al);
+    // Live mode (default if no xml/wren, or if --live is specified)
+    try live.run(al, xml_input);
 }
