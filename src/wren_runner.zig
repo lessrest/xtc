@@ -43,15 +43,22 @@ pub const ScriptContext = struct {
                     ctx.document.setDebugId(id, label) catch @panic("setDebugId");
                 }
 
-                // Event handling methods
-                pub fn addEventListener(vm: *wren.c.WrenVM, ctx: *ScriptContext, node_id: DomNodeId, event_type_str: []const u8) u32 {
-                    // Get the callback handle from slot 3 (the next slot after the arguments)
-                    const handle = wren.c.wrenGetSlotHandle(vm, 3) orelse {
-                        wren.c.wrenSetSlotString(vm, 0, "Invalid callback function");
-                        wren.c.wrenAbortFiber(vm, 0);
-                        return 0;
-                    };
-                    
+                pub fn removeChild(_: *wren.c.WrenVM, ctx: *ScriptContext, parent: DomNodeId, child: DomNodeId) void {
+                    ctx.document.removeChild(parent, child);
+                }
+
+                pub fn getChildCount(_: *wren.c.WrenVM, ctx: *ScriptContext, id: DomNodeId) u32 {
+                    const items = ctx.document.headers.slice();
+                    return items.items(.child_count)[@intCast(id)];
+                }
+
+                pub fn getFirstChild(_: *wren.c.WrenVM, ctx: *ScriptContext, id: DomNodeId) DomNodeId {
+                    const items = ctx.document.headers.slice();
+                    return items.items(.first_child)[@intCast(id)];
+                }
+
+                // Event handling methods with callback parameters
+                pub fn addEventListener(vm: *wren.c.WrenVM, ctx: *ScriptContext, node_id: DomNodeId, event_type_str: []const u8, handler: *wren.c.WrenHandle) u32 {
                     const event_type = EventType.fromString(event_type_str) orelse {
                         wren.c.wrenSetSlotString(vm, 0, "Unknown event type");
                         wren.c.wrenAbortFiber(vm, 0);
@@ -61,7 +68,7 @@ pub const ScriptContext = struct {
                     const handler_id = ctx.document.event_registry.addEventListener(
                         node_id,
                         event_type,
-                        handle,
+                        handler,
                     ) catch {
                         wren.c.wrenSetSlotString(vm, 0, "Failed to add event listener");
                         wren.c.wrenAbortFiber(vm, 0);
@@ -69,7 +76,7 @@ pub const ScriptContext = struct {
                     };
                     
                     // Store handle to prevent GC
-                    ctx.event_handles.append(handle) catch {
+                    ctx.event_handles.append(handler) catch {
                         wren.c.wrenSetSlotString(vm, 0, "Failed to store event handle");
                         wren.c.wrenAbortFiber(vm, 0);
                         return 0;
@@ -104,6 +111,7 @@ pub const ScriptContext = struct {
         }
     }
 };
+
 
 pub fn init(allocator: std.mem.Allocator, document: *Dom) !*@This() {
     var this = try allocator.create(@This());

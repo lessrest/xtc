@@ -124,6 +124,43 @@ pub const Dom = struct {
         p_count.* += 1;
     }
 
+    pub fn removeChild(self: *Dom, parent_id: DomNodeId, child_id: DomNodeId) void {
+        const p: usize = @intCast(parent_id);
+        const c: usize = @intCast(child_id);
+        var items = self.headers.slice();
+        
+        // Check if child is actually a child of parent
+        if (items.items(.parent)[c] != parent_id) return;
+        
+        const p_first = &items.items(.first_child)[p];
+        const p_count = &items.items(.child_count)[p];
+        const c_prev = items.items(.prev_sibling)[c];
+        const c_next = items.items(.next_sibling)[c];
+        
+        // Update parent's first_child if needed
+        if (p_first.* == child_id) {
+            p_first.* = c_next;
+        }
+        
+        // Update sibling links
+        if (c_prev != NullId) {
+            items.items(.next_sibling)[@intCast(c_prev)] = c_next;
+        }
+        if (c_next != NullId) {
+            items.items(.prev_sibling)[@intCast(c_next)] = c_prev;
+        }
+        
+        // Clear child's parent and sibling links
+        items.items(.parent)[c] = NullId;
+        items.items(.prev_sibling)[c] = NullId;
+        items.items(.next_sibling)[c] = NullId;
+        
+        // Decrement parent's child count
+        if (p_count.* > 0) {
+            p_count.* -= 1;
+        }
+    }
+
     /// Set a debug ID for a node - string is copied to DOM's allocator
     pub fn setDebugId(self: *Dom, id: DomNodeId, debug_id: []const u8) !void {
         const owned_id = try self.alloc.dupe(u8, debug_id);

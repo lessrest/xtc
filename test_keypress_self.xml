@@ -1,0 +1,124 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root class="flex flex-col bg-slate-900">
+  <!-- Instructions panel with nice styling -->
+  <box class="bg-slate-800 border-1 px-2 border-purple-500">
+    <box class="flex flex-col items-stretch grow-1">
+      <box class="">
+        <text class="text-cyan-400">Instructions</text>
+      </box>
+      <box class="flex flex-row gap-2 grow-1">
+        <text class="text-purple-400 w-2">•</text>
+        <text class="text-gray-300">Press any key to see it appear below</text>
+      </box>
+      <box class="flex flex-row gap-2 grow-1">
+        <text class="text-emerald-400 w-2">•</text>
+        <text class="text-gray-300">Each key gets a unique color</text>
+      </box>
+      <box class="flex flex-row gap-2 grow-1">
+        <text class="text-amber-400 w-2">•</text>
+        <text class="text-gray-300">Press 'q' or ESC to exit</text>
+      </box>
+    </box>
+  </box>
+
+  <!-- Main content area -->
+  <box
+    class="flex-1 m-2 bg-slate-950 border-1 border-double border-slate-600 px-2"
+  >
+    <box class="flex flex-col grow-1">
+      <!-- Label with decorative elements -->
+      <box class="flex flex-row gap-2 mb-2">
+        <text class="text-emerald-500">▸</text>
+        <text class="text-emerald-400">Keys pressed:</text>
+      </box>
+
+      <!-- The interactive script element container -->
+      <script type="text/wren" class="items-center justify-between">
+        // Beautiful color palette
+        var colors = [
+          ["bg-blue-500", "text-white"],
+          ["bg-emerald-500", "text-white"],
+          ["bg-purple-500", "text-white"],
+          ["bg-pink-500", "text-white"],
+          ["bg-amber-500", "text-black"],
+          ["bg-cyan-500", "text-black"],
+          ["bg-rose-500", "text-white"],
+          ["bg-indigo-500", "text-white"],
+          ["bg-teal-500", "text-white"],
+          ["bg-orange-500", "text-white"],
+          ["bg-lime-500", "text-black"],
+          ["bg-sky-500", "text-white"],
+          ["bg-violet-500", "text-white"],
+          ["bg-fuchsia-500", "text-white"],
+          ["bg-yellow-400", "text-black"]
+        ]
+
+        var colorIndex = 0
+        var keyCount = 0
+
+        // Add initial placeholder
+        var placeholderBox = document.createElement("text-gray-500")
+        var placeholder = document.createText("Waiting for input...")
+        placeholderBox.append(placeholder)
+        self.append(placeholderBox)
+
+        // Listen for keypress events
+        document.addEventListener("keypress", Fn.new { |event|
+          // Remove placeholder on first keypress
+          if (keyCount == 0) {
+            if (self.childCount > 0) {
+              var firstChild = self.firstChild
+              if (firstChild != null) {
+                self.removeChild(firstChild)
+              }
+            }
+          }
+
+          keyCount = keyCount + 1
+
+          // Get colors for this key
+          var colorPair = colors[colorIndex]
+          var bgColor = colorPair[0]
+          var textColor = colorPair[1]
+
+          colorIndex = (colorIndex + 1) % colors.count
+          var borderColor = colors[colorIndex][0].replace("bg-", "border-")
+
+          // Create styled box for the key
+          var keyBox = document.createElement("border-1 " + borderColor + " " + bgColor + " " + textColor)
+
+          // Special handling for space and special chars
+          var keyText = event["key"]
+          if (keyText == " ") {
+            keyText = "␣"
+          } else if (keyText == "\n") {
+            keyText = "↵"
+          } else if (keyText == "\t") {
+            keyText = "⇥"
+          }
+
+          // Create text node and append
+          var textNode = document.createText(keyText)
+          keyBox.append(textNode)
+
+          // Add the key box to the container
+          self.append(keyBox)
+        })
+      </script>
+    </box>
+  </box>
+
+  <!-- Footer with style -->
+  <box class="bg-slate-800 border-t-2 border-slate-700 px-2">
+    <box class="flex flex-row items-center">
+      <box class="flex flex-row grow-1">
+        <text class="text-purple-400 w-2">◆</text>
+        <text class="text-gray-400">XTC Terminal Compositor</text>
+      </box>
+      <box class="flex flex-row self-end">
+        <text class="text-gray-500 pr-1">Powered by</text>
+        <text class="text-cyan-400">Wren</text>
+      </box>
+    </box>
+  </box>
+</root>
