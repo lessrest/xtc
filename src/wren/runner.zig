@@ -1,9 +1,9 @@
 const std = @import("std");
-const wren = @import("wren.zig");
-const dom = @import("dom.zig");
+const wren = @import("vm.zig");
+const dom = @import("../dom.zig");
 const Dom = dom.Dom;
 const DomNodeId = dom.DomNodeId;
-const events = @import("events.zig");
+const events = @import("../events.zig");
 const EventType = events.EventType;
 
 vm: wren.VM(ScriptContext),
@@ -168,10 +168,10 @@ pub fn init(allocator: std.mem.Allocator, document: *Dom) !*@This() {
     // Auto-generate foreign classes from ScriptContext.Modules
     try this.vm.registerForeignModules();
     // Provide Wren convenience wrappers around DOM ids via embedded file
-    try this.vm.interpret("dom", @embedFile("wren_wrappers/dom.wren"));
+    try this.vm.interpret("dom", @embedFile("modules/dom.wren"));
 
     // Load editor module
-    try this.vm.interpret("editor", @embedFile("wren_wrappers/editor.wren"));
+    try this.vm.interpret("editor", @embedFile("modules/editor.wren"));
 
     // Import dom classes into main so scripts can use them
     try this.vm.interpret("main", "import \"dom\" for Document, Element");
@@ -185,9 +185,9 @@ pub fn deinit(self: *@This()) void {
     }
     self.event_handles.deinit();
     self.vm.deinit();
-    self.allocator.destroy(self);
     self.document.deinit();
     self.output.deinit();
+    self.allocator.destroy(self);
 }
 
 pub fn runScript(self: *@This(), script_id: []const u8, script: []const u8) !void {

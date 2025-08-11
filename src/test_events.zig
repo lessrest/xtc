@@ -1,7 +1,7 @@
 const std = @import("std");
 const dom = @import("dom.zig");
 const events = @import("events.zig");
-const wren = @import("wren.zig");
+const wren = @import("wren/vm.zig");
 
 test "DOM with event registry" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};

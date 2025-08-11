@@ -1,5 +1,5 @@
 const std = @import("std");
-const wren = @import("wren.zig");
+const wren = @import("wren/vm.zig");
 const dom = @import("dom.zig");
 
 pub const EventType = enum {

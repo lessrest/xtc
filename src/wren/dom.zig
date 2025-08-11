@@ -2,9 +2,9 @@
 // Uses the module system for proper scope isolation
 
 const std = @import("std");
-const dom_mod = @import("dom.zig");
-const xmlparse = @import("xmlparse.zig");
-const wren = @import("wren.zig");
+const dom_mod = @import("../dom.zig");
+const xmlparse = @import("../xmlparse.zig");
+const wren = @import("vm.zig");
 
 const Dom = dom_mod.Dom;
 const DomNodeId = dom_mod.DomNodeId;
@@ -41,10 +41,9 @@ fn buildElement(
         try dom.setDebugId(node_id, id_attr);
     }
 
-    // Attach to parent if provided
-    if (parent) |p| {
-        dom.appendChild(p, node_id);
-    }
+    // Attach to parent (or document root if no parent)
+    const parent_id = parent orelse 0;
+    dom.appendChild(parent_id, node_id);
 
     // Check if this is a script element
     const tag_name = element.tag_name.slice();
@@ -119,13 +118,32 @@ fn processScriptElement(
 
     // Execute the script directly
     if (source_buf.items.len > 0) {
-        vm.interpret(module_name orelse "global-script", source_buf.items) catch |err| {
-            std.debug.print("Script error: {}\n", .{err});
-            if (vm.user_data.output.items.len > 0) {
-                std.debug.print("Wren output: {s}\n", .{vm.user_data.output.items});
-            }
-            return err;
-        };
+        const script_module = module_name orelse "global-script";
+        
+        // For inline scripts, ensure imports are available
+        if (module_name == null) {
+            // Make Document and Element available in the inline script
+            var full_script = std.ArrayList(u8).init(allocator);
+            defer full_script.deinit();
+            try full_script.appendSlice("import \"dom\" for Document, Element\n");
+            try full_script.appendSlice(source_buf.items);
+            
+            vm.interpret(script_module, full_script.items) catch |err| {
+                std.debug.print("Script error: {}\n", .{err});
+                if (vm.user_data.output.items.len > 0) {
+                    std.debug.print("Wren output: {s}\n", .{vm.user_data.output.items});
+                }
+                return err;
+            };
+        } else {
+            vm.interpret(script_module, source_buf.items) catch |err| {
+                std.debug.print("Script error: {}\n", .{err});
+                if (vm.user_data.output.items.len > 0) {
+                    std.debug.print("Wren output: {s}\n", .{vm.user_data.output.items});
+                }
+                return err;
+            };
+        }
     }
 }
 

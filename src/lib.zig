@@ -8,7 +8,7 @@ pub usingnamespace @import("xml.zig");
 pub usingnamespace @import("FormatTrace.zig");
 
 comptime {
-    _ = @import("test_wren_dom.zig");
+    _ = @import("wren/test_dom.zig");
     _ = @import("test_events.zig");
 }
 
@@ -31,7 +31,7 @@ pub const Graphemes = @import("Graphemes");
 pub const Words = @import("Words");
 
 // pub const trealla = @import("trealla.zig"); // Replaced with Wren
-pub const wren = @import("wren.zig");
+pub const wren = @import("wren/vm.zig");
 
 const DomNodeId = dom.DomNodeId;
 

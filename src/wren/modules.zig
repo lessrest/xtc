@@ -2,8 +2,8 @@
 // Provides clean module loading and script execution
 
 const std = @import("std");
-const wren = @import("wren.zig");
-const dom_mod = @import("dom.zig");
+const wren = @import("vm.zig");
+const dom_mod = @import("../dom.zig");
 
 const Dom = dom_mod.Dom;
 const DomNodeId = dom_mod.DomNodeId;

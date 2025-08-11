@@ -4,10 +4,10 @@ const Graphemes = @import("Graphemes");
 const live = @import("live.zig");
 const FormatTrace = @import("FormatTrace.zig");
 const tty = @import("tty.zig");
-const WrenRunner = @import("wren_runner.zig");
+const WrenRunner = @import("wren/runner.zig");
 const dom = @import("dom.zig");
 const xmlparse = @import("xmlparse.zig");
-const wren_xml = @import("wren_xml.zig");
+const wren_xml = @import("wren/xml.zig");
 const ticket = @import("ticket.zig");
 
 // Global logging options using std.log

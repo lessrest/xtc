@@ -3,15 +3,15 @@ const posix = std.posix;
 
 // Module imports
 const tty = @import("tty.zig");
-const wren = @import("wren.zig");
+const wren = @import("wren/vm.zig");
 const layout = @import("layout.zig");
 const dom = @import("dom.zig");
 const paint = @import("paint.zig");
 const ansi = @import("ansi.zig");
 const Trace = @import("Trace.zig");
 const xmlparse = @import("xmlparse.zig");
-const wren_xml = @import("wren_xml.zig");
-const WrenRunner = @import("wren_runner.zig");
+const wren_xml = @import("wren/xml.zig");
+const WrenRunner = @import("wren/runner.zig");
 const event_dispatch = @import("event_dispatch.zig");
 const clock = @import("clock.zig");
 const ticket = @import("ticket.zig");

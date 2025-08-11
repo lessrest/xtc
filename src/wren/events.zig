@@ -1,9 +1,9 @@
 /// Wren-specific event handling extensions
 const std = @import("std");
-const wren = @import("wren.zig");
-const DomNodeId = @import("dom.zig").DomNodeId;
-const Dom = @import("dom.zig").Dom;
-const events = @import("events.zig");
+const wren = @import("vm.zig");
+const DomNodeId = @import("../dom.zig").DomNodeId;
+const Dom = @import("../dom.zig").Dom;
+const events = @import("../events.zig");
 
 /// Extended ScriptContext for event handling
 /// This will be mixed into the main ScriptContext

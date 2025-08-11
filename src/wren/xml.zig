@@ -2,10 +2,10 @@
 // Uses the clean module system implementation
 
 const std = @import("std");
-const dom_mod = @import("dom.zig");
-const xmlparse = @import("xmlparse.zig");
-const wren = @import("wren.zig");
-const wren_xml_clean = @import("wren_xml_clean.zig");
+const dom_mod = @import("../dom.zig");
+const xmlparse = @import("../xmlparse.zig");
+const wren = @import("vm.zig");
+const wren_xml_clean = @import("dom.zig");
 
 const Dom = dom_mod.Dom;
 const DomNodeId = dom_mod.DomNodeId;
