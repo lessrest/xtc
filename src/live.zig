@@ -26,7 +26,7 @@ const DomNodeId = dom.DomNodeId;
 
 pub fn run(allocator: std.mem.Allocator, xml_path: ?[]const u8) !void {
     // Initialize application-level trace that spans the entire live session
-    const app_trace = Trace.init(true);
+    const app_trace = Trace.init(false); // Disabled for performance
     const session_trace = app_trace.enter();
     defer session_trace.exit();
     session_trace.info("Starting XTC live session");
@@ -257,8 +257,8 @@ fn renderDom(ctx: *RenderCtx, parent_trace: Trace) !void {
     const rb = try ensureDoubleRaster(ctx);
     try tty.rasterizeDisplayList(rb.back, al, &glyphs, &paint_ctx);
 
-    // Use simple non-diffing raster output
-    try writeFullRaster(rb.back, &glyphs);
+    // Use diffing for better performance
+    try writeRasterDiff(rb.front, rb.back, &glyphs);
 
     // Swap front/back for next frame
     const tmp = ctx.raster_front.?;

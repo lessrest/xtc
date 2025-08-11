@@ -80,7 +80,7 @@ pub fn renderXmlAscii(
     defer unicode.deinit(al);
 
     // Initialize root tracer for the entire rendering pipeline
-    const root_trace = Trace.init(true);
+    const root_trace = Trace.init(false); // Disabled for performance
     const render_trace = root_trace.enter();
     defer render_trace.exit();
     render_trace.info("Rendering XML to ASCII");
@@ -121,7 +121,7 @@ pub fn renderDocumentToWriter(
     defer glyphs.deinit();
     var unicode = try paint.UnicodeData.init(al);
     defer unicode.deinit(al);
-    const root_trace = Trace.init(true);
+    const root_trace = Trace.init(false); // Disabled for performance
     const render_trace = root_trace.enter();
     defer render_trace.exit();
     render_trace.info("Rendering DOM");
