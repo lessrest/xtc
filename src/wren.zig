@@ -194,61 +194,154 @@ const ForeignClassSpec = struct {
 };
 
 const FunctionSpec = struct {
+    // Zig method name, e.g. "say"
     name: []const u8,
-    signature: []const u8,
+    // Fully qualified Wren signature, e.g. "say(_)" or "hello()"
+    wren_signature: []const u8,
+    // Pointer to the Zig function
     func: *const anyopaque,
+    // Full parameter list including the leading ScriptContext pointer
     params: []const std.builtin.Type.Fn.Param,
+    // Return payload type (if the function returns an error union, this is the payload)
+    return_type: type,
+    // Whether the Zig function returns an error union
+    is_error_union: bool,
+    // Full return type (may be error union)
+    full_return_type: type,
 
-    fn paramTypes(this: @This()) []type {
-        var xs: [this.params.len]type = undefined;
-        var i = 0;
-        for (this.params) |param| {
-            xs[i] = param.type.?;
-            i += 1;
-        }
-        return &xs;
-    }
-
-    fn functionType(this: @This(), comptime T: type) type {
-        const ps = this.paramTypes();
-        if (ps.len == 1) {
-            return (*const fn (*T) anyerror!void);
-        } else if (ps.len == 2) {
-            return (*const fn (*T, []const u8) anyerror!void);
-        } else {
-            @compileError("mad");
-        }
+    fn arity(this: @This()) usize {
+        // First parameter is always *T (ScriptContext)
+        if (this.params.len == 0) return 0;
+        return this.params.len - 1;
     }
 };
 
 const ForeignFunction = struct {
-    name: []const u8,
+    module_name: []const u8,
+    class_name: []const u8,
+    wren_signature: []const u8,
     func: WrenForeignMethodFn,
 };
 
-fn getForeignFunction(comptime T: type, comptime spec: FunctionSpec) ForeignFunction {
+fn getForeignFunction(comptime T: type, comptime module_name: []const u8, comptime class_name: []const u8, comptime spec: FunctionSpec) ForeignFunction {
     const container = struct {
+        inline fn readParam(vm: *WrenVM, comptime P: type, slot_index: c_int) P {
+            if (P == []const u8) {
+                var len: c_int = 0;
+                const ptr = wrenGetSlotBytes(vm, slot_index, &len);
+                return ptr[0..@intCast(len)];
+            } else if (P == f64) {
+                return wrenGetSlotDouble(vm, slot_index);
+            } else if (P == bool) {
+                return wrenGetSlotBool(vm, slot_index);
+            } else {
+                @compileError("Unsupported parameter type for Wren foreign method");
+            }
+        }
+
+        inline fn writeReturn(vm: *WrenVM, comptime R: type, value: R) void {
+            if (R == void) {
+                // nothing to write
+            } else if (R == []const u8) {
+                wrenSetSlotBytes(vm, 0, value.ptr, value.len);
+            } else if (R == f64) {
+                wrenSetSlotDouble(vm, 0, value);
+            } else if (R == bool) {
+                wrenSetSlotBool(vm, 0, value);
+            } else {
+                @compileError("Unsupported return type for Wren foreign method");
+            }
+        }
+
         pub fn invoke(vm: *WrenVM) callconv(.C) void {
             const data: *T = @ptrCast(@alignCast(wrenGetUserData(vm)));
-            const functype = spec.functionType(T);
-            const func: functype = @ptrCast(@alignCast(spec.func));
-
-            if (functype == (*const fn (*T) anyerror!void)) {
-                func(data) catch @panic(spec.name);
-            } else if (functype == (*const fn (*T, []const u8) anyerror!void)) {
-                const x1 = wrenGetSlotString(vm, 1);
-                func(data, std.mem.span(x1)) catch @panic(spec.name);
+            // Build the function type from spec
+            const params = spec.params;
+            const R = spec.return_type;
+            const arity = if (params.len == 0) 0 else params.len - 1;
+            switch (arity) {
+                0 => {
+                    const Fun = if (spec.is_error_union)
+                        *const fn (*T) R
+                    else
+                        *const fn (*T) R;
+                    const func: Fun = @ptrCast(@alignCast(spec.func));
+                    if (spec.is_error_union) {
+                        const result = func(data);
+                        if (@typeInfo(R) != .void) writeReturn(vm, R, result);
+                    } else {
+                        const result = func(data);
+                        if (@typeInfo(R) != .void) writeReturn(vm, R, result);
+                    }
+                },
+                1 => {
+                    const P1 = params[1].type.?;
+                    const Fun = if (spec.is_error_union)
+                        *const fn (*T, P1) R
+                    else
+                        *const fn (*T, P1) R;
+                    const func: Fun = @ptrCast(@alignCast(spec.func));
+                    const a1 = readParam(vm, P1, 1);
+                    if (spec.is_error_union) {
+                        const result = func(data, a1);
+                        if (@typeInfo(R) != .void) writeReturn(vm, R, result);
+                    } else {
+                        const result = func(data, a1);
+                        if (@typeInfo(R) != .void) writeReturn(vm, R, result);
+                    }
+                },
+                2 => {
+                    const P1 = params[1].type.?;
+                    const P2 = params[2].type.?;
+                    const Fun = if (spec.is_error_union)
+                        *const fn (*T, P1, P2) R
+                    else
+                        *const fn (*T, P1, P2) R;
+                    const func: Fun = @ptrCast(@alignCast(spec.func));
+                    const a1 = readParam(vm, P1, 1);
+                    const a2 = readParam(vm, P2, 2);
+                    if (spec.is_error_union) {
+                        const result = func(data, a1, a2);
+                        if (@typeInfo(R) != .void) writeReturn(vm, R, result);
+                    } else {
+                        const result = func(data, a1, a2);
+                        if (@typeInfo(R) != .void) writeReturn(vm, R, result);
+                    }
+                },
+                3 => {
+                    const P1 = params[1].type.?;
+                    const P2 = params[2].type.?;
+                    const P3 = params[3].type.?;
+                    const Fun = if (spec.is_error_union)
+                        *const fn (*T, P1, P2, P3) R
+                    else
+                        *const fn (*T, P1, P2, P3) R;
+                    const func: Fun = @ptrCast(@alignCast(spec.func));
+                    const a1 = readParam(vm, P1, 1);
+                    const a2 = readParam(vm, P2, 2);
+                    const a3 = readParam(vm, P3, 3);
+                    if (spec.is_error_union) {
+                        const result = func(data, a1, a2, a3);
+                        if (@typeInfo(R) != .void) writeReturn(vm, R, result);
+                    } else {
+                        const result = func(data, a1, a2, a3);
+                        if (@typeInfo(R) != .void) writeReturn(vm, R, result);
+                    }
+                },
+                else => @compileError("Unsupported arity (>3) for Wren foreign method"),
             }
         }
     };
 
     return .{
-        .name = spec.name,
+        .module_name = module_name,
+        .class_name = class_name,
+        .wren_signature = spec.wren_signature,
         .func = container.invoke,
     };
 }
 
-pub fn foreignModuleSpecs(comptime T: type) [@typeInfo(T.Modules).@"struct".decls.len]ForeignModuleSpec {
+inline fn foreignModuleSpecs(comptime T: type) [@typeInfo(T.Modules).@"struct".decls.len]ForeignModuleSpec {
     const decls = std.meta.declarations(T.Modules);
     var specs: [decls.len]ForeignModuleSpec = undefined;
     var i = 0;
@@ -284,11 +377,37 @@ fn functionSpecs(comptime T: type) []const FunctionSpec {
     var specs: [decls.len]FunctionSpec = undefined;
     var i = 0;
     inline for (decls) |decl| {
+        const fn_type = @typeInfo(@TypeOf(@field(T, decl.name))).@"fn";
+        const params = fn_type.params;
+        const full_return_type = fn_type.return_type.?;
+        const ret_info = @typeInfo(full_return_type);
+        var is_error_union = false;
+        var R: type = full_return_type;
+        switch (ret_info) {
+            .error_union => |eu| {
+                is_error_union = true;
+                R = eu.payload;
+            },
+            else => {},
+        }
+
+        const arity = if (params.len == 0) 0 else params.len - 1;
+        const sig = switch (arity) {
+            0 => decl.name ++ "()",
+            1 => decl.name ++ "(_)",
+            2 => decl.name ++ "(_,_)",
+            3 => decl.name ++ "(_,_,_)",
+            else => @compileError("Unsupported arity (>3) for Wren signature generation"),
+        };
+
         specs[i] = .{
             .name = decl.name,
-            .signature = @typeName(@typeInfo(@TypeOf(@field(T, decl.name))).@"fn".params[0].type.?),
+            .wren_signature = sig,
             .func = @field(T, decl.name),
-            .params = @typeInfo(@TypeOf(@field(T, decl.name))).@"fn".params,
+            .params = params,
+            .return_type = R,
+            .is_error_union = is_error_union,
+            .full_return_type = full_return_type,
         };
         i += 1;
     }
@@ -321,7 +440,7 @@ pub fn VM(comptime UserData: type) type {
             for (foreignModuleSpecs(UserData)) |module| {
                 for (module.module_classes) |class| {
                     for (class.class_functions) |spec| {
-                        fns[i] = getForeignFunction(UserData, spec);
+                        fns[i] = getForeignFunction(UserData, module.module_name, class.class_name, spec);
                         i += 1;
                     }
                 }
@@ -346,13 +465,13 @@ pub fn VM(comptime UserData: type) type {
             // Store user data (allocator and handlers)
             config.userData = user_data;
 
-            const module_specs = foreignModuleSpecs(UserData);
-            try std.io.getStdErr().writer().print("foreigns: {d}\n", .{module_specs.len});
-
-            const stderr = std.io.getStdErr().writer();
-            inline for (foreign_functions) |f| {
-                try stderr.print("{s} {any}\n", .{ f.name, f.func });
-            }
+            // Optional debug print of registered foreign functions
+            // const module_specs = foreignModuleSpecs(UserData);
+            // const stderr = std.io.getStdErr().writer();
+            // try stderr.print("foreign modules: {d}\n", .{module_specs.len});
+            // inline for (foreign_functions) |f| {
+            //     try stderr.print("{s}.{s}.{s} -> {any}\n", .{ f.module_name, f.class_name, f.wren_signature, f.func });
+            // }
 
             const vm_ptr = wrenNewVM(&config) orelse return error.VMCreationFailed;
 
@@ -441,20 +560,53 @@ pub fn VM(comptime UserData: type) type {
             isStatic: bool,
             signature: [*:0]const u8,
         ) callconv(.c) WrenForeignMethodFn {
-            _ = vm; // autofix
-            std.debug.print("bindForeignMethodFn: {s}.{s}.{s}\n", .{ module, className, signature });
-            std.debug.print("isStatic: {}\n", .{isStatic});
-
+            _ = vm; // unused
             if (!isStatic) return null;
 
+            const module_slice = std.mem.span(module);
+            const class_slice = std.mem.span(className);
+            const sig_slice = std.mem.span(signature);
+
             inline for (foreign_functions) |f| {
-                std.debug.print("hmm {s} {s}\n", .{ f.name, std.mem.sliceTo(signature, "("[0]) });
-                if (std.mem.eql(u8, f.name, std.mem.sliceTo(signature, "("[0]))) {
+                if (std.mem.eql(u8, f.module_name, module_slice) and
+                    std.mem.eql(u8, f.class_name, class_slice) and
+                    std.mem.eql(u8, f.wren_signature, sig_slice))
+                {
                     return f.func;
                 }
             }
 
             return null;
+        }
+
+        // Auto-generate and register Wren classes for all foreign modules/classes/methods
+        pub fn registerForeignModules(self: *Self) !void {
+            const specs = comptime foreignModuleSpecs(UserData);
+            inline for (specs) |mod_spec| {
+                var src = std.ArrayList(u8).init(self.allocator);
+                defer src.deinit();
+
+                var w = src.writer();
+                // Generate all classes for this module
+                inline for (mod_spec.module_classes) |cls| {
+                    try w.print("class {s} {s}\n", .{ cls.class_name, "{" });
+                    // Generate foreign static methods
+                    inline for (cls.class_functions) |fn_spec| {
+                        const ar = fn_spec.arity();
+                        switch (ar) {
+                            0 => try w.print("  foreign static {s}()\n", .{fn_spec.name}),
+                            1 => try w.print("  foreign static {s}(a)\n", .{fn_spec.name}),
+                            2 => try w.print("  foreign static {s}(a, b)\n", .{fn_spec.name}),
+                            3 => try w.print("  foreign static {s}(a, b, c)\n", .{fn_spec.name}),
+                            else => @panic("nooo"),
+                        }
+                    }
+                    try w.writeAll("}\n\n");
+                }
+
+                // Interpret generated source in the module namespace
+                try self.interpret(mod_spec.module_name, src.items);
+            }
         }
     };
 }

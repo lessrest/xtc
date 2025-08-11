@@ -26,6 +26,10 @@ pub const ScriptContext = struct {
                     try ctx.output.writer().writeAll(x);
                 }
 
+                pub fn add(ctx: *ScriptContext, a: f64, b: f64) !void {
+                    try ctx.output.writer().print("{d} + {d} = {d}\n", .{ a, b, a + b });
+                }
+
                 // pub fn createElement(ctx: *ScriptContext, style: []const u8) !void {
                 //     _ = try ctx.document.addElement(style);
                 // }
@@ -75,14 +79,13 @@ pub fn init(allocator: std.mem.Allocator) !*@This() {
     _ = try this.document.addElement("");
 
     this.vm = try wren.create(ScriptContext, &this.script_context);
+    // Auto-generate foreign classes from ScriptContext.Modules
+    try this.vm.registerForeignModules();
+    // Quick smoke test
     try this.vm.interpret("dom",
-        \\class DOM {
-        \\    foreign static hello()
-        \\    foreign static say(text)
-        \\}
-        \\
         \\DOM.hello()
         \\DOM.say("uhh")
+        \\DOM.add(1,2)
     );
     return this;
 }
