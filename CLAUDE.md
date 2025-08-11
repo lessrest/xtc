@@ -21,6 +21,9 @@ zig-out/bin/xtc --log xtc.log
 # Test XML rendering (non-interactive)
 zig-out/bin/xtc --xml '<root class="flex"><box class="w-4 h-2 bg-glyph-[a]"/></root>' --width 80 --height 24
 
+# Debug mode with automatic trace formatting
+zig-out/bin/xtc --log xtc.log --debug
+
 # Install to local bin (optional)
 make install
 ```
@@ -115,6 +118,14 @@ zig build test
 - Use `bg-glyph-[x]` classes to visualize element boundaries
 - Check `xtc.log` for trace output (when using `--log`)
 - Run tests with specific XML to isolate issues
+
+### Debug Tracing
+- Use `--debug` flag to enable automatic trace log formatting on exit
+- Raw XML trace logs are written to the file specified by `--log` (default: `xtc.log`)
+- When `--debug` is used, the `format-trace.sh` script processes the log automatically
+- The formatted output provides structured, hierarchical view of the rendering pipeline
+- Data groups (created via `span.data("label").put().put().end()`) are displayed with 📊 icons
+- Trace spans show the call hierarchy with ▶ markers and decisions with ⚡ markers
 
 ### Modifying the Prolog Integration
 - Trealla C sources are in `deps/trealla/`

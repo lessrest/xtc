@@ -13,9 +13,18 @@ pub fn AnsiWriter(comptime WriterType: type) type {
     return struct {
         const Self = @This();
         writer: WriterType,
+        no_color: bool = false,
 
         pub fn init(writer: WriterType) Self {
-            return .{ .writer = writer };
+            return .{ .writer = writer, .no_color = false };
+        }
+
+        pub fn initNoColor(writer: WriterType) Self {
+            return .{ .writer = writer, .no_color = true };
+        }
+
+        pub fn setNoColor(self: *Self, no_color: bool) void {
+            self.no_color = no_color;
         }
 
         // Screen buffer management
@@ -50,15 +59,33 @@ pub fn AnsiWriter(comptime WriterType: type) type {
 
         // Style and color management
         pub fn resetStyle(self: *Self) !void {
-            try self.writer.writeAll("\x1b[0m");
+            if (!self.no_color) {
+                try self.writer.writeAll("\x1b[0m");
+            }
+        }
+
+        pub fn setBold(self: *Self) !void {
+            if (!self.no_color) {
+                try self.writer.writeAll("\x1b[1m");
+            }
+        }
+
+        pub fn resetBold(self: *Self) !void {
+            if (!self.no_color) {
+                try self.writer.writeAll("\x1b[22m");
+            }
         }
 
         pub fn setForegroundRgb(self: *Self, r: u8, g: u8, b: u8) !void {
-            try self.writer.print("\x1b[38;2;{d};{d};{d}m", .{ r, g, b });
+            if (!self.no_color) {
+                try self.writer.print("\x1b[38;2;{d};{d};{d}m", .{ r, g, b });
+            }
         }
 
         pub fn setBackgroundRgb(self: *Self, r: u8, g: u8, b: u8) !void {
-            try self.writer.print("\x1b[48;2;{d};{d};{d}m", .{ r, g, b });
+            if (!self.no_color) {
+                try self.writer.print("\x1b[48;2;{d};{d};{d}m", .{ r, g, b });
+            }
         }
 
         pub fn setForeground(self: *Self, color: Rgba8) !void {
@@ -70,11 +97,15 @@ pub fn AnsiWriter(comptime WriterType: type) type {
         }
 
         pub fn resetForeground(self: *Self) !void {
-            try self.writer.writeAll("\x1b[39m");
+            if (!self.no_color) {
+                try self.writer.writeAll("\x1b[39m");
+            }
         }
 
         pub fn resetBackground(self: *Self) !void {
-            try self.writer.writeAll("\x1b[49m");
+            if (!self.no_color) {
+                try self.writer.writeAll("\x1b[49m");
+            }
         }
 
         // Convenience methods for common operations
@@ -114,6 +145,26 @@ pub fn AnsiWriter(comptime WriterType: type) type {
                 }
             }
         }
+
+        // Convenience methods for styled text writing
+        pub fn writeBold(self: *Self, text: []const u8) !void {
+            try self.setBold();
+            try self.writeAll(text);
+            try self.resetStyle();
+        }
+
+        pub fn writeColoredText(self: *Self, text: []const u8, r: u8, g: u8, b: u8) !void {
+            try self.setForegroundRgb(r, g, b);
+            try self.writeAll(text);
+            try self.resetStyle();
+        }
+
+        pub fn writeBoldColored(self: *Self, text: []const u8, r: u8, g: u8, b: u8) !void {
+            try self.setBold();
+            try self.setForegroundRgb(r, g, b);
+            try self.writeAll(text);
+            try self.resetStyle();
+        }
     };
 }
 
@@ -129,6 +180,11 @@ pub fn stdout() StdoutAnsiWriter {
 /// Convenience function to create an ANSI writer from an ArrayList
 pub fn arrayListWriter(list: *std.ArrayList(u8)) ArrayListAnsiWriter {
     return ArrayListAnsiWriter.init(list.writer());
+}
+
+/// Convenience function to create a no-color ANSI writer from an ArrayList
+pub fn arrayListWriterNoColor(list: *std.ArrayList(u8)) ArrayListAnsiWriter {
+    return ArrayListAnsiWriter.initNoColor(list.writer());
 }
 
 test "ansi writer basic operations" {
@@ -176,5 +232,20 @@ test "ansi writer rgba8 colors" {
     try ansi.resetBackground();
 
     const expected = "\x1b[38;2;255;0;0m\x1b[48;2;0;0;255mHello\x1b[39m\x1b[49m";
+    try std.testing.expectEqualStrings(expected, buffer.items);
+}
+
+test "ansi writer bold styling" {
+    var buffer = std.ArrayList(u8).init(std.testing.allocator);
+    defer buffer.deinit();
+
+    var ansi = arrayListWriter(&buffer);
+
+    try ansi.setBold();
+    try ansi.writeAll("Bold Text");
+    try ansi.resetBold();
+    try ansi.writeAll(" Normal Text");
+
+    const expected = "\x1b[1mBold Text\x1b[22m Normal Text";
     try std.testing.expectEqualStrings(expected, buffer.items);
 }

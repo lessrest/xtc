@@ -47,10 +47,27 @@ pub const StyleColor = packed struct {
     g: u8,
     b: u8,
     use_default: u1, // 1 = use terminal default, ignore rgb
-    _pad: u7 = 0,
 };
 
-pub const EdgeSizing = packed struct { t: u4, r: u4, b: u4, l: u4 };
+pub const Size = struct {
+    w: i32,
+    h: i32,
+
+    pub fn trace(self: Size, tracer: anytype) void {
+        tracer.print("{d}×{d}", .{ self.w, self.h });
+    }
+};
+
+pub const EdgeSizing = packed struct {
+    t: u4,
+    r: u4,
+    b: u4,
+    l: u4,
+
+    pub fn trace(self: EdgeSizing, tracer: anytype) void {
+        tracer.data("edges").put("top", self.t).put("right", self.r).put("bottom", self.b).put("left", self.l).end();
+    }
+};
 pub const GapSizing = packed struct { main: u3, cross: u3 };
 pub const BorderStyling = packed struct { width: u2, style: BorderStyle };
 
@@ -66,7 +83,7 @@ pub const StyleRow = struct {
     fg: StyleColor,
     bg: StyleColor,
     border_color: StyleColor,
-    text_flags: packed struct { bold: u1, italic: u1, underline: u1, inverse: u1, strike: u1, dim: u1, blink: u1, _pad: u1 = 0 },
+    text_flags: packed struct { bold: u1, italic: u1, underline: u1, inverse: u1, strike: u1, dim: u1, blink: u1 },
 
     display: StyleDisplay,
     visibility_hidden: u1,

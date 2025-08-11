@@ -2,6 +2,7 @@ const std = @import("std");
 const lib = @import("lib.zig");
 const Graphemes = @import("Graphemes");
 const live = @import("live.zig");
+const FormatTrace = @import("FormatTrace.zig");
 const tty = @import("tty.zig");
 
 // Global logging options using std.log
@@ -46,6 +47,32 @@ pub fn panic(msg: []const u8, error_return_trace: ?*std.builtin.StackTrace, retu
     std.posix.abort();
 }
 
+fn formatTraceLog(allocator: std.mem.Allocator, log_path: []const u8) !void {
+    var file = std.fs.cwd().openFile(log_path, .{ .mode = .read_only }) catch |err| {
+        std.log.warn("Could not open log file {s}: {}", .{ log_path, err });
+        return;
+    };
+    defer file.close();
+
+    const stat = file.stat() catch |err| {
+        std.log.warn("Could not stat log file {s}: {}", .{ log_path, err });
+        return;
+    };
+    const size: usize = @intCast(stat.size);
+    const bytes = try allocator.alloc(u8, size);
+    defer allocator.free(bytes);
+    _ = try file.readAll(bytes);
+
+    const formatted = FormatTrace.formatLogXml(allocator, bytes) catch |err| {
+        std.log.warn("Trace format failed: {}", .{err});
+        return;
+    };
+    defer allocator.free(formatted);
+
+    const stdout = std.io.getStdOut().writer();
+    try stdout.writeAll(formatted);
+}
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -61,6 +88,7 @@ pub fn main() !void {
     var out_width: usize = 80;
     var out_height: usize = 24;
     var unicode_boxes: ?bool = null; // tri-state: null => default
+    var debug_mode: bool = false;
 
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
@@ -105,9 +133,11 @@ pub fn main() !void {
             unicode_boxes = true;
         } else if (std.mem.eql(u8, a, "--no-unicode-boxes")) {
             unicode_boxes = false;
+        } else if (std.mem.eql(u8, a, "--debug")) {
+            debug_mode = true;
         } else if (std.mem.eql(u8, a, "-h") or std.mem.eql(u8, a, "--help")) {
             try std.io.getStdOut().writer().print(
-                "usage: xtc [--log <file>] [--xml <string>] [--width N] [--height N] [--[no-]unicode-boxes]\n",
+                "usage: xtc [--log <file>] [--xml <string>] [--width N] [--height N] [--[no-]unicode-boxes] [--debug]\n",
                 .{},
             );
             return;
@@ -127,7 +157,28 @@ pub fn main() !void {
             std.log.info("logging to {s}", .{lp});
         }
     }
-    defer if (opened) |f| f.close();
+    defer {
+        if (opened) |f| f.close();
+        // Avoid writing to a closed file from logFn during formatting
+        g_log_file = null;
+
+        // Format trace log if debug mode is enabled
+        if (debug_mode and log_path != null) {
+            formatTraceLog(al, log_path.?) catch |err| {
+                // Print diagnostics to stderr and fall back to raw span dump
+                const stderr = std.io.getStdErr().writer();
+                _ = stderr.print("[trace] format failed: {}\n", .{err}) catch {};
+                // Best-effort raw dump of XML span region
+                if (std.fs.cwd().readFileAlloc(al, log_path.?, 16 * 1024 * 1024)) |raw_bytes| {
+                    defer al.free(raw_bytes);
+                    if (std.mem.indexOf(u8, raw_bytes, "<span>")) |start_idx| {
+                        _ = stderr.writeAll(raw_bytes[start_idx..]) catch {};
+                    }
+                } else |_| {}
+            };
+        }
+    }
+
     // Apply unicode boxes preference if specified (applies to both modes)
     if (unicode_boxes) |on| tty.setUseUnicodeBoxes(on);
 

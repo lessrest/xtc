@@ -10,6 +10,7 @@ const StyleRow = @import("style.zig").StyleRow;
 const StyleOverflow = @import("style.zig").StyleOverflow;
 const BorderStyle = @import("style.zig").BorderStyle;
 const StyleJustify = @import("style.zig").StyleJustify;
+const Trace = @import("Trace.zig");
 
 // --- Paint stage: device-independent display list ---
 
@@ -80,79 +81,62 @@ pub const PaintOp = union(PaintOpTag) {
     FillGlyphRect: struct { x: usize, y: usize, w: usize, h: usize, glyph: tty.GlyphId, color: Rgba8 },
 };
 
-pub const PaintCommandBatch = struct {
-    ops: std.ArrayList(PaintOp),
-    pub fn init(alloc: std.mem.Allocator) PaintCommandBatch {
-        return .{ .ops = std.ArrayList(PaintOp).init(alloc) };
+pub const UnicodeData = struct {
+    graphemes: Graphemes,
+    display_width: DisplayWidth,
+
+    pub fn init(allocator: std.mem.Allocator) !UnicodeData {
+        var graphemes = try Graphemes.init(allocator);
+        errdefer graphemes.deinit(allocator);
+
+        var display_width = try DisplayWidth.init(allocator);
+        errdefer display_width.deinit(allocator);
+
+        return .{
+            .graphemes = graphemes,
+            .display_width = display_width,
+        };
     }
-    pub fn deinit(self: *PaintCommandBatch) void {
+
+    pub fn deinit(self: *UnicodeData, allocator: std.mem.Allocator) void {
+        self.graphemes.deinit(allocator);
+        self.display_width.deinit(allocator);
+    }
+
+    pub fn monospacedTextWidth(self: *const UnicodeData, text: []const u8) usize {
+        return self.display_width.strWidth(text);
+    }
+
+    pub fn graphemeClusterIterator(self: *const UnicodeData, text: []const u8) @TypeOf(self.graphemes.iterator(text)) {
+        return self.graphemes.iterator(text);
+    }
+};
+
+pub const PaintContext = struct {
+    ops: std.ArrayList(PaintOp),
+    unicode: *const UnicodeData,
+    trace: Trace,
+
+    pub fn init(allocator: std.mem.Allocator, unicode: *const UnicodeData, trace: Trace) PaintContext {
+        return .{
+            .ops = std.ArrayList(PaintOp).init(allocator),
+            .unicode = unicode,
+            .trace = trace,
+        };
+    }
+
+    pub fn deinit(self: *PaintContext) void {
         self.ops.deinit();
         self.* = undefined;
     }
-    pub fn push(self: *PaintCommandBatch, op: PaintOp) !void {
+
+    pub fn push(self: *PaintContext, op: PaintOp) !void {
         try self.ops.append(op);
     }
-    
-    pub fn logToFile(self: *const PaintCommandBatch, log_file: std.fs.File, glyphs: *const tty.GlyphTable) !void {
-        const writer = log_file.writer();
-        try writer.print("\n=== PAINT COMMANDS (count: {d}) ===\n", .{self.ops.items.len});
-        
-        for (self.ops.items, 0..) |op, i| {
-            try writer.print("[{d:2}] ", .{i});
-            switch (op) {
-                .FillRect => |fr| {
-                    try writer.print("FillRect({d},{d} {d}x{d}) color=#{X:0>8}\n", .{ fr.x, fr.y, fr.w, fr.h, fr.color });
-                },
-                .StrokeRect => |sr| {
-                    const bg_str = if (sr.bg_color) |bg| try std.fmt.allocPrint(std.heap.page_allocator, " bg=#{X:0>8}", .{bg}) else "";
-                    defer if (sr.bg_color != null) std.heap.page_allocator.free(bg_str);
-                    try writer.print("StrokeRect({d},{d} {d}x{d}) color=#{X:0>8} style={s}{s}\n", .{ sr.x, sr.y, sr.w, sr.h, sr.color, @tagName(sr.style), bg_str });
-                },
-                .GlyphRun => |gr| {
-                    var glyph_str_buf: [256]u8 = undefined;
-                    var glyph_str: []u8 = glyph_str_buf[0..0];
-                    
-                    // Build the glyph text representation
-                    for (gr.glyphs, 0..) |gid, gi| {
-                        if (gi >= 20) { // Limit output length
-                            const remaining = try std.fmt.bufPrint(glyph_str_buf[glyph_str.len..], "...+{d}", .{gr.glyphs.len - gi});
-                            glyph_str = glyph_str_buf[0..glyph_str.len + remaining.len];
-                            break;
-                        }
-                        
-                        const glyph_bytes = glyphs.getSlice(gid) orelse &[_]u8{};
-                        if (glyph_bytes.len == 0) {
-                            const empty_char = try std.fmt.bufPrint(glyph_str_buf[glyph_str.len..], "?", .{});
-                            glyph_str = glyph_str_buf[0..glyph_str.len + empty_char.len];
-                        } else if (glyph_bytes.len == 1 and glyph_bytes[0] >= 32 and glyph_bytes[0] <= 126) {
-                            // Printable ASCII
-                            const char = try std.fmt.bufPrint(glyph_str_buf[glyph_str.len..], "{c}", .{glyph_bytes[0]});
-                            glyph_str = glyph_str_buf[0..glyph_str.len + char.len];
-                        } else {
-                            // Non-printable or multi-byte - show as escaped
-                            const escaped = try std.fmt.bufPrint(glyph_str_buf[glyph_str.len..], "\\x{X}", .{@as(u32, glyph_bytes[0])});
-                            glyph_str = glyph_str_buf[0..glyph_str.len + escaped.len];
-                        }
-                    }
-                    
-                    try writer.print("GlyphRun({d},{d}) color=#{X:0>8} len={d} text=\"{s}\"\n", .{ gr.x, gr.y, gr.color, gr.glyphs.len, glyph_str });
-                },
-                .FillGlyphRect => |fgr| {
-                    const glyph_bytes = glyphs.getSlice(fgr.glyph) orelse &[_]u8{};
-                    var glyph_char: [8]u8 = undefined;
-                    const glyph_repr = if (glyph_bytes.len == 1 and glyph_bytes[0] >= 32 and glyph_bytes[0] <= 126)
-                        try std.fmt.bufPrint(&glyph_char, "'{c}'", .{glyph_bytes[0]})
-                    else
-                        try std.fmt.bufPrint(&glyph_char, "glyph#{d}", .{fgr.glyph});
-                    
-                    try writer.print("FillGlyphRect({d},{d} {d}x{d}) glyph={s} color=#{X:0>8}\n", .{ fgr.x, fgr.y, fgr.w, fgr.h, glyph_repr, fgr.color });
-                },
-            }
-        }
-        try writer.print("=== END PAINT COMMANDS ===\n\n", .{});
-        log_file.sync() catch {};
-    }
 };
+
+// Backward compatibility alias
+pub const PaintCommandBatch = PaintContext;
 
 // No global rendering toggles here; the TTY backend chooses glyphs and fallbacks.
 /// Resolve effective foreground/background color along DOM ancestry, per CSS color inheritance.
@@ -179,62 +163,128 @@ fn resolveEffectiveFgBg(dref: *const dom.Dom, node_id: dom.DomNodeId) struct { f
 }
 
 /// Helper: emit a uniform glyph tile fill across the box rect (testing/demo aid).
-fn emitGlyphTileFill(list: *PaintCommandBatch, glyphs: *tty.GlyphTable, rect: layout.Rect, row: StyleRow) !void {
+fn emitGlyphTileFill(ctx: *PaintContext, glyphs: *tty.GlyphTable, rect: layout.Rect, row: StyleRow) !void {
     if (!(row.fill_glyph != 0 and rect.w > 0 and rect.h > 0)) return;
-    const gid: tty.GlyphId = if (row.fill_glyph <= 0xFF)
-        @intCast(row.fill_glyph)
-    else blk: {
-        var tmp: [4]u8 = undefined;
-        const n = std.unicode.utf8Encode(@intCast(row.fill_glyph), &tmp) catch 0;
-        break :blk if (n == 0) @as(tty.GlyphId, 32) else try glyphs.intern(list.ops.allocator, tmp[0..n]);
-    };
-    try list.push(PaintOp{ .FillGlyphRect = .{ .x = rect.x, .y = rect.y, .w = rect.w, .h = rect.h, .glyph = gid, .color = rgba8(row.fg.r, row.fg.g, row.fg.b, 255) } });
+
+    const span = ctx.trace.enter();
+    defer span.exit();
+    span.info("Emitting glyph tile fill");
+
+    const gid: tty.GlyphId = row.fill_glyph;
+    const str = glyphs.getSlice(gid);
+
+    const color = rgba8(row.fg.r, row.fg.g, row.fg.b, 255);
+    span.data("glyph-tile-fill").put("rect", rect).put("text", str).put("color", color).end();
+
+    try ctx.push(PaintOp{ .FillGlyphRect = .{ .x = rect.x, .y = rect.y, .w = rect.w, .h = rect.h, .glyph = gid, .color = color } });
 }
 
 /// Helper: background painting step per CSS painting order (backgrounds behind borders and content).
-fn emitBackgroundFillIfAny(list: *PaintCommandBatch, rect: layout.Rect, row: StyleRow) !void {
+fn emitBackgroundFillIfAny(ctx: *PaintContext, rect: layout.Rect, row: StyleRow) !void {
+    const span = ctx.trace.enter();
+    defer span.exit();
+    span.info("Emitting background fill");
+
     if (row.bg.use_default == 0 and rect.w > 0 and rect.h > 0) {
-        try list.push(PaintOp{ .FillRect = .{ .x = rect.x, .y = rect.y, .w = rect.w, .h = rect.h, .color = rgba8(row.bg.r, row.bg.g, row.bg.b, 255) } });
+        const color = rgba8(row.bg.r, row.bg.g, row.bg.b, 255);
+        span.data("fill-rect").put("rect", rect).put("color", color).end();
+        span.decision("Background color specified, adding FillRect op");
+        try ctx.push(PaintOp{ .FillRect = .{ .x = rect.x, .y = rect.y, .w = rect.w, .h = rect.h, .color = color } });
+    } else {
+        span.decision("No background fill needed");
     }
 }
 
 /// Helper: border painting step. Color falls back to border_color, then fg, then white.
-fn emitBorderBlock(list: *PaintCommandBatch, rect: layout.Rect, color: Rgba8, thickness: usize) !void {
-    if (rect.w == 0 or rect.h == 0 or thickness == 0) return;
+fn emitBorderBlock(ctx: *PaintContext, rect: layout.Rect, color: Rgba8, thickness: usize) !void {
+    const span = ctx.trace.enter();
+    defer span.exit();
+    span.info("Emitting block border");
+    span.data("border-block").put("rect", rect).put("color", color).put("thickness", thickness).end();
+
+    if (rect.w == 0 or rect.h == 0 or thickness == 0) {
+        span.decision("Zero rect or thickness, skipping border");
+        return;
+    }
+
     const t = @min(thickness, @min(rect.w, rect.h));
+    _ = span.put("effective thickness", t);
+
     // Top band
-    try list.push(PaintOp{ .FillRect = .{ .x = rect.x, .y = rect.y, .w = rect.w, .h = t, .color = color } });
+    span.decision("Adding top border band");
+    try ctx.push(PaintOp{ .FillRect = .{ .x = rect.x, .y = rect.y, .w = rect.w, .h = t, .color = color } });
+
     // Bottom band
     if (rect.h > t) {
-        try list.push(PaintOp{ .FillRect = .{ .x = rect.x, .y = rect.y + rect.h - t, .w = rect.w, .h = t, .color = color } });
+        span.decision("Adding bottom border band");
+        try ctx.push(PaintOp{ .FillRect = .{ .x = rect.x, .y = rect.y + rect.h - t, .w = rect.w, .h = t, .color = color } });
     }
+
     // Side bands (avoid double-filling corners if height <= 2*t, harmless otherwise)
     const inner_h = if (rect.h > 2 * t) rect.h - 2 * t else 0;
+    _ = span.put("inner height", inner_h);
+
     if (inner_h > 0) {
-        try list.push(PaintOp{ .FillRect = .{ .x = rect.x, .y = rect.y + t, .w = t, .h = inner_h, .color = color } });
+        span.decision("Adding left border band");
+        try ctx.push(PaintOp{ .FillRect = .{ .x = rect.x, .y = rect.y + t, .w = t, .h = inner_h, .color = color } });
         if (rect.w > t) {
-            try list.push(PaintOp{ .FillRect = .{ .x = rect.x + rect.w - t, .y = rect.y + t, .w = t, .h = inner_h, .color = color } });
+            span.decision("Adding right border band");
+            try ctx.push(PaintOp{ .FillRect = .{ .x = rect.x + rect.w - t, .y = rect.y + t, .w = t, .h = inner_h, .color = color } });
         }
     }
 }
 
-fn emitBorderStrokeIfAny(list: *PaintCommandBatch, rect: layout.Rect, row: StyleRow) !void {
-    if (!(row.border.width > 0 and rect.w > 0 and rect.h > 0)) return;
+fn emitBorderStrokeIfAny(ctx: *PaintContext, rect: layout.Rect, row: StyleRow) !void {
+    const span = ctx.trace.enter();
+    defer span.exit();
+    span.info("Emitting border stroke");
+
+    if (!(row.border.width > 0 and rect.w > 0 and rect.h > 0)) {
+        span.decision("No border needed");
+        return;
+    }
+    span.data("border-stroke").put("rect", rect).put("border width", row.border.width).put("border style", @tagName(row.border.style)).end();
+
     const col: Rgba8 = blk: {
-        if (row.border_color.use_default == 0) break :blk rgba8(row.border_color.r, row.border_color.g, row.border_color.b, 255);
-        if (row.fg.use_default == 0) break :blk rgba8(row.fg.r, row.fg.g, row.fg.b, 255);
+        if (row.border_color.use_default == 0) {
+            span.decision("Using explicit border color");
+            break :blk rgba8(row.border_color.r, row.border_color.g, row.border_color.b, 255);
+        }
+        if (row.fg.use_default == 0) {
+            span.decision("Falling back to foreground color for border");
+            break :blk rgba8(row.fg.r, row.fg.g, row.fg.b, 255);
+        }
+        span.decision("Using default white color for border");
         break :blk rgba8(255, 255, 255, 255);
     };
+
     const bg_for_border: ?Rgba8 = if (row.bg.use_default == 0)
         rgba8(row.bg.r, row.bg.g, row.bg.b, 255)
     else
         null;
+
+    span.data("border-colors").put("border color", col).put("background color", bg_for_border).end();
+
     switch (row.border.style) {
-        .block => try emitBorderBlock(list, rect, col, row.border.width),
-        .solid => try list.push(PaintOp{ .StrokeRect = .{ .x = rect.x, .y = rect.y, .w = rect.w, .h = rect.h, .color = col, .style = .line_light, .bg_color = bg_for_border } }),
-        .double => try list.push(PaintOp{ .StrokeRect = .{ .x = rect.x, .y = rect.y, .w = rect.w, .h = rect.h, .color = col, .style = .line_double, .bg_color = bg_for_border } }),
-        .dashed => try list.push(PaintOp{ .StrokeRect = .{ .x = rect.x, .y = rect.y, .w = rect.w, .h = rect.h, .color = col, .style = .line_dashed, .bg_color = bg_for_border } }),
-        .none => {},
+        .block => {
+            span.decision("Using block border style");
+            try emitBorderBlock(ctx, rect, col, row.border.width);
+        },
+        .solid => {
+            span.decision("Using solid line border style");
+            try ctx.push(PaintOp{ .StrokeRect = .{ .x = rect.x, .y = rect.y, .w = rect.w, .h = rect.h, .color = col, .style = .line_light, .bg_color = bg_for_border } });
+        },
+        .double => {
+            span.decision("Using double line border style");
+            try ctx.push(PaintOp{ .StrokeRect = .{ .x = rect.x, .y = rect.y, .w = rect.w, .h = rect.h, .color = col, .style = .line_double, .bg_color = bg_for_border } });
+        },
+        .dashed => {
+            span.decision("Using dashed line border style");
+            try ctx.push(PaintOp{ .StrokeRect = .{ .x = rect.x, .y = rect.y, .w = rect.w, .h = rect.h, .color = col, .style = .line_dashed, .bg_color = bg_for_border } });
+        },
+        .none => {
+            span.decision("Border style is none, no border to emit");
+        },
     }
 }
 
@@ -283,83 +333,164 @@ fn computeJustifyOffset(content_w: usize, line_w_cols: usize, justify: StyleJust
 }
 
 fn buildGlyphRun(
-    allocator: std.mem.Allocator,
-    g: *Graphemes,
-    dw: *DisplayWidth,
+    ctx: *PaintContext,
     glyphs: *tty.GlyphTable,
-    bytes: []const u8,
-    content_w: usize,
+    text_bytes: []const u8,
+    max_width_cols: usize,
     truncate_to_fit: bool,
 ) !struct { run: []tty.GlyphId, width_cols: usize } {
-    var gids = std.ArrayList(tty.GlyphId).init(allocator);
-    defer gids.deinit();
-    var it = g.iterator(bytes);
-    var acc_w: usize = 0;
-    while (it.next()) |gc| {
-        const gb = gc.bytes(bytes);
-        const w = dw.strWidth(gb);
-        if (truncate_to_fit and acc_w + w > content_w) break;
-        acc_w += w;
-        const gid = try glyphs.intern(allocator, gb);
-        try gids.append(gid);
+    const span = ctx.trace.enter();
+    defer span.exit();
+    span.info("Building glyph run from text");
+    _ = span.put("text length", text_bytes.len)
+        .put("max width cols", max_width_cols)
+        .put("truncate to fit", truncate_to_fit);
+
+    var glyph_ids = std.ArrayList(tty.GlyphId).init(ctx.ops.allocator);
+    defer glyph_ids.deinit();
+
+    var grapheme_iter = ctx.unicode.graphemeClusterIterator(text_bytes);
+    var accumulated_width: usize = 0;
+    var grapheme_count: usize = 0;
+
+    // Process each grapheme cluster in the text
+    while (grapheme_iter.next()) |grapheme_cluster| {
+        const grapheme_bytes = grapheme_cluster.bytes(text_bytes);
+        const grapheme_width = ctx.unicode.monospacedTextWidth(grapheme_bytes);
+        grapheme_count += 1;
+
+        // Check if adding this grapheme would exceed the available width
+        if (truncate_to_fit and accumulated_width + grapheme_width > max_width_cols) {
+            span.decision("Truncating text to fit available width");
+            _ = span.put("stopped at grapheme", grapheme_count)
+                .put("accumulated width", accumulated_width);
+            break;
+        }
+
+        accumulated_width += grapheme_width;
+        const glyph_id = try glyphs.intern(ctx.ops.allocator, grapheme_bytes);
+        try glyph_ids.append(glyph_id);
     }
-    if (gids.items.len == 0) return .{ .run = &[_]tty.GlyphId{}, .width_cols = 0 };
-    const run = try allocator.alloc(tty.GlyphId, gids.items.len);
-    std.mem.copyForwards(tty.GlyphId, run, gids.items);
-    const width_cols: usize = if (truncate_to_fit) acc_w else dw.strWidth(bytes);
-    return .{ .run = run, .width_cols = width_cols };
+
+    _ = span.put("processed graphemes", grapheme_count)
+        .put("final glyph count", glyph_ids.items.len)
+        .put("accumulated width", accumulated_width);
+
+    // Handle empty result
+    if (glyph_ids.items.len == 0) {
+        span.decision("Empty text result, returning empty glyph run");
+        return .{ .run = &[_]tty.GlyphId{}, .width_cols = 0 };
+    }
+
+    // Allocate and copy the final glyph run
+    const final_run = try ctx.ops.allocator.alloc(tty.GlyphId, glyph_ids.items.len);
+    std.mem.copyForwards(tty.GlyphId, final_run, glyph_ids.items);
+
+    // Calculate final width: use accumulated width if truncating, otherwise measure full text
+    const final_width_cols: usize = if (truncate_to_fit)
+        accumulated_width
+    else
+        ctx.unicode.monospacedTextWidth(text_bytes);
+
+    _ = span.put("final width cols", final_width_cols);
+    span.decision("Successfully built glyph run");
+
+    return .{ .run = final_run, .width_cols = final_width_cols };
 }
 
 fn emitTextGlyphRuns(
-    list: *PaintCommandBatch,
+    ctx: *PaintContext,
     document: *const dom.Dom,
     node_id: dom.DomNodeId,
     rect: layout.Rect,
     row: StyleRow,
     glyphs: *tty.GlyphTable,
-    g: *Graphemes,
-    dw: *DisplayWidth,
 ) !void {
-    if (!(rect.w > 0 and rect.h > 0)) return;
+    const span = ctx.trace.enter();
+    defer span.exit();
+    span.info("Emitting text glyph runs");
+    _ = span.put("rect", rect);
+
+    if (!(rect.w > 0 and rect.h > 0)) {
+        span.decision("Zero rect dimensions, no text to emit");
+        return;
+    }
+
     const slice = document.getTextSlice(node_id);
+    _ = span.put("text length", slice.len);
+
     const cb = computeContentBox(rect, row);
     const color = computeTextColor(document, node_id, row);
-    if (cb.rect.w == 0 or cb.rect.h == 0) return;
+    span.data("text-render").put("content box", cb.rect).put("text color", color).end();
+
+    if (cb.rect.w == 0 or cb.rect.h == 0) {
+        span.decision("Zero content box dimensions, no space for text");
+        return;
+    }
 
     var y_offset: usize = 0;
+    var total_lines_processed: usize = 0;
+    var total_glyph_runs_emitted: usize = 0;
 
     // First split by newlines
     var line_iter = std.mem.tokenizeScalar(u8, slice, '\n');
     while (line_iter.next()) |line| {
-        if (y_offset >= cb.rect.h) break;
+        if (y_offset >= cb.rect.h) {
+            span.decision("Reached content box height limit, stopping line processing");
+            break;
+        }
+
+        total_lines_processed += 1;
+
+        const line_span = ctx.trace.enter();
+        defer line_span.exit();
+        line_span.info("Processing text line");
+        _ = line_span.put("line number", total_lines_processed)
+            .put("line length", line.len)
+            .put("y offset", y_offset);
 
         // For each line, apply word wrapping if needed
         var line_start: usize = 0;
         var line_width: usize = 0;
         var last_break_bytes: ?usize = null;
-        var word_iter = Words.init(list.ops.allocator) catch unreachable;
-        defer word_iter.deinit(list.ops.allocator);
+        var word_iter = Words.init(ctx.ops.allocator) catch unreachable;
+        defer word_iter.deinit(ctx.ops.allocator);
         var witer = word_iter.iterator(line);
+        var wrapped_segments: usize = 0;
 
         while (witer.next()) |seg| {
             const bytes = seg.bytes(line);
-            const seg_w = dw.strWidth(bytes);
+            const seg_w = ctx.unicode.monospacedTextWidth(bytes);
+
             if (line_width + seg_w > cb.rect.w and line_width > 0) {
                 // Emit the current wrapped line
+                wrapped_segments += 1;
+                line_span.decision("Line width exceeded, emitting wrapped segment");
+                _ = line_span.put("wrapped segment", wrapped_segments)
+                    .put("current line width", line_width);
+
                 const line_bytes_end = last_break_bytes orelse seg.offset;
                 const line_bytes = line[line_start..line_bytes_end];
-                const shaped = try buildGlyphRun(list.ops.allocator, g, dw, glyphs, line_bytes, cb.rect.w, false);
+                const shaped = try buildGlyphRun(ctx, glyphs, line_bytes, cb.rect.w, false);
+
                 if (shaped.run.len > 0) {
                     const extra = computeJustifyOffset(cb.rect.w, shaped.width_cols, row.justify);
-                    try list.push(PaintOp{ .GlyphRun = .{
+                    _ = line_span.put("justify offset", extra);
+
+                    try ctx.push(PaintOp{ .GlyphRun = .{
                         .x = rect.x + cb.inset_left + extra,
                         .y = rect.y + cb.inset_top + y_offset,
                         .glyphs = shaped.run,
                         .color = color,
                     } });
+                    total_glyph_runs_emitted += 1;
                 }
+
                 y_offset += 1;
-                if (y_offset >= cb.rect.h) break;
+                if (y_offset >= cb.rect.h) {
+                    line_span.decision("Reached height limit during wrapping");
+                    break;
+                }
                 line_start = seg.offset;
                 line_width = seg_w;
                 last_break_bytes = seg.offset + seg.len;
@@ -371,74 +502,133 @@ fn emitTextGlyphRuns(
 
         // Emit the remainder of this line (after wrapping)
         if (line_start < line.len and y_offset < cb.rect.h) {
+            line_span.decision("Emitting final line segment");
+            _ = line_span.put("remaining text length", line.len - line_start);
+
             const line_bytes = line[line_start..];
-            const shaped = try buildGlyphRun(list.ops.allocator, g, dw, glyphs, line_bytes, cb.rect.w, true);
+            const shaped = try buildGlyphRun(ctx, glyphs, line_bytes, cb.rect.w, true);
+
             if (shaped.run.len > 0) {
                 const extra = computeJustifyOffset(cb.rect.w, shaped.width_cols, row.justify);
-                try list.push(PaintOp{ .GlyphRun = .{
+                try ctx.push(PaintOp{ .GlyphRun = .{
                     .x = rect.x + cb.inset_left + extra,
                     .y = rect.y + cb.inset_top + y_offset,
                     .glyphs = shaped.run,
                     .color = color,
                 } });
+                total_glyph_runs_emitted += 1;
             }
             y_offset += 1;
         }
+
+        _ = line_span.put("wrapped segments", wrapped_segments);
     }
+
+    _ = span.put("total lines processed", total_lines_processed)
+        .put("total glyph runs emitted", total_glyph_runs_emitted)
+        .put("final y offset", y_offset);
 }
 
 pub fn computePaintCommands(
-    list: *PaintCommandBatch,
+    ctx: *PaintContext,
     document: *const dom.Dom,
     tree: *const layout.BoxTree,
     glyphs: *tty.GlyphTable,
 ) !void {
+    const span = ctx.trace.enter();
+    defer span.exit();
+    span.info("Computing paint commands for display list");
+    _ = span.put("node count", tree.nodeCount())
+        .put("initial op count", ctx.ops.items.len);
+
     // Painting order follows CSS background, borders, then content (text). Stacking contexts are out of scope here.
-    var g = try Graphemes.init(list.ops.allocator);
-    defer g.deinit(list.ops.allocator);
-    var dw = try DisplayWidth.init(list.ops.allocator);
-    defer dw.deinit(list.ops.allocator);
+
+    var painted_nodes: usize = 0;
+    var skipped_nodes: usize = 0;
 
     var i: usize = 0;
     while (i < tree.nodeCount()) : (i += 1) {
         const h = tree.getNode(@as(u32, @intCast(i)));
         const row = document.getNodeStyle(h.data.dom_id);
-        
+        const node_kind = document.getNodeKind(h.data.dom_id);
+
+        var node_id_buf: [32]u8 = undefined;
+        const debug_id = document.getDebugIdOrDefault(h.data.dom_id, &node_id_buf);
+
+        const node_span = ctx.trace.enter();
+        defer node_span.exit();
+        node_span.info("Painting node");
+        _ = node_span.put("index", i)
+            .put("id", debug_id)
+            .put("kind", node_kind)
+            .put("original", h.data.rect);
+
         // Find scroll container parent and apply scroll offset
         var paint_rect = h.data.rect;
-        
+        var is_scrolled = false;
+
         // Check if this node has a scroll container parent
         if (h.getParentNode(tree)) |parent_node| {
             const parent_row = document.getNodeStyle(parent_node.data.dom_id);
-            
+
             if (parent_row.overflow_y == .scroll) {
+                is_scrolled = true;
+                const scroll_offset = parent_node.data.scroll_offset_y;
+                node_span.decision("Node is in scroll container, applying scroll offset");
+                _ = node_span.put("offset", scroll_offset);
+
                 // Apply scroll offset: move content up by scroll amount
-                if (paint_rect.y >= parent_node.data.scroll_offset_y) {
-                    paint_rect.y -= parent_node.data.scroll_offset_y;
+                if (paint_rect.y >= scroll_offset) {
+                    paint_rect.y -= scroll_offset;
+                    _ = node_span.put("adjusted", paint_rect);
                 } else {
                     // Content is scrolled out of view at the top
+                    node_span.decision("Content scrolled out of view at top, skipping");
+                    skipped_nodes += 1;
                     continue;
                 }
-                
+
                 // Set up clipping rectangle to viewport
                 const parent_content_rect = layout.computeInnerContentRect(parent_row, parent_node.data.rect);
-                
+                _ = node_span.put("viewport", parent_content_rect);
+
                 // Skip if entirely outside viewport
                 if (paint_rect.y >= parent_content_rect.y + parent_content_rect.h or
-                    paint_rect.y + paint_rect.h <= parent_content_rect.y) {
+                    paint_rect.y + paint_rect.h <= parent_content_rect.y)
+                {
+                    node_span.decision("Content outside viewport bounds, skipping");
+                    skipped_nodes += 1;
                     continue;
                 }
             }
         }
 
-        try emitGlyphTileFill(list, glyphs, paint_rect, row);
-        try emitBackgroundFillIfAny(list, paint_rect, row);
-        try emitBorderStrokeIfAny(list, paint_rect, row);
+        if (!is_scrolled) {
+            _ = node_span.put("adjusted", paint_rect);
+        }
 
-        if (document.getNodeKind(h.data.dom_id) == .text) {
-            try emitTextGlyphRuns(list, document, h.data.dom_id, paint_rect, row, glyphs, &g, &dw);
+        const ops_before = ctx.ops.items.len;
+
+        try emitGlyphTileFill(ctx, glyphs, paint_rect, row);
+        try emitBackgroundFillIfAny(ctx, paint_rect, row);
+        try emitBorderStrokeIfAny(ctx, paint_rect, row);
+
+        if (node_kind == .text) {
+            try emitTextGlyphRuns(ctx, document, h.data.dom_id, paint_rect, row, glyphs);
+        }
+
+        const ops_after = ctx.ops.items.len;
+        const ops_added = ops_after - ops_before;
+        _ = node_span.put("ops added", ops_added);
+
+        if (ops_added > 0) {
+            painted_nodes += 1;
         }
     }
+
+    _ = span.put("painted nodes", painted_nodes)
+        .put("skipped nodes", skipped_nodes)
+        .put("final op count", ctx.ops.items.len);
 }
 
 test "alpha: simple SrcOver blend" {
@@ -459,13 +649,16 @@ test "paint: stroke rect via display list (ascii)" {
     defer r.deinit(al);
     var glyphs = try tty.GlyphTable.init(al);
     defer glyphs.deinit();
-    var dl = PaintCommandBatch.init(al);
-    defer dl.deinit();
-    try dl.push(PaintOp{ .StrokeRect = .{ .x = 2, .y = 1, .w = 6, .h = 4, .color = rgba8(255, 255, 255, 255), .style = .line_light, .bg_color = rgba8(0, 0, 0, 255) } });
+    var unicode = try UnicodeData.init(al);
+    defer unicode.deinit(al);
+    const trace = Trace.init(false); // Disable tracing for tests
+    var ctx = PaintContext.init(al, &unicode, trace);
+    defer ctx.deinit();
+    try ctx.push(PaintOp{ .StrokeRect = .{ .x = 2, .y = 1, .w = 6, .h = 4, .color = rgba8(255, 255, 255, 255), .style = .line_light, .bg_color = rgba8(0, 0, 0, 255) } });
     // Force ASCII fallback for this test
     tty.setUseUnicodeBoxes(false);
     defer tty.setUseUnicodeBoxes(true);
-    try tty.rasterizeDisplayList(&r, al, &glyphs, &dl);
+    try tty.rasterizeDisplayList(&r, al, &glyphs, &ctx);
     const got = try r.toStringAlloc(al, &glyphs);
     defer al.free(got);
     const want =
@@ -495,26 +688,26 @@ test "text color inheritance: parent element color applies to child text glyph r
     defer tree.deinit();
 
     // Perform layout so text node gets a non-zero rect
-    var display_width = try @import("DisplayWidth").init(al);
-    defer display_width.deinit(al);
-    try layout.computeFlexLayout(
-        al,
+    var unicode = try UnicodeData.init(al);
+    defer unicode.deinit(al);
+    const trace = Trace.init(false); // Disable tracing for tests
+    var layout_engine = @import("layout.zig").init(al, &unicode, trace);
+    try layout_engine.computeFlexLayout(
         &tree,
         &d,
         tree.getNodeMut(0),
         .{ .x = 0, .y = 0, .w = 10, .h = 3 },
-        &display_width,
     );
 
     var glyphs = try tty.GlyphTable.init(al);
     defer glyphs.deinit();
-    var dl = PaintCommandBatch.init(al);
-    defer dl.deinit();
-    try computePaintCommands(&dl, &d, &tree, &glyphs);
+    var ctx = PaintContext.init(al, &unicode, trace);
+    defer ctx.deinit();
+    try computePaintCommands(&ctx, &d, &tree, &glyphs);
 
     var found = false;
     var got: Rgba8 = undefined;
-    for (dl.ops.items) |op| switch (op) {
+    for (ctx.ops.items) |op| switch (op) {
         .GlyphRun => |gr| {
             got = gr.color;
             found = true;

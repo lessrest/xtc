@@ -61,10 +61,11 @@
 
 const std = @import("std");
 const DisplayWidth = @import("lib.zig").DisplayWidth;
+const UnicodeData = @import("paint.zig").UnicodeData;
 const Dom = @import("dom.zig").Dom;
 const DomNodeId = @import("dom.zig").DomNodeId;
 
-pub fn intrinsicSize(dom_: *const Dom, id: DomNodeId, max_w: usize, max_h: usize, dw: *DisplayWidth) [2]usize {
+pub fn intrinsicSize(dom_: *const Dom, id: DomNodeId, max_w: usize, max_h: usize, unicode: *const UnicodeData) [2]usize {
     const items = dom_.headers.slice();
     const kind = items.items(.kind)[@as(usize, @intCast(id))];
     const sid = items.items(.style_id)[@as(usize, @intCast(id))];
@@ -89,7 +90,7 @@ pub fn intrinsicSize(dom_: *const Dom, id: DomNodeId, max_w: usize, max_h: usize
     if (w == 0 or h == 0) {
         if (kind == .text) {
             const slice = dom_.getTextSlice(id);
-            const text_cols: usize = dw.strWidth(slice);
+            const text_cols: usize = unicode.monospacedTextWidth(slice);
             const clamp_w: usize = if (max_w == 0) 0 else @min(max_w, text_cols);
 
             const old_h = h;

@@ -8,6 +8,7 @@ const layout = @import("layout.zig");
 const dom = @import("dom.zig");
 const paint = @import("paint.zig");
 const ansi = @import("ansi.zig");
+const Trace = @import("Trace.zig");
 
 // External dependencies
 const Graphemes = @import("Graphemes");
@@ -20,6 +21,12 @@ const Dom = dom.Dom;
 const DomNodeId = dom.DomNodeId;
 
 pub fn run(allocator: std.mem.Allocator) !void {
+    // Initialize application-level trace that spans the entire live session
+    const app_trace = Trace.init(true);
+    const session_trace = app_trace.enter();
+    defer session_trace.exit();
+    session_trace.info("Starting XTC live session");
+    
     var raw = try RawMode.enable(posix.STDIN_FILENO);
     defer raw.disable() catch {};
 
@@ -31,8 +38,8 @@ pub fn run(allocator: std.mem.Allocator) !void {
         restore_ansi.restoreTerminal() catch {};
     }
 
-    var display_width = try DisplayWidth.init(allocator);
-    defer display_width.deinit(allocator);
+    var unicode = try paint.UnicodeData.init(allocator);
+    defer unicode.deinit(allocator);
 
     var document = Dom.init(allocator);
     defer document.deinit();
@@ -76,7 +83,7 @@ pub fn run(allocator: std.mem.Allocator) !void {
 
     var ctx = RenderCtx{
         .allocator = allocator,
-        .display_width = &display_width,
+        .unicode = &unicode,
         .width = 80,
         .height = 24,
         .dom = document,
@@ -132,17 +139,30 @@ pub fn run(allocator: std.mem.Allocator) !void {
     defer wren_vm.deinit();
 
     while (true) {
-        const maybe_line = try editor.prompt(&ctx);
+        const maybe_line = try editor.prompt(&ctx, session_trace);
         if (maybe_line == null) break;
         const line = maybe_line.?;
         defer allocator.free(line);
+        
+        // Create a command trace for this iteration
+        const command_trace = session_trace.enter();
+        defer command_trace.exit();
+        command_trace.info("Processing command");
+        command_trace.data("command-input").put("command", line).end();
+        
         // Append prompt and code
         try out_log.appendSlice("> ");
         try out_log.appendSlice(line);
         try out_log.appendSlice("\n");
 
         // Evaluate via Wren VM
+        const vm_trace = command_trace.enter();
+        defer vm_trace.exit();
+        vm_trace.info("Evaluating Wren script");
+        
         wren_vm.interpret("main", line) catch |err| {
+            vm_trace.decision("Script execution failed");
+            vm_trace.data("script-error").put("error", @errorName(err)).end();
             switch (err) {
                 error.CompileError => try out_log.appendSlice("// Compile error\n"),
                 error.RuntimeError => try out_log.appendSlice("// Runtime error\n"),
@@ -152,13 +172,13 @@ pub fn run(allocator: std.mem.Allocator) !void {
 
         // Update output area and redraw only once
         try setDomText(&ctx.dom, ctx.output_text_id, out_log.items);
-        try renderDom(&ctx);
+        try renderDom(&ctx, command_trace);
     }
 }
 
 const RenderCtx = struct {
     allocator: std.mem.Allocator,
-    display_width: *DisplayWidth,
+    unicode: *paint.UnicodeData,
     width: usize = 80,
     height: usize = 24,
     dom: Dom,
@@ -209,36 +229,38 @@ fn ensureDoubleRaster(ctx: *RenderCtx) !struct { front: *Raster, back: *Raster }
 const pretty = @import("pretty");
 
 
-fn renderDom(ctx: *RenderCtx) !void {
+fn renderDom(ctx: *RenderCtx, parent_trace: Trace) !void {
     const al = ctx.allocator;
+
+    // Create render trace as child of parent (session or command)
+    const render_trace = parent_trace.enter();
+    defer render_trace.exit();
+    render_trace.info("Live rendering DOM");
+    render_trace.data("live-render-params").put("width", ctx.width).put("height", ctx.height).end();
 
     var tree = try layout.allocateBoxTreeFromDOM(al, &ctx.dom, ctx.root_id);
     defer tree.deinit();
 
-    try layout.computeFlexLayout(
-        al,
+    var layout_engine = layout.init(al, ctx.unicode, render_trace);
+    try layout_engine.computeFlexLayout(
         &tree,
         &ctx.dom,
         tree.getNodeMut(0),
         .{ .x = 0, .y = 0, .w = ctx.width, .h = ctx.height },
-        ctx.display_width,
     );
 
-    var dl = paint.PaintCommandBatch.init(al);
-    defer dl.deinit();
+    var paint_ctx = paint.PaintContext.init(al, ctx.unicode, render_trace);
+    defer paint_ctx.deinit();
     var glyphs = try tty.GlyphTable.init(al);
     defer glyphs.deinit();
 
-    try paint.computePaintCommands(&dl, &ctx.dom, &tree, &glyphs);
+    try paint.computePaintCommands(&paint_ctx, &ctx.dom, &tree, &glyphs);
 
-    // Log paint commands to file if log is enabled
-    if (ctx.log) |log_file| {
-        try dl.logToFile(log_file, &glyphs);
-    }
+    // Paint commands are now logged via the tracing system
 
     // Double-buffered raster: render into back, diff against front, then swap
     const rb = try ensureDoubleRaster(ctx);
-    try tty.rasterizeDisplayList(rb.back, al, &glyphs, &dl);
+    try tty.rasterizeDisplayList(rb.back, al, &glyphs, &paint_ctx);
 
     // Use simple non-diffing raster output
     try writeFullRaster(rb.back, &glyphs);
@@ -483,10 +505,26 @@ pub const LineEditor = struct {
         }
     }
 
-    pub fn prompt(self: *LineEditor, ctx: *RenderCtx) !?[]u8 {
+    fn renderForInputEvent(self: *LineEditor, ctx: *RenderCtx, parent_trace: Trace, event_name: []const u8) !void {
+        const input_trace = parent_trace.enter();
+        defer input_trace.exit();
+        input_trace.info("Input event triggered render");
+        input_trace.data("input-event").put("event", event_name).end();
+        
         try setDomText(&ctx.dom, ctx.text_id, self.buffer.items);
         updateTerminalSize(ctx);
-        try renderDom(ctx);
+        try renderDom(ctx, input_trace);
+    }
+
+    pub fn prompt(self: *LineEditor, ctx: *RenderCtx, session_trace: Trace) !?[]u8 {
+        // Initial render when entering prompt
+        const prompt_trace = session_trace.enter();
+        defer prompt_trace.exit();
+        prompt_trace.info("Interactive prompt ready");
+        
+        try setDomText(&ctx.dom, ctx.text_id, self.buffer.items);
+        updateTerminalSize(ctx);
+        try renderDom(ctx, prompt_trace);
 
         var in_buf: [64]u8 = undefined;
         while (true) {
@@ -505,8 +543,7 @@ pub const LineEditor = struct {
                         const line = try self.allocator.dupe(u8, self.buffer.items);
                         try self.pushHistory(line);
                         self.clearBuffer();
-                        try setDomText(&ctx.dom, ctx.text_id, self.buffer.items);
-                        try renderDom(ctx);
+                        try self.renderForInputEvent(ctx, prompt_trace, "submit");
                         return line;
                     },
                     // Ctrl-D: EOF (only if line empty)
@@ -528,9 +565,7 @@ pub const LineEditor = struct {
                     // Ctrl-C: cancel line
                     0x03 => {
                         self.clearBuffer();
-                        try setDomText(&ctx.dom, ctx.text_id, self.buffer.items);
-                        updateTerminalSize(ctx);
-                        try renderDom(ctx);
+                        try self.renderForInputEvent(ctx, prompt_trace, "cancel");
                         break; // continue outer read loop
                     },
                     // Backspace or Ctrl-H
@@ -565,9 +600,7 @@ pub const LineEditor = struct {
                     },
                 }
             }
-            try setDomText(&ctx.dom, ctx.text_id, self.buffer.items);
-            updateTerminalSize(ctx);
-            try renderDom(ctx);
+            try self.renderForInputEvent(ctx, prompt_trace, "key input");
         }
     }
 };

@@ -5,6 +5,7 @@ pub usingnamespace @import("tailwind.zig");
 pub usingnamespace @import("paint.zig");
 pub usingnamespace @import("tty.zig");
 pub usingnamespace @import("xml.zig");
+pub usingnamespace @import("FormatTrace.zig");
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -17,6 +18,8 @@ const paint = @import("paint.zig");
 const tty = @import("tty.zig");
 const xml = @import("xml.zig");
 const xmlparse = @import("xmlparse.zig");
+const Trace = @import("Trace.zig");
+pub const FormatTrace = @import("FormatTrace.zig");
 
 pub const DisplayWidth = @import("DisplayWidth");
 pub const Graphemes = @import("Graphemes");
@@ -68,32 +71,35 @@ pub fn renderXmlAscii(
     var tree = try allocateBoxTreeFromDOMAutoRoot(al, &document);
     defer tree.deinit();
 
-    var dw = try DisplayWidth.init(al);
-    defer dw.deinit(al);
+    var unicode = try paint.UnicodeData.init(al);
+    defer unicode.deinit(al);
 
-    try layout.computeFlexLayout(
-        al,
+    // Initialize root tracer for the entire rendering pipeline
+    const root_trace = Trace.init(true);
+    const render_trace = root_trace.enter();
+    defer render_trace.exit();
+    render_trace.info("Rendering XML to ASCII");
+    render_trace.data("render-params").put("width", width).put("height", height).end();
+
+    var layout_engine = layout.init(al, &unicode, render_trace);
+    try layout_engine.computeFlexLayout(
         &tree,
         &document,
         tree.getNodeMut(0),
         .{ .x = 0, .y = 0, .w = width, .h = height },
-        &dw,
     );
 
     var r = try tty.Raster.init(al, width, height);
     defer r.deinit(al);
     var glyphs = try tty.GlyphTable.init(al);
     defer glyphs.deinit();
-    var dl = paint.PaintCommandBatch.init(al);
-    defer dl.deinit();
-    try paint.computePaintCommands(&dl, &document, &tree, &glyphs);
-    
-    // Log paint commands to file if log is enabled
-    if (@import("main.zig").g_log_file) |log_file| {
-        dl.logToFile(log_file, &glyphs) catch {};
-    }
-    
-    try tty.rasterizeDisplayList(&r, al, &glyphs, &dl);
+    var ctx = paint.PaintContext.init(al, &unicode, render_trace);
+    defer ctx.deinit();
+    try paint.computePaintCommands(&ctx, &document, &tree, &glyphs);
+
+    // Paint commands are now logged via the tracing system
+
+    try tty.rasterizeDisplayList(&r, al, &glyphs, &ctx);
     return try r.toStringAlloc(al, &glyphs);
 }
 
