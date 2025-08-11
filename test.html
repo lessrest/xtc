@@ -9,14 +9,14 @@
       var shades = ["300", "400", "500", "600", "700"]
 
       for (shade in shades) {
-      var row = document.createElement("flex grow-1 flex-row gap-1 items-stretch")
+        var row = document.createElement("flex grow-1 flex-row gap-1 items-stretch")
 
-      for (color in colors) {
-      var box = document.createElement("grow-1 bg-" + color + "-" + shade)
-      row.append(box)
-      }
+        for (color in colors) {
+          var box = document.createElement("grow-1 bg-" + color + "-" + shade)
+          row.append(box)
+        }
 
-      self.append(row)
+        self.append(row)
       }
     </script>
 

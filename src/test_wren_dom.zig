@@ -16,7 +16,7 @@ test "xml <script> executes and manipulates DOM" {
     const ScriptContext = struct {
         const SC = @This();
         allocator: std.mem.Allocator,
-        out: *std.ArrayList(u8),
+        output: *std.ArrayList(u8),
         document: *Dom,
 
         pub const Modules = struct {
@@ -42,13 +42,13 @@ test "xml <script> executes and manipulates DOM" {
         };
 
         pub fn write(self: *@This(), text: []const u8) void {
-            self.out.appendSlice(text) catch {};
+            self.output.appendSlice(text) catch {};
         }
-        pub fn onError(self: *@This(), _: wren.WrenErrorType, module: []const u8, line: c_int, message: []const u8) void {
+        pub fn onError(self: *@This(), _: wren.c.ErrorType, module: []const u8, line: c_int, message: []const u8) void {
             _ = line;
             _ = module;
             std.debug.print("onError: {s}\n", .{message});
-            self.out.appendSlice(message) catch {};
+            self.output.appendSlice(message) catch {};
         }
     };
 
@@ -58,7 +58,7 @@ test "xml <script> executes and manipulates DOM" {
     var doc = Dom.init(al);
     defer doc.deinit();
 
-    var ctx = ScriptContext{ .allocator = al, .out = &output, .document = &doc };
+    var ctx = ScriptContext{ .allocator = al, .output = &output, .document = &doc };
     var vm = try wren.create(ScriptContext, &ctx);
     defer vm.deinit();
 
