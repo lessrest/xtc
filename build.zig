@@ -47,6 +47,10 @@ pub fn build(b: *std.Build) void {
             "-Wall",
             "-Wextra",
             "-Wno-unused-parameter",
+            "-g",
+            "-O0",
+            "-fno-omit-frame-pointer",
+            "-fno-stack-protector",
         },
     });
     // math is required

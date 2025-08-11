@@ -127,9 +127,12 @@ zig build test
 - Data groups (created via `span.data("label").put().put().end()`) are displayed with 📊 icons
 - Trace spans show the call hierarchy with ▶ markers and decisions with ⚡ markers
 
-### Modifying the Prolog Integration
-- Trealla C sources are in `deps/trealla/`
-- Zig wrapper in `src/trealla.zig`
+### Wren Scripting Integration
+- **Wren VM**: Embedded scripting language for dynamic behavior
+- Wren sources are in `deps/wren/`
+- Zig wrapper in `src/wren.zig` and `src/wren_runner.zig`
+- DOM manipulation via `src/wren_xml.zig`
+- Foreign function bindings in `src/wren_wrappers/`
 - Static build configuration in `build.zig`
 
 ## Dependencies
@@ -137,9 +140,7 @@ zig build test
 - **Zig 0.14.x** (required, see `.minimum_zig_version`)
 - **zg** (0.14.1): Unicode text processing
 - **pretty**: Test utilities
-- **Trealla Prolog**: Embedded interpreter (vendored in `deps/trealla/`)
-
-Run `git submodule update --init --recursive` if Trealla is missing.
+- **Wren**: Embedded scripting language (vendored in `deps/wren/`)
 
 ## License Notes
 

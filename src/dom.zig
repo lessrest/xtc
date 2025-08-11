@@ -41,6 +41,10 @@ pub const Dom = struct {
         self.headers.deinit(self.alloc);
         self.styles.deinit();
         self.text_arena.deinit();
+        var it = self.debug_ids.iterator();
+        while (it.next()) |kv| {
+            self.alloc.free(kv.value_ptr.*);
+        }
         self.debug_ids.deinit();
         self.* = undefined;
     }

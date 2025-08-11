@@ -5,6 +5,9 @@ const live = @import("live.zig");
 const FormatTrace = @import("FormatTrace.zig");
 const tty = @import("tty.zig");
 const WrenRunner = @import("wren_runner.zig");
+const dom = @import("dom.zig");
+const xmlparse = @import("xmlparse.zig");
+const wren_xml = @import("wren_xml.zig");
 
 // Global logging options using std.log
 pub const std_options: std.Options = .{
@@ -192,9 +195,49 @@ pub fn main() !void {
     if (unicode_boxes) |on| tty.setUseUnicodeBoxes(on);
 
     if (xml_input) |xml| {
-        const out = try lib.renderXmlAscii(al, xml, out_width, out_height);
-        defer al.free(out);
-        _ = try std.io.getStdOut().write(out);
+        // Parse XML to check for <script> tags
+        var reader = std.io.fixedBufferStream(xml);
+        var xml_doc = try xmlparse.parse(al, "inline", reader.reader());
+        defer xml_doc.deinit();
+        
+        // Check if there are any <script> elements
+        const has_scripts = blk: {
+            const recurse = struct {
+                fn hasScriptTag(el: xmlparse.Element) bool {
+                    if (std.mem.eql(u8, el.tag_name.slice(), "script")) return true;
+                    if (el.content) |_| {
+                        const kids = el.children();
+                        for (kids) |kid| {
+                            if (kid.v() == .element) {
+                                if (hasScriptTag(kid.v().element)) return true;
+                            }
+                        }
+                    }
+                    return false;
+                }
+            };
+            break :blk recurse.hasScriptTag(xml_doc.root);
+        };
+        
+        if (has_scripts) {
+            // Use Wren integration for XML with scripts
+            var document = dom.Dom.init(al);
+            defer document.deinit();
+            
+            var runner = try WrenRunner.init(al, &document);
+            defer runner.deinit();
+            
+            // Build DOM and execute scripts
+            try wren_xml.buildDomIntoAndRunScripts(WrenRunner.ScriptContext, al, &xml_doc, &runner.vm, &document);
+            
+            // Render the resulting DOM
+            try lib.renderDocumentToWriter(al, &document, std.io.getStdOut().writer(), out_width, out_height);
+        } else {
+            // No scripts, use simple rendering
+            const out = try lib.renderXmlAscii(al, xml, out_width, out_height);
+            defer al.free(out);
+            _ = try std.io.getStdOut().write(out);
+        }
         return;
     }
 
@@ -203,10 +246,17 @@ pub fn main() !void {
         const script_content = if (std.fs.cwd().readFileAlloc(al, script_input, 1024 * 1024)) |content| content else |_| script_input;
         defer if (script_content.ptr != script_input.ptr) al.free(script_content);
 
-        var runner = try WrenRunner.init(al);
+        var document = dom.Dom.init(al);
+        var runner = try WrenRunner.init(al, &document);
         defer runner.deinit();
 
         runner.runScript(script_content) catch |err| {
+            // Print output to stdout
+            const output = runner.getOutput();
+            if (output.len > 0) {
+                _ = try std.io.getStdOut().write(output);
+            }
+
             try std.io.getStdErr().writer().print("Wren script error: {}\n", .{err});
             std.process.exit(1);
         };

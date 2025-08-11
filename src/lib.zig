@@ -7,6 +7,10 @@ pub usingnamespace @import("tty.zig");
 pub usingnamespace @import("xml.zig");
 pub usingnamespace @import("FormatTrace.zig");
 
+comptime {
+    _ = @import("test_wren_dom.zig");
+}
+
 const std = @import("std");
 const builtin = @import("builtin");
 

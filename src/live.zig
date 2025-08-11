@@ -116,16 +116,15 @@ pub fn run(allocator: std.mem.Allocator) !void {
 
         pub fn onError(self: *@This(), error_type: wren.WrenErrorType, module: []const u8, line: c_int, message: []const u8) void {
             switch (error_type) {
-                wren.WREN_ERROR_COMPILE => {
+                .compile => {
                     std.fmt.format(self.out.writer(), "[{s} line {d}] Compile error: {s}\n", .{ module, line, message }) catch @panic("appendSlice");
                 },
-                wren.WREN_ERROR_RUNTIME => {
+                .runtime => {
                     std.fmt.format(self.out.writer(), "[{s} line {d}] Runtime error: {s}\n", .{ module, line, message }) catch @panic("appendSlice");
                 },
-                wren.WREN_ERROR_STACK_TRACE => {
+                .stack_trace => {
                     std.fmt.format(self.out.writer(), "  [{s} line {d}] in {s}\n", .{ module, line, message }) catch @panic("appendSlice");
                 },
-                else => {},
             }
         }
     };

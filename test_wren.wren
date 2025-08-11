@@ -1,13 +1,10 @@
-// Simple test script to verify Wren is working
 System.print("Hello from Wren!")
 System.print("Math test: 2 + 3 = %(2 + 3)")
 
-// Test the DOM module if available
-import "dom" for DOM
+import "dom" for Document
 
-//System.print("Creating DOM elements...")
-//var div = DOM.createElement("flex bg-blue-500")
-//var text = DOM.createText("Hello DOM!")
-
-//System.print("Created div: %(div)")
-//System.print("Created text: %(text)")
+var doc = Document.new()
+var el = doc.createElement("text-blue-400 bg-slate-800")
+var txt = doc.createText("hello world")
+el.append(txt)
+doc.root.append(el)

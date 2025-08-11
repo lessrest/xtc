@@ -47,7 +47,11 @@ pub const WrenConfiguration = extern struct {
 pub const WREN_ERROR_COMPILE: c_int = 0;
 pub const WREN_ERROR_RUNTIME: c_int = 1;
 pub const WREN_ERROR_STACK_TRACE: c_int = 2;
-pub const WrenErrorType = c_uint;
+pub const WrenErrorType = enum(c_int) {
+    compile = WREN_ERROR_COMPILE,
+    runtime = WREN_ERROR_RUNTIME,
+    stack_trace = WREN_ERROR_STACK_TRACE,
+};
 
 // Result types
 pub const WREN_RESULT_SUCCESS: c_int = 0;
@@ -230,26 +234,39 @@ fn getForeignFunction(comptime T: type, comptime module_name: []const u8, compti
                 var len: c_int = 0;
                 const ptr = wrenGetSlotBytes(vm, slot_index, &len);
                 return ptr[0..@intCast(len)];
-            } else if (P == f64) {
-                return wrenGetSlotDouble(vm, slot_index);
-            } else if (P == bool) {
-                return wrenGetSlotBool(vm, slot_index);
-            } else {
-                @compileError("Unsupported parameter type for Wren foreign method");
+            }
+            if (P == f64) return wrenGetSlotDouble(vm, slot_index);
+            if (P == bool) return wrenGetSlotBool(vm, slot_index);
+
+            switch (@typeInfo(P)) {
+                .int => {
+                    const n = wrenGetSlotDouble(vm, slot_index);
+                    return @as(P, @intFromFloat(n));
+                },
+                else => @compileError("Unsupported parameter type for Wren foreign method"),
             }
         }
 
         inline fn writeReturn(vm: *WrenVM, comptime R: type, value: R) void {
-            if (R == void) {
-                // nothing to write
-            } else if (R == []const u8) {
+            if (R == void) return;
+            if (R == []const u8) {
                 wrenSetSlotBytes(vm, 0, value.ptr, value.len);
-            } else if (R == f64) {
+                return;
+            }
+            if (R == f64) {
                 wrenSetSlotDouble(vm, 0, value);
-            } else if (R == bool) {
+                return;
+            }
+            if (R == bool) {
                 wrenSetSlotBool(vm, 0, value);
-            } else {
-                @compileError("Unsupported return type for Wren foreign method");
+                return;
+            }
+            switch (@typeInfo(R)) {
+                .int => {
+                    const d: f64 = @floatFromInt(value);
+                    wrenSetSlotDouble(vm, 0, d);
+                },
+                else => @compileError("Unsupported return type for Wren foreign method"),
             }
         }
 
@@ -505,6 +522,100 @@ pub fn VM(comptime UserData: type) type {
             }
         }
 
+        fn setValueSlot(vm: *WrenVM, slot: c_int, value: anytype) void {
+            const T = @TypeOf(value);
+            switch (@typeInfo(T)) {
+                .pointer => |p| {
+                    if (p.size == .slice and p.child == u8) {
+                        wrenSetSlotBytes(vm, slot, value.ptr, value.len);
+                        return;
+                    }
+                    @panic(@typeName(T));
+                },
+                .int => {
+                    const d: f64 = @floatFromInt(value);
+                    wrenSetSlotDouble(vm, slot, d);
+                    return;
+                },
+                .float => {
+                    const d: f64 = if (@TypeOf(value) == f64) value else @as(f64, value);
+                    wrenSetSlotDouble(vm, slot, d);
+                    return;
+                },
+                .bool => {
+                    wrenSetSlotBool(vm, slot, value);
+                    return;
+                },
+                else => @panic(@typeName(T)),
+            }
+        }
+
+        pub fn callStatic(self: *Self, module: []const u8, class_name: []const u8, signature: []const u8, args: anytype) !void {
+            const module_z = try self.allocator.dupeZ(u8, module);
+            defer self.allocator.free(module_z);
+            const class_z = try self.allocator.dupeZ(u8, class_name);
+            defer self.allocator.free(class_z);
+            const sig_z = try self.allocator.dupeZ(u8, signature);
+            defer self.allocator.free(sig_z);
+
+            const arg_types = @typeInfo(@TypeOf(args)).@"struct".fields;
+            const arg_count: c_int = @intCast(@min(arg_types.len, std.math.maxInt(c_int)));
+            wrenEnsureSlots(self.ptr, arg_count + 1);
+            wrenGetVariable(self.ptr, module_z, class_z, 0);
+
+            var i: c_int = 1;
+            inline for (arg_types) |a| {
+                const arg_name = a.name;
+                const arg_value = @field(args, arg_name);
+                setValueSlot(self.ptr, i, arg_value);
+                i += 1;
+            }
+
+            const handle = wrenMakeCallHandle(self.ptr, sig_z) orelse return error.CallHandleCreateFailed;
+            defer wrenReleaseHandle(self.ptr, handle);
+            const result = wrenCall(self.ptr, handle);
+            switch (result) {
+                WREN_RESULT_SUCCESS => {},
+                WREN_RESULT_COMPILE_ERROR => return error.CompileError,
+                WREN_RESULT_RUNTIME_ERROR => return error.RuntimeError,
+                else => return error.UnknownError,
+            }
+        }
+
+        pub fn callStaticGetNumber(self: *Self, module: []const u8, class_name: []const u8, signature: []const u8, args: anytype) !f64 {
+            const module_z = try self.allocator.dupeZ(u8, module);
+            defer self.allocator.free(module_z);
+            const class_z = try self.allocator.dupeZ(u8, class_name);
+            defer self.allocator.free(class_z);
+            const sig_z = try self.allocator.dupeZ(u8, signature);
+            defer self.allocator.free(sig_z);
+
+            const arg_types = @typeInfo(@TypeOf(args)).@"struct".fields;
+            const arg_count: c_int = @intCast(@min(arg_types.len, std.math.maxInt(c_int)));
+            wrenEnsureSlots(self.ptr, arg_count + 1);
+            wrenGetVariable(self.ptr, module_z, class_z, 0);
+
+            var i: c_int = 0;
+            inline for (arg_types, 0..) |a, idx| {
+                _ = idx;
+                const arg_name = a.name;
+                const arg_value = @field(args, arg_name);
+                setValueSlot(self.ptr, i, arg_value);
+                i += 1;
+            }
+
+            const handle = wrenMakeCallHandle(self.ptr, sig_z) orelse return error.CallHandleCreateFailed;
+            defer wrenReleaseHandle(self.ptr, handle);
+            const result = wrenCall(self.ptr, handle);
+            switch (result) {
+                WREN_RESULT_SUCCESS => {},
+                WREN_RESULT_COMPILE_ERROR => return error.CompileError,
+                WREN_RESULT_RUNTIME_ERROR => return error.RuntimeError,
+                else => return error.UnknownError,
+            }
+            return wrenGetSlotDouble(self.ptr, 0);
+        }
+
         fn reallocateFn(memory: ?*anyopaque, new_size: usize, user_data_ptr: *anyopaque) callconv(.c) ?*anyopaque {
             const user_data: *UserData = @ptrCast(@alignCast(user_data_ptr));
             const allocator = user_data.allocator;
@@ -620,19 +731,21 @@ pub fn eval(allocator: std.mem.Allocator, source: []const u8) ![]u8 {
         allocator: std.mem.Allocator,
         output: *std.ArrayList(u8),
 
+        pub const Modules = struct {};
+
         pub fn write(self: *@This(), text: []const u8) void {
             self.output.appendSlice(text) catch {};
         }
 
         pub fn onError(self: *@This(), error_type: WrenErrorType, module: []const u8, line: c_int, message: []const u8) void {
             switch (error_type) {
-                WREN_ERROR_COMPILE => {
+                .compile => {
                     self.output.appendSlice("[Compile error]") catch {};
                 },
-                WREN_ERROR_RUNTIME => {
+                .runtime => {
                     self.output.appendSlice("[Runtime error]") catch {};
                 },
-                WREN_ERROR_STACK_TRACE => {
+                .stack_trace => {
                     self.output.appendSlice("[Stack trace]") catch {};
                 },
             }
