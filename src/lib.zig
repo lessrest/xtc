@@ -103,6 +103,34 @@ pub fn renderXmlAscii(
     return try r.toStringAlloc(al, &glyphs);
 }
 
+pub fn renderDocumentToWriter(
+    al: std.mem.Allocator,
+    document: *const Dom,
+    writer: anytype,
+    width: usize,
+    height: usize,
+) !void {
+    var r = try tty.Raster.init(al, width, height);
+    defer r.deinit(al);
+    var glyphs = try tty.GlyphTable.init(al);
+    defer glyphs.deinit();
+    var unicode = try paint.UnicodeData.init(al);
+    defer unicode.deinit(al);
+    const root_trace = Trace.init(true);
+    const render_trace = root_trace.enter();
+    defer render_trace.exit();
+    render_trace.info("Rendering DOM");
+    render_trace.data("render-params").put("width", width).put("height", height).end();
+    var ctx = paint.PaintContext.init(al, &unicode, render_trace);
+    defer ctx.deinit();
+    var tree = try allocateBoxTreeFromDOMAutoRoot(al, document);
+    defer tree.deinit();
+
+    try paint.computePaintCommands(&ctx, document, &tree, &glyphs);
+    try tty.rasterizeDisplayList(&r, al, &glyphs, &ctx);
+    try r.writeToWriter(writer, &glyphs);
+}
+
 fn expectXmlAscii(xml_input: []const u8, width: usize, height: usize, want: []const u8) !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();

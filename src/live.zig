@@ -26,7 +26,7 @@ pub fn run(allocator: std.mem.Allocator) !void {
     const session_trace = app_trace.enter();
     defer session_trace.exit();
     session_trace.info("Starting XTC live session");
-    
+
     var raw = try RawMode.enable(posix.STDIN_FILENO);
     defer raw.disable() catch {};
 
@@ -48,17 +48,17 @@ pub fn run(allocator: std.mem.Allocator) !void {
         "flex flex-col bg-glyph-[.] items-center",
     );
     try document.setDebugId(root_id, "root");
-    
+
     const container_id = try document.addElement(
         "flex flex-col grow-1 w-80 items-stretch border border-blue-200 bg-yellow-700",
     );
     try document.setDebugId(container_id, "container");
-    
+
     const wren_output_id = try document.addElement(
         "px-2 grow-1 bg-green-400 text-slate-800 overflow-y-scroll",
     );
     try document.setDebugId(wren_output_id, "wren-output");
-    
+
     const child_id = try document.addElement(
         "px-2 flex items-center grow-0 h-6 bg-slate-700 text-slate-200",
     );
@@ -66,13 +66,13 @@ pub fn run(allocator: std.mem.Allocator) !void {
 
     const text_id = try document.addText("foo");
     try document.setDebugId(text_id, "input-text");
-    
+
     const output_text_id = try document.addText("wren\n");
     try document.setDebugId(output_text_id, "output-text");
-    
+
     const prompt_id = try document.addText("» ");
     try document.setDebugId(prompt_id, "prompt");
-    
+
     document.appendChild(child_id, prompt_id);
     document.appendChild(child_id, text_id);
 
@@ -105,6 +105,9 @@ pub fn run(allocator: std.mem.Allocator) !void {
     const ScriptContext = struct {
         allocator: std.mem.Allocator,
         out: *std.ArrayList(u8),
+        dom: *Dom,
+
+        pub const Modules = struct {};
 
         pub fn write(self: *@This(), text: []const u8) void {
             self.out.appendSlice(text) catch @panic("appendSlice");
@@ -134,6 +137,7 @@ pub fn run(allocator: std.mem.Allocator) !void {
     var script_context = ScriptContext{
         .out = &out_log,
         .allocator = allocator,
+        .dom = &document,
     };
     var wren_vm = try wren.create(ScriptContext, &script_context);
     defer wren_vm.deinit();
@@ -143,13 +147,13 @@ pub fn run(allocator: std.mem.Allocator) !void {
         if (maybe_line == null) break;
         const line = maybe_line.?;
         defer allocator.free(line);
-        
+
         // Create a command trace for this iteration
         const command_trace = session_trace.enter();
         defer command_trace.exit();
         command_trace.info("Processing command");
         command_trace.data("command-input").put("command", line).end();
-        
+
         // Append prompt and code
         try out_log.appendSlice("> ");
         try out_log.appendSlice(line);
@@ -159,7 +163,7 @@ pub fn run(allocator: std.mem.Allocator) !void {
         const vm_trace = command_trace.enter();
         defer vm_trace.exit();
         vm_trace.info("Evaluating Wren script");
-        
+
         wren_vm.interpret("main", line) catch |err| {
             vm_trace.decision("Script execution failed");
             vm_trace.data("script-error").put("error", @errorName(err)).end();
@@ -227,7 +231,6 @@ fn ensureDoubleRaster(ctx: *RenderCtx) !struct { front: *Raster, back: *Raster }
 }
 
 const pretty = @import("pretty");
-
 
 fn renderDom(ctx: *RenderCtx, parent_trace: Trace) !void {
     const al = ctx.allocator;
@@ -510,7 +513,7 @@ pub const LineEditor = struct {
         defer input_trace.exit();
         input_trace.info("Input event triggered render");
         input_trace.data("input-event").put("event", event_name).end();
-        
+
         try setDomText(&ctx.dom, ctx.text_id, self.buffer.items);
         updateTerminalSize(ctx);
         try renderDom(ctx, input_trace);
@@ -521,7 +524,7 @@ pub const LineEditor = struct {
         const prompt_trace = session_trace.enter();
         defer prompt_trace.exit();
         prompt_trace.info("Interactive prompt ready");
-        
+
         try setDomText(&ctx.dom, ctx.text_id, self.buffer.items);
         updateTerminalSize(ctx);
         try renderDom(ctx, prompt_trace);

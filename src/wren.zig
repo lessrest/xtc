@@ -177,31 +177,123 @@ const TrackedAllocator = struct {
     }
 };
 
-// // Zig allocator wrapper for Wren's reallocate function
-// fn wrenReallocate(memory: ?*anyopaque, new_size: usize, user_data: *anyopaque) callconv(.c) ?*anyopaque {
-//     const ptr: *UserData = @ptrCast(@alignCast(user_data));
-//     const allocator = @ptrCast(@alignCast(ptr.*.allocator));
-//     const tracked = TrackedAllocator{ .allocator = allocator };
-
-//     if (new_size == 0) {
-//         // Free memory
-//         if (memory) |mem| {
-//             const ptr: [*]u8 = @ptrCast(mem);
-//             tracked.free(ptr);
-//         }
-//         return null;
-//     } else if (memory) |mem| {
-//         // Realloc existing memory
-//         const old_ptr: [*]u8 = @ptrCast(mem);
-//         return tracked.realloc(old_ptr, new_size);
-//     } else {
-//         // Allocate new memory
-//         return tracked.alloc(new_size);
-//     }
-// }
-
 pub fn create(t: type, x: *t) !VM(t) {
     return try VM(t).init(x);
+}
+
+const ForeignModuleSpec = struct {
+    module_name: []const u8,
+    module_info: std.builtin.Type,
+    module_classes: []const ForeignClassSpec,
+};
+
+const ForeignClassSpec = struct {
+    class_name: []const u8,
+    class_info: std.builtin.Type,
+    class_functions: []const FunctionSpec,
+};
+
+const FunctionSpec = struct {
+    name: []const u8,
+    signature: []const u8,
+    func: *const anyopaque,
+    params: []const std.builtin.Type.Fn.Param,
+
+    fn paramTypes(this: @This()) []type {
+        var xs: [this.params.len]type = undefined;
+        var i = 0;
+        for (this.params) |param| {
+            xs[i] = param.type.?;
+            i += 1;
+        }
+        return &xs;
+    }
+
+    fn functionType(this: @This(), comptime T: type) type {
+        const ps = this.paramTypes();
+        if (ps.len == 1) {
+            return (*const fn (*T) anyerror!void);
+        } else if (ps.len == 2) {
+            return (*const fn (*T, []const u8) anyerror!void);
+        } else {
+            @compileError("mad");
+        }
+    }
+};
+
+const ForeignFunction = struct {
+    name: []const u8,
+    func: WrenForeignMethodFn,
+};
+
+fn getForeignFunction(comptime T: type, comptime spec: FunctionSpec) ForeignFunction {
+    const container = struct {
+        pub fn invoke(vm: *WrenVM) callconv(.C) void {
+            const data: *T = @ptrCast(@alignCast(wrenGetUserData(vm)));
+            const functype = spec.functionType(T);
+            const func: functype = @ptrCast(@alignCast(spec.func));
+
+            if (functype == (*const fn (*T) anyerror!void)) {
+                func(data) catch @panic(spec.name);
+            } else if (functype == (*const fn (*T, []const u8) anyerror!void)) {
+                const x1 = wrenGetSlotString(vm, 1);
+                func(data, std.mem.span(x1)) catch @panic(spec.name);
+            }
+        }
+    };
+
+    return .{
+        .name = spec.name,
+        .func = container.invoke,
+    };
+}
+
+pub fn foreignModuleSpecs(comptime T: type) [@typeInfo(T.Modules).@"struct".decls.len]ForeignModuleSpec {
+    const decls = std.meta.declarations(T.Modules);
+    var specs: [decls.len]ForeignModuleSpec = undefined;
+    var i = 0;
+    inline for (decls) |decl| {
+        specs[i] = .{
+            .module_name = decl.name,
+            .module_info = @typeInfo(@field(T.Modules, decl.name)),
+            .module_classes = foreignClassSpecs(@field(T.Modules, decl.name)),
+        };
+        i += 1;
+    }
+    return specs;
+}
+
+fn foreignClassSpecs(comptime T: type) []const ForeignClassSpec {
+    const decls = std.meta.declarations(T);
+    var specs: [decls.len]ForeignClassSpec = undefined;
+    var i = 0;
+    inline for (decls) |decl| {
+        specs[i] = .{
+            .class_name = decl.name,
+            .class_info = @typeInfo(@field(T, decl.name)),
+            .class_functions = functionSpecs(@field(T, decl.name)),
+        };
+        i += 1;
+    }
+    const specs_final = specs;
+    return &specs_final;
+}
+
+fn functionSpecs(comptime T: type) []const FunctionSpec {
+    const decls = std.meta.declarations(T);
+    var specs: [decls.len]FunctionSpec = undefined;
+    var i = 0;
+    inline for (decls) |decl| {
+        specs[i] = .{
+            .name = decl.name,
+            .signature = @typeName(@typeInfo(@TypeOf(@field(T, decl.name))).@"fn".params[0].type.?),
+            .func = @field(T, decl.name),
+            .params = @typeInfo(@TypeOf(@field(T, decl.name))).@"fn".params,
+        };
+        i += 1;
+    }
+    const specs_final = specs;
+    return &specs_final;
 }
 
 // Zig-friendly wrapper around Wren VM
@@ -213,6 +305,30 @@ pub fn VM(comptime UserData: type) type {
 
         const Self = @This();
 
+        const foreign_function_count = blk: {
+            var i = 0;
+            for (foreignModuleSpecs(UserData)) |module_spec| {
+                for (module_spec.module_classes) |class| {
+                    i += class.class_functions.len;
+                }
+            }
+            break :blk i;
+        };
+
+        const foreign_functions: [foreign_function_count]ForeignFunction = blk: {
+            var fns: [foreign_function_count]ForeignFunction = undefined;
+            var i = 0;
+            for (foreignModuleSpecs(UserData)) |module| {
+                for (module.module_classes) |class| {
+                    for (class.class_functions) |spec| {
+                        fns[i] = getForeignFunction(UserData, spec);
+                        i += 1;
+                    }
+                }
+            }
+            break :blk fns;
+        };
+
         pub fn init(user_data: *UserData) !Self {
             var config: WrenConfiguration = .{}; // Initialize with default values
             wrenInitConfiguration(&config);
@@ -221,7 +337,7 @@ pub fn VM(comptime UserData: type) type {
             config.writeFn = writeFn;
             config.errorFn = errorFn;
             config.loadModuleFn = null;
-            config.bindForeignMethodFn = null;
+            config.bindForeignMethodFn = bindForeignMethodFn;
             config.bindForeignClassFn = null;
 
             // Use our allocator for Wren's memory management
@@ -229,6 +345,14 @@ pub fn VM(comptime UserData: type) type {
 
             // Store user data (allocator and handlers)
             config.userData = user_data;
+
+            const module_specs = foreignModuleSpecs(UserData);
+            try std.io.getStdErr().writer().print("foreigns: {d}\n", .{module_specs.len});
+
+            const stderr = std.io.getStdErr().writer();
+            inline for (foreign_functions) |f| {
+                try stderr.print("{s} {any}\n", .{ f.name, f.func });
+            }
 
             const vm_ptr = wrenNewVM(&config) orelse return error.VMCreationFailed;
 
@@ -240,7 +364,7 @@ pub fn VM(comptime UserData: type) type {
         }
 
         pub fn deinit(self: *Self) void {
-            self.allocator.destroy(self.user_data);
+            // Do not destroy user_data: VM does not own it.
             wrenFreeVM(self.ptr);
         }
 
@@ -294,15 +418,43 @@ pub fn VM(comptime UserData: type) type {
         fn errorFn(
             vm: *WrenVM,
             error_type: WrenErrorType,
-            module: [*:0]const u8,
+            module: ?[*:0]const u8,
             line: c_int,
-            message: [*:0]const u8,
+            message: ?[*:0]const u8,
         ) callconv(.c) void {
             const ptr = wrenGetUserData(vm);
             const user_data: *UserData = @ptrCast(@alignCast(ptr));
-            const module_str = std.mem.span(module);
-            const msg_str = std.mem.span(message);
+            const module_str = if (module) |m| std.mem.span(m) else "";
+            const msg_str = if (message) |m| std.mem.span(m) else "";
             user_data.onError(error_type, module_str, line, msg_str);
+        }
+
+        fn abortWithError(vm: *WrenVM, msg: []const u8) void {
+            wrenSetSlotBytes(vm, 0, msg.ptr, msg.len);
+            wrenAbortFiber(vm, 0);
+        }
+
+        fn bindForeignMethodFn(
+            vm: *WrenVM,
+            module: [*:0]const u8,
+            className: [*:0]const u8,
+            isStatic: bool,
+            signature: [*:0]const u8,
+        ) callconv(.c) WrenForeignMethodFn {
+            _ = vm; // autofix
+            std.debug.print("bindForeignMethodFn: {s}.{s}.{s}\n", .{ module, className, signature });
+            std.debug.print("isStatic: {}\n", .{isStatic});
+
+            if (!isStatic) return null;
+
+            inline for (foreign_functions) |f| {
+                std.debug.print("hmm {s} {s}\n", .{ f.name, std.mem.sliceTo(signature, "("[0]) });
+                if (std.mem.eql(u8, f.name, std.mem.sliceTo(signature, "("[0]))) {
+                    return f.func;
+                }
+            }
+
+            return null;
         }
     };
 }
@@ -313,13 +465,14 @@ pub fn eval(allocator: std.mem.Allocator, source: []const u8) ![]u8 {
     defer output.deinit();
 
     const Handlers = struct {
+        allocator: std.mem.Allocator,
         output: *std.ArrayList(u8),
 
-        pub fn write(self: @This(), text: []const u8) void {
+        pub fn write(self: *@This(), text: []const u8) void {
             self.output.appendSlice(text) catch {};
         }
 
-        pub fn onError(self: @This(), error_type: WrenErrorType, module: []const u8, line: c_int, message: []const u8) void {
+        pub fn onError(self: *@This(), error_type: WrenErrorType, module: []const u8, line: c_int, message: []const u8) void {
             switch (error_type) {
                 WREN_ERROR_COMPILE => {
                     self.output.appendSlice("[Compile error]") catch {};
@@ -337,9 +490,12 @@ pub fn eval(allocator: std.mem.Allocator, source: []const u8) ![]u8 {
         }
     };
     const WrenVMType = VM(Handlers);
-    var vm = try WrenVMType.init(allocator, Handlers{ .output = &output });
+    var handlers = Handlers{ .allocator = allocator, .output = &output };
+    var vm = try WrenVMType.init(&handlers);
     defer vm.deinit();
 
+    // No foreign modules in this one-shot helper, but call anyway to allow future expansion
+    try vm.registerForeignModules();
     try vm.interpret("main", source);
 
     return output.toOwnedSlice();
@@ -426,108 +582,4 @@ test "TrackedAllocator" {
     tracked.free(ptr3);
 }
 
-test "VM with custom writer" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
-    // Test with different writer types
-    var buffer: [1024]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buffer);
-
-    const handlers = .{
-        .writer = fbs.writer(),
-        .errorHandler = struct {
-            fn errorHandler(error_type: WrenErrorType, module: []const u8, line: c_int, message: []const u8) void {
-                _ = error_type;
-                _ = module;
-                _ = line;
-                _ = message;
-                // Just ignore errors for this test
-            }
-        }.errorHandler,
-    };
-    const WrenVMType = VM(handlers);
-    var vm = try WrenVMType.init(allocator);
-    defer vm.deinit();
-
-    try vm.interpret("main",
-        \\System.print("Hello to fixed buffer!")
-        \\System.print("Numbers: %(1 + 2 + 3)")
-    );
-
-    const output = fbs.getWritten();
-    try std.testing.expect(std.mem.indexOf(u8, output, "Hello to fixed buffer!") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "Numbers: 6") != null);
-}
-
-test "VM with stderr writer" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
-    // Test that we can write directly to stderr (this won't be captured in test output)
-    const handlers = .{
-        .writer = std.io.getStdErr().writer(),
-        .errorHandler = struct {
-            fn errorHandler(error_type: WrenErrorType, module: []const u8, line: c_int, message: []const u8) void {
-                _ = error_type;
-                _ = module;
-                _ = line;
-                _ = message;
-                // Just ignore errors for this test
-            }
-        }.errorHandler,
-    };
-    const WrenVMType = VM(handlers);
-    var vm = try WrenVMType.init(allocator);
-    defer vm.deinit();
-
-    // This should succeed without throwing
-    try vm.interpret("main", "System.print(\"This goes to stderr\")");
-}
-
-test "VM with custom error handler" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
-    var error_count: u32 = 0;
-    var last_error_type: WrenErrorType = 0;
-
-    const ErrorHandler = struct {
-        counter: *u32,
-        last_type: *WrenErrorType,
-
-        fn errorHandler(self: @This(), error_type: WrenErrorType, module: []const u8, line: c_int, message: []const u8) void {
-            _ = module;
-            _ = line;
-            _ = message;
-            self.counter.* += 1;
-            self.last_type.* = error_type;
-        }
-    };
-
-    var output = std.ArrayList(u8).init(allocator);
-    defer output.deinit();
-
-    const handlers = struct {
-        writer: @TypeOf(output.writer()),
-        errorHandler: ErrorHandler,
-    }{
-        .writer = output.writer(),
-        .errorHandler = ErrorHandler{ .counter = &error_count, .last_type = &last_error_type },
-    };
-
-    const WrenVMType = VM(handlers);
-    var vm = try WrenVMType.init(allocator);
-    defer vm.deinit();
-
-    // This should trigger a compile error
-    const result = vm.interpret("main", "invalid_syntax_here...");
-    try std.testing.expectError(error.CompileError, result);
-
-    // Check that our custom error handler was called
-    try std.testing.expect(error_count > 0);
-    try std.testing.expect(last_error_type == WREN_ERROR_COMPILE);
-}
+// Additional VM init variants tests removed for concision

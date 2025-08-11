@@ -4,6 +4,7 @@ const Graphemes = @import("Graphemes");
 const live = @import("live.zig");
 const FormatTrace = @import("FormatTrace.zig");
 const tty = @import("tty.zig");
+const WrenRunner = @import("wren_runner.zig");
 
 // Global logging options using std.log
 pub const std_options: std.Options = .{
@@ -85,6 +86,7 @@ pub fn main() !void {
 
     var log_path: ?[]const u8 = "xtc.log";
     var xml_input: ?[]const u8 = null;
+    var wren_script: ?[]const u8 = null;
     var out_width: usize = 80;
     var out_height: usize = 24;
     var unicode_boxes: ?bool = null; // tri-state: null => default
@@ -135,9 +137,16 @@ pub fn main() !void {
             unicode_boxes = false;
         } else if (std.mem.eql(u8, a, "--debug")) {
             debug_mode = true;
+        } else if (std.mem.eql(u8, a, "--wren")) {
+            if (i + 1 >= args.len) {
+                try std.io.getStdErr().writer().print("missing file/script after --wren\n", .{});
+                std.process.exit(2);
+            }
+            wren_script = args[i + 1];
+            i += 1;
         } else if (std.mem.eql(u8, a, "-h") or std.mem.eql(u8, a, "--help")) {
             try std.io.getStdOut().writer().print(
-                "usage: xtc [--log <file>] [--xml <string>] [--width N] [--height N] [--[no-]unicode-boxes] [--debug]\n",
+                "usage: xtc [--log <file>] [--xml <string>] [--wren <file|script>] [--width N] [--height N] [--[no-]unicode-boxes] [--debug]\n",
                 .{},
             );
             return;
@@ -186,6 +195,30 @@ pub fn main() !void {
         const out = try lib.renderXmlAscii(al, xml, out_width, out_height);
         defer al.free(out);
         _ = try std.io.getStdOut().write(out);
+        return;
+    }
+
+    if (wren_script) |script_input| {
+        // Check if it's a file path or inline script
+        const script_content = if (std.fs.cwd().readFileAlloc(al, script_input, 1024 * 1024)) |content| content else |_| script_input;
+        defer if (script_content.ptr != script_input.ptr) al.free(script_content);
+
+        var runner = try WrenRunner.init(al);
+        defer runner.deinit();
+
+        runner.runScript(script_content) catch |err| {
+            try std.io.getStdErr().writer().print("Wren script error: {}\n", .{err});
+            std.process.exit(1);
+        };
+
+        // Print output to stdout
+        const output = runner.getOutput();
+        if (output.len > 0) {
+            _ = try std.io.getStdOut().write(output);
+        }
+
+        try lib.renderDocumentToWriter(al, runner.getDom(), std.io.getStdOut().writer(), out_width, out_height);
+
         return;
     }
 
