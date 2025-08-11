@@ -246,9 +246,8 @@ pub const Raster = struct {
                 const glyph_slice = &[_]u32{cell.glyph};
                 try out_ansi.writeGlyphs(glyph_slice, glyphs);
             }
-            if (y < self.height - 1) {
-                try writer.writeByte('\n');
-            }
+            // Write newline after each line (including the last one for proper terminal output)
+            try out_ansi.writeAll("\n");
         }
         
         try out_ansi.resetStyle();
