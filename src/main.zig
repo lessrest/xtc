@@ -229,6 +229,12 @@ pub fn main() !void {
             // Build DOM and execute scripts (if any)
             try wren_xml.buildDomIntoAndRunScripts(WrenRunner.ScriptContext, al, &xml_doc, &runner.vm, &document);
             
+            // Print any Wren output to stderr for debugging
+            const wren_output = runner.getOutput();
+            if (wren_output.len > 0) {
+                _ = try std.io.getStdErr().write(wren_output);
+            }
+            
             // Render the resulting DOM
             try lib.renderDocumentToWriter(al, &document, std.io.getStdOut().writer(), out_width, out_height);
             return;

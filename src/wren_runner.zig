@@ -42,6 +42,17 @@ pub const ScriptContext = struct {
                 pub fn setDebugId(_: *wren.c.WrenVM, ctx: *ScriptContext, id: DomNodeId, label: []const u8) void {
                     ctx.document.setDebugId(id, label) catch @panic("setDebugId");
                 }
+                
+                pub fn getElementById(_: *wren.c.WrenVM, ctx: *ScriptContext, idStr: []const u8) DomNodeId {
+                    // Search through debug_ids HashMap to find matching ID
+                    var it = ctx.document.debug_ids.iterator();
+                    while (it.next()) |entry| {
+                        if (std.mem.eql(u8, entry.value_ptr.*, idStr)) {
+                            return entry.key_ptr.*;
+                        }
+                    }
+                    return std.math.maxInt(DomNodeId); // Return invalid ID if not found
+                }
 
                 pub fn removeChild(_: *wren.c.WrenVM, ctx: *ScriptContext, parent: DomNodeId, child: DomNodeId) void {
                     ctx.document.removeChild(parent, child);
@@ -135,6 +146,9 @@ pub fn init(allocator: std.mem.Allocator, document: *Dom) !*@This() {
     try this.vm.registerForeignModules();
     // Provide Wren convenience wrappers around DOM ids via embedded file
     try this.vm.interpret("dom", @embedFile("wren_wrappers/dom.wren"));
+    
+    // Import dom classes into main so scripts can use them
+    try this.vm.interpret("main", "import \"dom\" for Document, Element");
     return this;
 }
 

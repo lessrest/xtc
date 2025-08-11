@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root class="flex flex-col p-2 bg-gray-900">
+    <box class="mb-2 p-2 border border-cyan-500">
+        <text class="text-cyan-500">Press keys to see them appear below (q or ESC to exit)</text>
+    </box>
+    
+    <box class="flex flex-row flex-wrap p-2 border border-green-500" id="output">
+    </box>
+    
+    <script>
+        // Store reference to output box by creating it
+        var outputBox = document.root
+        
+        // Find the output box - it should be the last child of root
+        // Since we can't query by ID yet, we'll track it ourselves
+        var children = []
+        
+        // Counter for events  
+        var eventCount = 0
+        
+        // Listen for keypress events on the document
+        document.addEventListener("keypress", Fn.new { |event|
+            eventCount = eventCount + 1
+            
+            // Create text for this keypress
+            var keyText = event["key"]
+            
+            // Create a text node
+            var textNode = document.createText(keyText)
+            
+            // Create a colored box for this key
+            var keyBox = document.createElement("inline-block px-2 py-1 m-1 bg-blue-600 text-white border")
+            
+            // Append text to box
+            keyBox.append(textNode)
+            
+            // Append box to root (since we can't reliably get the output box)
+            document.root.append(keyBox)
+        })
+    </script>
+</root>

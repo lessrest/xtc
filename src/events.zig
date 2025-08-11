@@ -13,7 +13,7 @@ pub const EventType = enum {
     mouseup,
     mousemove,
 
-    pub fn toString(self: EventType) []const u8 {
+    pub fn toString(self: EventType) [:0]const u8 {
         return switch (self) {
             .click => "click",
             .keypress => "keypress",

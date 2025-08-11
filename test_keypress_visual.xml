@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root class="flex flex-col p-2 bg-gray-900">
+    <box class="mb-2 p-2 border border-cyan-500">
+        <text class="text-cyan-500">Press keys to see them appear below (q or ESC to exit)</text>
+    </box>
+    
+    <box class="flex flex-col p-2 border border-green-500" id="output">
+        <text class="text-gray-400">Waiting for keypresses...</text>
+    </box>
+    
+    <script>
+        // Get reference to the output box (it's the third node - root=0, first box=1, second box=2)
+        var outputBox = Element.new(2)
+        
+        // Counter for events
+        var eventCount = 0
+        
+        // Clear the initial "Waiting..." text when first key is pressed
+        var firstKeyPress = true
+        
+        // Listen for keypress events on the document
+        document.addEventListener("keypress", Fn.new { |event|
+            eventCount = eventCount + 1
+            
+            // On first keypress, clear the output box by removing its initial child
+            if (firstKeyPress) {
+                // We can't remove children yet, so just add new ones
+                firstKeyPress = false
+            }
+            
+            // Create a new text element showing the key pressed
+            var keyText = "[" + eventCount.toString + "] Key: " + event["key"] + " "
+            var textNode = document.createText(keyText)
+            
+            // Create a box to hold this keypress info
+            var keyBox = document.createElement("inline px-1 mx-1 bg-blue-800 text-yellow-300")
+            keyBox.append(textNode)
+            
+            // Add to output
+            outputBox.append(keyBox)
+        })
+    </script>
+</root>

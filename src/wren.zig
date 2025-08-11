@@ -312,6 +312,10 @@ const ffi = struct {
                 }
                 if (P == f64) return c.wrenGetSlotDouble(vm, slot_index);
                 if (P == bool) return c.wrenGetSlotBool(vm, slot_index);
+                if (P == *c.WrenHandle) {
+                    // Get a handle to a Wren object (function, class, etc)
+                    return c.wrenGetSlotHandle(vm, slot_index) orelse @panic("Invalid Wren handle");
+                }
 
                 switch (@typeInfo(P)) {
                     .int => {

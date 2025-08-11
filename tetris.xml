@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root class="flex flex-col bg-gray-900">
+  <!-- Header -->
+  <box class="bg-purple-600 p-2">
+    <text class="text-white">🎮 TETRIS</text>
+  </box>
+  
+  <!-- Game container -->
+  <box class="flex flex-row gap-2 p-2">
+    <!-- Game board -->
+    <box class="bg-black border-2 border-gray-600 p-1 grow-1">
+      <script type="text/wren" class="flex flex-col" id="game-board" src="tetris.wren" />
+    </box>
+    
+    <!-- Info panel -->
+    <box class="bg-gray-800 border-2 border-gray-600 p-2">
+      <box class="flex flex-col gap-2">
+        <box class="bg-blue-900 p-2">
+          <text class="text-cyan-400">Controls:</text>
+        </box>
+        <box class="flex flex-col gap-1 text-sm">
+          <text class="text-gray-300">A/D - Move left/right</text>
+          <text class="text-gray-300">W - Rotate</text>
+          <text class="text-gray-300">S - Soft drop</text>
+          <text class="text-gray-300">Space - Hard drop</text>
+          <text class="text-gray-300">R - Reset game</text>
+        </box>
+        <box class="bg-green-900 p-2 mt-2">
+          <text class="text-green-400">Tips:</text>
+        </box>
+        <box class="flex flex-col gap-1">
+          <text class="text-gray-400">• Clear lines to score</text>
+          <text class="text-gray-400">• Press S to drop pieces</text>
+          <text class="text-gray-400">• Game ends when pieces</text>
+          <text class="text-gray-400">  reach the top</text>
+        </box>
+      </box>
+    </box>
+  </box>
+  
+  <!-- Footer -->
+  <box class="bg-gray-800 p-2 mt-2">
+    <text class="text-gray-500">Terminal Tetris - Built with XTC and Wren</text>
+  </box>
+</root>
