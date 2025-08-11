@@ -101,6 +101,36 @@ pub const Dom = struct {
         const len: usize = @intCast(items.items(.child_count)[@intCast(id)]);
         return self.text_arena.items[off .. off + len];
     }
+    
+    pub fn updateText(self: *Dom, id: DomNodeId, new_text: []const u8) !void {
+        const idx: usize = @intCast(id);
+        var items = self.headers.slice();
+        
+        // Only works on text nodes
+        if (items.items(.kind)[idx] != .text) return;
+        
+        // Append new text to arena
+        const off = self.text_arena.items.len;
+        try self.text_arena.appendSlice(new_text);
+        const len = new_text.len;
+        
+        // Update the text node's offset and length
+        items.items(.first_child)[idx] = @intCast(off);
+        items.items(.child_count)[idx] = @intCast(len);
+    }
+    
+    pub fn updateClass(self: *Dom, id: DomNodeId, new_class: []const u8) !void {
+        const idx: usize = @intCast(id);
+        var items = self.headers.slice();
+        
+        // Only works on element nodes  
+        if (items.items(.kind)[idx] != .element) return;
+        
+        // Parse utility-class list and intern the new style
+        const style_row = parseUtilityClassList(new_class);
+        const new_style_id = try self.styles.intern(self.alloc, style_row);
+        items.items(.style_id)[idx] = new_style_id;
+    }
 
     pub fn appendChild(self: *Dom, parent_id: DomNodeId, child_id: DomNodeId) void {
         const p: usize = @intCast(parent_id);

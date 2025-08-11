@@ -64,6 +64,14 @@ class Element {
   setDebugId(name) {
     DOM.setDebugId(_id, name)
   }
+  
+  updateText(text) {
+    DOM.updateText(_id, text)
+  }
+  
+  updateClass(className) {
+    DOM.updateClass(_id, className)
+  }
 
   addEventListener(eventType, handler) {
     return DOM.addEventListener(_id, eventType, handler)

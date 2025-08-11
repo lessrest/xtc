@@ -43,6 +43,14 @@ pub const ScriptContext = struct {
                     ctx.document.setDebugId(id, label) catch @panic("setDebugId");
                 }
                 
+                pub fn updateText(_: *wren.c.WrenVM, ctx: *ScriptContext, id: DomNodeId, text: []const u8) void {
+                    ctx.document.updateText(id, text) catch @panic("updateText");
+                }
+                
+                pub fn updateClass(_: *wren.c.WrenVM, ctx: *ScriptContext, id: DomNodeId, class: []const u8) void {
+                    ctx.document.updateClass(id, class) catch @panic("updateClass");
+                }
+                
                 pub fn getElementById(_: *wren.c.WrenVM, ctx: *ScriptContext, idStr: []const u8) DomNodeId {
                     // Search through debug_ids HashMap to find matching ID
                     var it = ctx.document.debug_ids.iterator();

@@ -248,18 +248,22 @@ class TetrisGame {
 
   updateDisplay() {
     // Clear container
+    var cleared = 0
     while (_container.childCount > 0) {
       var child = _container.firstChild
       if (child != null) {
         _container.removeChild(child)
+        cleared = cleared + 1
+      } else {
+        break // Prevent infinite loop if something is wrong
       }
     }
 
     // Create game container
-    var gameBox = _document.createElement("flex flex-col")
+    var gameBox = _document.createElement("flex flex-col border border-gray-700")
 
     // Score display
-    var scoreBox = _document.createElement("bg-gray-900 text-white p-2 mb-2")
+    var scoreBox = _document.createElement("text-white px-2")
     var scoreText = _document.createText("Score: " + _score.toString)
     scoreBox.append(scoreText)
     gameBox.append(scoreBox)
@@ -269,27 +273,25 @@ class TetrisGame {
 
     // Render board
     for (y in 0..._board.height) {
-      var rowBox = _document.createElement("flex flex-row")
+      var rowBox = _document.createElement("flex flex-row grow-0")
       for (x in 0..._board.width) {
         var cellValue = displayGrid[y][x]
         var cellColor = _colors[cellValue]
-        var cellBox = _document.createElement("w-2 h-1 border border-gray-700 " + cellColor)
-        var cellText = _document.createText(cellValue == 0 ? " " : "█")
-        cellBox.append(cellText)
+        var block = ""
+        if (cellValue != 0) {
+          block = cellColor
+        }
+        var cellBox = _document.createElement("w-2 h-1 "  + block)
+//        var cellText = _document.createText(" ")
+//        cellBox.append(cellText)
         rowBox.append(cellBox)
       }
       gameBox.append(rowBox)
     }
 
-    // Controls info
-    var controlsBox = _document.createElement("bg-gray-900 text-white p-2 mt-2")
-    var controlsText = _document.createText("A/D: Move  W: Rotate  S: Drop  Space: Hard Drop  R: Reset")
-    controlsBox.append(controlsText)
-    gameBox.append(controlsBox)
-
     // Game over message
     if (_gameOver) {
-      var gameOverBox = _document.createElement("bg-red-600 text-white p-2 mt-2")
+      var gameOverBox = _document.createElement("bg-red-600 text-white px-2")
       var gameOverText = _document.createText("GAME OVER! Press R to restart")
       gameOverBox.append(gameOverText)
       gameBox.append(gameOverBox)
@@ -321,12 +323,12 @@ if (container == null) {
   System.print("Error: Could not find game-board element")
 } else {
   var game = TetrisGame.new(container, document)
-  
+
   document.addEventListener("keypress", Fn.new { |event|
     if (game != null) {
       game.handleKey(event["key"])
     }
   })
-  
+
   game.start()
 }
