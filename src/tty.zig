@@ -154,17 +154,13 @@ pub const Raster = struct {
     }
 
     pub fn clear(self: *Raster) void {
-        const n = self.width * self.height;
         const glyphs = self.cells.items(.glyph);
         const fgs = self.cells.items(.fg);
         const bgs = self.cells.items(.bg);
 
-        var i: usize = 0;
-        while (i < n) : (i += 1) {
-            glyphs[i] = @as(GlyphId, 32);
-            fgs[i] = TERMINAL_DEFAULT_COLOR;
-            bgs[i] = TERMINAL_DEFAULT_COLOR;
-        }
+        @memset(glyphs, @as(GlyphId, 32));
+        @memset(fgs, TERMINAL_DEFAULT_COLOR);
+        @memset(bgs, TERMINAL_DEFAULT_COLOR);
     }
 
     /// Fill entire raster with a single glyph id
@@ -178,15 +174,24 @@ pub const Raster = struct {
 
     /// Fill a rectangle with a single glyph id
     pub fn fillGlyphRect(self: *Raster, x: usize, y: usize, w: usize, h: usize, gid: GlyphId, color: Rgba8) void {
-        var yy: usize = y;
-        const y_end = y + h;
-        const x_end = x + w;
-        while (yy < y_end and yy < self.height) : (yy += 1) {
-            var xx: usize = x;
-            while (xx < x_end and xx < self.width) : (xx += 1) {
-                self.setGlyph(xx, yy, gid);
-                self.setFg(xx, yy, color);
-            }
+        if (w == 0 or h == 0) return;
+        const x0 = if (x >= self.width) self.width else x;
+        const y0 = if (y >= self.height) self.height else y;
+        const x1_unclamped = x + w;
+        const y1_unclamped = y + h;
+        const x1 = if (x1_unclamped > self.width) self.width else x1_unclamped;
+        const y1 = if (y1_unclamped > self.height) self.height else y1_unclamped;
+        if (x0 >= x1 or y0 >= y1) return;
+
+        const glyphs = self.cells.items(.glyph);
+        const fgs = self.cells.items(.fg);
+
+        var yy: usize = y0;
+        while (yy < y1) : (yy += 1) {
+            const row_start = yy * self.width + x0;
+            const row_end = yy * self.width + x1;
+            @memset(glyphs[row_start..row_end], gid);
+            @memset(fgs[row_start..row_end], color);
         }
     }
 
@@ -209,19 +214,18 @@ pub const Raster = struct {
         }
     }
 
-
     pub fn writeAnsiToWriter(self: *const Raster, writer: anytype, glyphs: *const GlyphTable) !void {
         const ansi = @import("ansi.zig");
         var out_ansi = ansi.AnsiWriter(@TypeOf(writer)).init(writer);
         try out_ansi.resetStyle();
-        
+
         for (0..self.height) |y| {
             var current_bg: ?Rgba8 = null;
             var current_fg: ?Rgba8 = null;
-            
+
             for (0..self.width) |x| {
                 const cell = self.getCell(x, y);
-                
+
                 // Update background if needed
                 if (cell.bg != current_bg) {
                     if (cell.bg != TERMINAL_DEFAULT_COLOR) {
@@ -231,7 +235,7 @@ pub const Raster = struct {
                     }
                     current_bg = cell.bg;
                 }
-                
+
                 // Update foreground if needed
                 if (cell.fg != current_fg) {
                     if (cell.fg != TERMINAL_DEFAULT_COLOR) {
@@ -241,7 +245,7 @@ pub const Raster = struct {
                     }
                     current_fg = cell.fg;
                 }
-                
+
                 // Write the glyph
                 const glyph_slice = &[_]u32{cell.glyph};
                 try out_ansi.writeGlyphs(glyph_slice, glyphs);
@@ -249,7 +253,7 @@ pub const Raster = struct {
             // Write newline after each line (for normal output to stdout)
             try out_ansi.writeAll("\n");
         }
-        
+
         try out_ansi.resetStyle();
     }
 
@@ -634,13 +638,24 @@ pub fn setUseUnicodeBoxes(on: bool) void {
 pub fn rasterizeDisplayList(r: *Raster, alloc: std.mem.Allocator, glyphs: *GlyphTable, list: *const PaintCommandBatch) !void {
     for (list.ops.items) |op| switch (op) {
         .FillRect => |fr| {
-            // Fill background color in cell buffer; keep ASCII glyphs as spaces
-            var y: usize = fr.y;
-            while (y < fr.y + fr.h and y < r.height) : (y += 1) {
-                var x: usize = fr.x;
-                while (x < fr.x + fr.w and x < r.width) : (x += 1) {
-                    r.setBg(x, y, fr.color);
-                    r.setGlyph(x, y, @as(GlyphId, 32));
+            // Fill background color and glyphs using slice ops per row
+            if (fr.w > 0 and fr.h > 0) {
+                const x0 = if (fr.x >= r.width) r.width else fr.x;
+                const y0 = if (fr.y >= r.height) r.height else fr.y;
+                const x1_unclamped = fr.x + fr.w;
+                const y1_unclamped = fr.y + fr.h;
+                const x1 = if (x1_unclamped > r.width) r.width else x1_unclamped;
+                const y1 = if (y1_unclamped > r.height) r.height else y1_unclamped;
+                if (x0 < x1 and y0 < y1) {
+                    const glyph_items = r.cells.items(.glyph);
+                    const bgs = r.cells.items(.bg);
+                    var y: usize = y0;
+                    while (y < y1) : (y += 1) {
+                        const row_start = y * r.width + x0;
+                        const row_end = y * r.width + x1;
+                        @memset(bgs[row_start..row_end], fr.color);
+                        @memset(glyph_items[row_start..row_end], @as(GlyphId, 32));
+                    }
                 }
             }
         },
@@ -714,11 +729,21 @@ pub fn rasterizeDisplayList(r: *Raster, alloc: std.mem.Allocator, glyphs: *Glyph
             }
         },
         .GlyphRun => |gr| {
-            var i: usize = 0;
-            while (i < gr.glyphs.len) : (i += 1) {
-                r.setGlyph(gr.x + i, gr.y, gr.glyphs[i]);
-                r.setFg(gr.x + i, gr.y, gr.color);
-            }
+            if (gr.glyphs.len == 0) break;
+            if (gr.y >= r.height) break;
+            const row_start = gr.y * r.width;
+            const x0 = if (gr.x >= r.width) r.width else gr.x;
+            if (x0 >= r.width) break;
+            const max_len = r.width - x0;
+            const copy_len = @min(max_len, gr.glyphs.len);
+
+            const glyph_items = r.cells.items(.glyph);
+            const fgs = r.cells.items(.fg);
+
+            // Copy glyphs
+            @memcpy(glyph_items[row_start + x0 .. row_start + x0 + copy_len], gr.glyphs[0..copy_len]);
+            // Set fg color over the same span
+            @memset(fgs[row_start + x0 .. row_start + x0 + copy_len], gr.color);
         },
     };
 }

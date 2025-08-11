@@ -8,7 +8,7 @@ pub usingnamespace @import("xml.zig");
 pub usingnamespace @import("FormatTrace.zig");
 
 comptime {
-    _ = @import("wren/test_dom.zig");
+    _ = @import("wren/pageload.zig");
     _ = @import("events.zig");
     _ = @import("xml.zig");
 }

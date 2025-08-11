@@ -96,7 +96,7 @@ pub fn run(allocator: std.mem.Allocator, xml_path: ?[]const u8, wren_path: ?[]co
 
         // Run the Wren script which will populate the DOM
         const script_id = ticket.from(wren_content) catch @panic("Failed to generate script ID");
-        try runner.runScript(&script_id, wren_content);
+        try runner.vm.interpret(&script_id, wren_content);
     } else {
         // Default demo UI when no XML or Wren provided
         root_id = try document.addElement(

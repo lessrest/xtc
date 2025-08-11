@@ -5,7 +5,7 @@ const std = @import("std");
 const dom_mod = @import("../dom.zig");
 const xmlparse = @import("../xmlparse.zig");
 const wren = @import("vm.zig");
-const wren_xml_clean = @import("dom.zig");
+const wren_xml_clean = @import("pageload.zig");
 
 const Dom = dom_mod.Dom;
 const DomNodeId = dom_mod.DomNodeId;
