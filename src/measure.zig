@@ -83,12 +83,10 @@ pub fn intrinsicSize(dom_: *const Dom, id: DomNodeId, max_w: usize, max_h: usize
     if (row.width != 0) w = row.width;
     if (row.height != 0) h = row.height;
 
-    // Text nodes: measure based on display width and a naive wrapping model.
-    // Without full line-breaking in layout, approximate height as the number of
-    // lines needed to fit the text in the available width (max_w), with at
-    // least one line. Width is clamped to max_w.
+    // Calculate intrinsic size for text nodes and element containers
     if (w == 0 or h == 0) {
         if (kind == .text) {
+            // Text nodes: measure based on display width and a naive wrapping model.
             const slice = dom_.getTextSlice(id);
             const text_cols: usize = unicode.monospacedTextWidth(slice);
             // Use the actual text width when max_w is 0 (unconstrained)
@@ -117,12 +115,42 @@ pub fn intrinsicSize(dom_: *const Dom, id: DomNodeId, max_w: usize, max_h: usize
             var id_buf: [32]u8 = undefined;
             const debug_id = dom_.getDebugIdOrDefault(id, &id_buf);
             std.log.info("  [measure] text {s}: text_cols={d} max_w={d} max_h={d} pad=({d}x{d}) lines={d} -> ({d}x{d})", .{ debug_id, text_cols, max_w, max_h, pad_x, pad_y, if (h > 0 and old_h == 0) (h - pad_y) else 1, w, h });
+        } else if (kind == .element) {
+            // Element containers: calculate intrinsic size from children
+            const child_count = items.items(.child_count)[@as(usize, @intCast(id))];
+            if (child_count > 0) {
+                var max_child_w: usize = 0;
+                var total_child_h: usize = 0;
+                
+                // Measure all children to find container's intrinsic size
+                var cur_child = items.items(.first_child)[@as(usize, @intCast(id))];
+                while (cur_child != Dom.NullId) {
+                    // Give children the available space minus our padding
+                    const child_max_w = if (max_w > pad_x) (max_w - pad_x) else 0;
+                    const child_max_h = if (max_h > pad_y) (max_h - pad_y) else 0;
+                    const child_size = intrinsicSize(dom_, cur_child, child_max_w, child_max_h, unicode);
+                    max_child_w = @max(max_child_w, child_size[0]);
+                    total_child_h += child_size[1];
+                    
+                    // Move to next sibling
+                    cur_child = items.items(.next_sibling)[@as(usize, @intCast(cur_child))];
+                }
+                
+                // Container width is the widest child plus padding
+                if (w == 0) {
+                    w = if (max_w == 0) (pad_x + max_child_w) else @min(max_w, pad_x + max_child_w);
+                }
+                // Container height is sum of children plus padding (for vertical flex)
+                if (h == 0) {
+                    h = if (max_h == 0) (pad_y + total_child_h) else @min(max_h, pad_y + total_child_h);
+                }
+            }
         }
     }
 
     // Minimal border-box when no intrinsic sizing known
-    if (w == 0) w = @min(max_w, pad_x);
-    if (h == 0) h = @min(max_h, pad_y);
+    if (w == 0) w = if (max_w == 0) pad_x else @min(max_w, pad_x);
+    if (h == 0) h = if (max_h == 0) pad_y else @min(max_h, pad_y);
 
     // Replaced elements can extend this path later
     return [_]usize{ w, h };

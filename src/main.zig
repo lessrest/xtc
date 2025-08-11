@@ -195,8 +195,14 @@ pub fn main() !void {
     if (unicode_boxes) |on| tty.setUseUnicodeBoxes(on);
 
     if (xml_input) |xml| {
+        // Check if it's a file path or XML content
+        const xml_content = if (std.fs.cwd().readFileAlloc(al, xml, 1024 * 1024)) |content|
+            content
+        else |_|
+            xml; // If file read fails, treat it as inline XML
+        
         // Parse XML and use Wren integration (handles both with and without scripts)
-        var reader = std.io.fixedBufferStream(xml);
+        var reader = std.io.fixedBufferStream(xml_content);
         var xml_doc = try xmlparse.parse(al, "inline", reader.reader());
         defer xml_doc.deinit();
         

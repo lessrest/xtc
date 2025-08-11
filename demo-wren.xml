@@ -1,12 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<root class="flex flex-col gap-2 p-2 items-center justify-center">
-    <header class="text-white bg-blue-600 p-2">Wren-powered XML Demo</header>
+<root class="flex flex-col gap-2 p-2 items-stretch justify-center">
+    <header class="text-white bg-blue-600 shrink-0">Wren-powered XML Demo</header>
     <script>
         var colors = ["red", "green", "blue", "yellow"]
         for (color in colors) {
-        var box = document.createElement("w-4 h-4 bg-" + color + "-500")
+        var box = document.createElement("grow-1 w-4 h-4 bg-" + color + "-500")
         self.append(box)
         }
     </script>
-    <footer class="text-gray-600 border-t pt-1">Footer content</footer>
 </root>
