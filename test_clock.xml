@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root class="flex flex-col p-4">
+  <!-- Simple clock test -->
+  <box class="text-white mb-2">Clock Test - Various visual styles</box>
+  
+  <!-- Spinner clock -->
+  <box class="flex flex-row gap-2 mb-2">
+    <box class="text-gray-400">Spinner (100ms):</box>
+    <clock class="clock interval-100 clock-spinner bg-blue-500 text-white p-1 w-2"/>
+  </box>
+  
+  <!-- Progress bar clock -->
+  <box class="flex flex-row gap-2 mb-2">
+    <box class="text-gray-400">Progress (500ms):</box>
+    <clock class="clock interval-500 clock-progress bg-green-500 w-20 h-1"/>
+  </box>
+  
+  <!-- Pulse clock -->
+  <box class="flex flex-row gap-2 mb-2">
+    <box class="text-gray-400">Pulse (250ms):</box>
+    <clock class="clock interval-250 clock-pulse bg-red-500 w-4 h-1"/>
+  </box>
+  
+  <!-- Text counter clock -->
+  <box class="flex flex-row gap-2 mb-2">
+    <box class="text-gray-400">Counter (1s):</box>
+    <clock class="clock interval-1000 clock-text bg-gray-700 text-yellow-500 p-1 w-4"/>
+  </box>
+  
+  <box class="text-gray-500 text-xs mt-4">Press 'q' to quit</box>
+</root>

@@ -218,23 +218,22 @@ pub const SpanBuilder = struct {
     label: []const u8,
 
     pub fn put(self: *const SpanBuilder, comptime key: []const u8, value: anytype) *const SpanBuilder {
+        if (!self.trace.enabled) return self;
         _ = self.trace.put(key, value);
         return self;
     }
 
     pub fn end(self: *const SpanBuilder) void {
-        if (self.trace.enabled) {
-            const indent = self.trace.getIndent();
-            std.log.info("{s}</data>", .{indent});
-        }
+        if (!self.trace.enabled) return;
+        const indent = self.trace.getIndent();
+        std.log.info("{s}</data>", .{indent});
     }
 };
 
 pub fn data(self: *const Trace, comptime label: []const u8) SpanBuilder {
-    if (self.enabled) {
-        const indent = self.getIndent();
-        std.log.info("{s}<data label=\"{s}\">", .{ indent, label });
-    }
+    if (!self.enabled) return SpanBuilder{ .trace = self, .label = label };
+    const indent = self.getIndent();
+    std.log.info("{s}<data label=\"{s}\">", .{ indent, label });
     return SpanBuilder{ .trace = self, .label = label };
 }
 
@@ -254,6 +253,7 @@ pub fn exit(self: *const Trace) void {
 }
 
 pub fn enter(self: *const Trace) Trace {
+    if (!self.enabled) return Trace{ .enabled = false, .depth = 0 };
     const child = Trace{
         .enabled = self.enabled,
         .depth = self.depth + 1,

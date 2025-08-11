@@ -13,6 +13,7 @@ const xmlparse = @import("xmlparse.zig");
 const wren_xml = @import("wren_xml.zig");
 const WrenRunner = @import("wren_runner.zig");
 const event_dispatch = @import("event_dispatch.zig");
+const clock = @import("clock.zig");
 
 // External dependencies
 const Graphemes = @import("Graphemes");
@@ -47,6 +48,9 @@ pub fn run(allocator: std.mem.Allocator, xml_path: ?[]const u8) !void {
 
     var document = Dom.init(allocator);
     // Note: WrenRunner.deinit() will handle document.deinit()
+
+    var clock_registry = clock.ClockRegistry.init(allocator);
+    defer clock_registry.deinit();
 
     var runner = try WrenRunner.init(allocator, &document);
     defer runner.deinit();
@@ -94,6 +98,7 @@ pub fn run(allocator: std.mem.Allocator, xml_path: ?[]const u8) !void {
         .raster_front = null,
         .raster_back = null,
         .log = @import("main.zig").g_log_file,
+        .clock_registry = &clock_registry,
     };
     defer {
         if (ctx.raster_front) |*r| r.deinit(allocator);
@@ -104,11 +109,62 @@ pub fn run(allocator: std.mem.Allocator, xml_path: ?[]const u8) !void {
     updateTerminalSize(&ctx);
     try renderDom(&ctx, session_trace);
 
+    // Start clock threads for any clock nodes in the DOM
+    try startClockNodes(&ctx, &document);
+
     // Main event loop - process input and dispatch events
     var in_buf: [64]u8 = undefined;
     var key_buf: [8]u8 = undefined; // Buffer for multi-byte sequences
 
     while (true) {
+        // Check for clock events with a 10ms timeout
+        if (ctx.clock_registry.waitForEvents(10)) {
+            // Process clock events
+            var temp_arena = std.heap.ArenaAllocator.init(allocator);
+            defer temp_arena.deinit();
+
+            const events = try ctx.clock_registry.processEvents(temp_arena.allocator());
+            for (events) |event| {
+                // Dispatch tick event to the clock node
+                event_dispatch.dispatchTick(
+                    runner.vm.ptr,
+                    ctx.dom,
+                    event.node_id,
+                    event.tick_count,
+                ) catch |err| {
+                    std.log.warn("Failed to dispatch tick event: {}", .{err});
+                };
+            }
+
+            // Re-render after clock events
+            // TODO: For better performance, we should only update the specific clock nodes
+            // that ticked, rather than re-rendering the entire DOM
+            if (events.len > 0) {
+                // For now, skip renders if we're getting too many events (animation case)
+                // Only render every 3rd frame for 60fps clocks, etc
+                const should_render = if (events.len == 1) true else blk: {
+                    // Multiple clocks ticking - likely animation
+                    // Render less frequently
+                    for (events) |event| {
+                        if (event.tick_count % 3 == 0) break :blk true;
+                    }
+                    break :blk false;
+                };
+
+                if (should_render) {
+                    try renderDom(&ctx, session_trace);
+                }
+            }
+        }
+
+        // Poll for input (non-blocking)
+        var pollfd = [_]posix.pollfd{
+            .{ .fd = posix.STDIN_FILENO, .events = posix.POLL.IN, .revents = 0 },
+        };
+        const poll_result = try posix.poll(&pollfd, 0); // 0 timeout = non-blocking
+
+        if (poll_result == 0) continue; // No input available
+
         const nread = posix.read(posix.STDIN_FILENO, &in_buf) catch |e| switch (e) {
             error.InputOutput => continue,
             else => return e,
@@ -187,7 +243,37 @@ const RenderCtx = struct {
     raster_front: ?Raster = null,
     raster_back: ?Raster = null,
     log: ?std.fs.File = null,
+    clock_registry: *clock.ClockRegistry,
 };
+
+fn startClockNodes(ctx: *RenderCtx, document: *Dom) !void {
+    // Walk the DOM looking for clock nodes and start their threads
+    const headers = document.headers.slice();
+    const kinds = headers.items(.kind);
+    const style_ids = headers.items(.style_id);
+
+    for (kinds, 0..) |kind, i| {
+        if (kind == .clock) {
+            const node_id = @as(DomNodeId, @intCast(i));
+            const style_id = style_ids[i];
+            const style_row = document.styles.cols.items[@intCast(style_id)];
+
+            if (style_row.clock_interval_ms > 0) {
+                // Create and start a clock for this node
+                const clk = try ctx.clock_registry.createClock(node_id, style_row.clock_interval_ms);
+                clk.setStyle(switch (style_row.clock_visual) {
+                    .hidden => .hidden,
+                    .progress_bar => .progress_bar,
+                    .spinner => .spinner,
+                    .pulse => .pulse,
+                    .countdown => .countdown,
+                    .text => .text,
+                });
+                try clk.start();
+            }
+        }
+    }
+}
 
 fn setDomText(document: *Dom, text_id: DomNodeId, text: []const u8) !void {
     const off: u32 = @intCast(document.text_arena.items.len);

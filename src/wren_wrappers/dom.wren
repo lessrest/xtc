@@ -22,6 +22,12 @@ class Document {
     return Element.new(DOM.createText(text))
   }
   
+  createClock(style) {
+    // Create a clock node with the given style
+    // The style should include interval (e.g., "clock interval-500 clock-spinner")
+    return Element.new(DOM.createClock(style))
+  }
+  
   getElementById(id) {
     var nodeId = DOM.getElementById(id)
     if (nodeId == 4294967295) return null  // maxInt means not found

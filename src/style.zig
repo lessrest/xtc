@@ -41,6 +41,14 @@ pub const StyleJustify = enum(u3) {
 };
 pub const StyleAlign = enum(u3) { start, end, center, stretch, baseline };
 pub const StyleOverflow = enum(u2) { visible, hidden, scroll };
+pub const ClockVisualStyle = enum(u3) {
+    hidden,
+    progress_bar,
+    spinner,
+    pulse,
+    countdown,
+    text,
+};
 
 pub const StyleColor = packed struct {
     r: u8,
@@ -111,6 +119,10 @@ pub const StyleRow = struct {
     order: i16,
     // ASCII raster test helper: when non-zero, paint stage tiles this glyph in the element's border-box
     fill_glyph: u32 = 0,
+    
+    // Clock properties
+    clock_interval_ms: u32 = 0,  // 0 means not a clock
+    clock_visual: ClockVisualStyle = .hidden,
 };
 
 fn hashBytesWy(seed: u64, bytes: []const u8) u64 {

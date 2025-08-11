@@ -7,7 +7,7 @@ const Rect = @import("layout.zig").Rect;
 const EventRegistry = @import("events.zig").EventRegistry;
 
 pub const DomNodeId = u32;
-pub const DomNodeKind = enum { element, text };
+pub const DomNodeKind = enum { element, text, clock };
 
 pub const DomNodeHeader = struct {
     kind: DomNodeKind,
@@ -75,6 +75,22 @@ pub const Dom = struct {
         const sid = try self.styles.intern(self.alloc, row);
         const items = self.headers.slice();
         items.items(.style_id)[@as(usize, @intCast(id))] = sid;
+    }
+
+    pub fn addClock(self: *Dom, style_bytes: []const u8) !DomNodeId {
+        const style_row = parseUtilityClassList(style_bytes);
+        const style_id = try self.styles.intern(self.alloc, style_row);
+        const node_id: DomNodeId = @intCast(self.headers.len);
+        try self.headers.append(self.alloc, .{
+            .kind = .clock,
+            .parent = NullId,
+            .prev_sibling = NullId,
+            .next_sibling = NullId,
+            .first_child = NullId,
+            .child_count = 0,
+            .style_id = style_id,
+        });
+        return node_id;
     }
 
     pub fn addText(self: *Dom, utf8: []const u8) !DomNodeId {

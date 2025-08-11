@@ -12,6 +12,7 @@ pub const EventType = enum {
     mousedown,
     mouseup,
     mousemove,
+    tick,
 
     pub fn toString(self: EventType) [:0]const u8 {
         return switch (self) {
@@ -24,6 +25,7 @@ pub const EventType = enum {
             .mousedown => "mousedown",
             .mouseup => "mouseup",
             .mousemove => "mousemove",
+            .tick => "tick",
         };
     }
 
@@ -44,6 +46,7 @@ pub const Event = struct {
     key: ?[]const u8 = null,
     mouse_x: ?i32 = null,
     mouse_y: ?i32 = null,
+    tick_count: ?u64 = null,
     timestamp: i64,
     propagation_stopped: bool = false,
     default_prevented: bool = false,

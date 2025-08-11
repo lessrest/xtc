@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root class="flex flex-col">
+  <!-- Animated waves demo -->
+  <script type="text/wren" class="flex flex-col" id="waves" src="waves.wren" />
+</root>

@@ -35,6 +35,12 @@ pub const ScriptContext = struct {
                     return ctx.document.addText(text) catch @panic("createText");
                 }
 
+                pub fn createClock(_: *wren.c.WrenVM, ctx: *ScriptContext, style: []const u8) DomNodeId {
+                    // Create a clock node with the specified style
+                    const node_id = ctx.document.addClock(style) catch @panic("createClock");
+                    return node_id;
+                }
+
                 pub fn appendChild(_: *wren.c.WrenVM, ctx: *ScriptContext, parent: DomNodeId, child: DomNodeId) void {
                     ctx.document.appendChild(parent, child);
                 }

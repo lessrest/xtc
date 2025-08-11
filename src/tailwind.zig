@@ -367,6 +367,43 @@ const RULES = [_]Rule{
             }
         }.e,
     },
+    
+    // Clock utilities
+    // clock → marks as clock element with default 1s interval
+    ruleExactField("clock", "clock_interval_ms", 1000, false),
+    
+    // interval-N → set clock interval in ms
+    ruleNumField("interval-", "clock_interval_ms"),
+    
+    // fps-N → set clock for frames per second (converts to ms)
+    .{
+        .parse = struct {
+            fn p(row: *StyleRow, tok: []const u8) bool {
+                if (!std.mem.startsWith(u8, tok, "fps-")) return false;
+                const fps = parseUint(tok[4..]) orelse return false;
+                if (fps == 0 or fps > 1000) return false; // Reasonable FPS range
+                row.clock_interval_ms = @intCast(1000 / fps);
+                return true;
+            }
+        }.p,
+        .emit = struct {
+            fn e(out: *std.ArrayList([]const u8), alloc: std.mem.Allocator, row: StyleRow, _: StyleRow) anyerror!void {
+                if (row.clock_interval_ms == 0) return;
+                const fps = 1000 / row.clock_interval_ms;
+                if (fps * row.clock_interval_ms == 1000) { // Only emit if it's an exact FPS value
+                    try emitFmt(alloc, out, "fps-{}", .{fps});
+                }
+            }
+        }.e,
+    },
+    
+    // Clock visual styles
+    ruleExactField("clock-hidden", "clock_visual", style.ClockVisualStyle.hidden, false),
+    ruleExactField("clock-progress", "clock_visual", style.ClockVisualStyle.progress_bar, false),
+    ruleExactField("clock-spinner", "clock_visual", style.ClockVisualStyle.spinner, false),
+    ruleExactField("clock-pulse", "clock_visual", style.ClockVisualStyle.pulse, false),
+    ruleExactField("clock-countdown", "clock_visual", style.ClockVisualStyle.countdown, false),
+    ruleExactField("clock-text", "clock_visual", style.ClockVisualStyle.text, false),
 };
 
 pub fn utilityTokensFromStyleRow(alloc: std.mem.Allocator, row: StyleRow) ![]const []const u8 {

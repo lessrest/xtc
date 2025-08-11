@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root class="flex flex-col">
+  <!-- Game board with clock-based tetris -->
+  <script type="text/wren" class="flex flex-col" id="game-board" src="tetris_clock.wren" />
+</root>
