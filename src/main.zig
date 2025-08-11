@@ -195,49 +195,22 @@ pub fn main() !void {
     if (unicode_boxes) |on| tty.setUseUnicodeBoxes(on);
 
     if (xml_input) |xml| {
-        // Parse XML to check for <script> tags
+        // Parse XML and use Wren integration (handles both with and without scripts)
         var reader = std.io.fixedBufferStream(xml);
         var xml_doc = try xmlparse.parse(al, "inline", reader.reader());
         defer xml_doc.deinit();
         
-        // Check if there are any <script> elements
-        const has_scripts = blk: {
-            const recurse = struct {
-                fn hasScriptTag(el: xmlparse.Element) bool {
-                    if (std.mem.eql(u8, el.tag_name.slice(), "script")) return true;
-                    if (el.content) |_| {
-                        const kids = el.children();
-                        for (kids) |kid| {
-                            if (kid.v() == .element) {
-                                if (hasScriptTag(kid.v().element)) return true;
-                            }
-                        }
-                    }
-                    return false;
-                }
-            };
-            break :blk recurse.hasScriptTag(xml_doc.root);
-        };
+        var document = dom.Dom.init(al);
+        // Note: WrenRunner.deinit() will handle document.deinit()
         
-        if (has_scripts) {
-            // Use Wren integration for XML with scripts
-            var document = dom.Dom.init(al);
-            defer document.deinit();
-            
-            var runner = try WrenRunner.init(al, &document);
-            defer runner.deinit();
-            
-            // Build DOM and execute scripts
-            try wren_xml.buildDomIntoAndRunScripts(WrenRunner.ScriptContext, al, &xml_doc, &runner.vm, &document);
-            
-            // Render the resulting DOM
-            try lib.renderDocumentToWriter(al, &document, std.io.getStdOut().writer(), out_width, out_height);
-        } else {
-            // No scripts, use simple rendering
-            const out = try lib.renderXmlAscii(al, xml, out_width, out_height);
-            defer al.free(out);
-            _ = try std.io.getStdOut().write(out);
-        }
+        var runner = try WrenRunner.init(al, &document);
+        defer runner.deinit();
+        
+        // Build DOM and execute scripts (if any)
+        try wren_xml.buildDomIntoAndRunScripts(WrenRunner.ScriptContext, al, &xml_doc, &runner.vm, &document);
+        
+        // Render the resulting DOM
+        try lib.renderDocumentToWriter(al, &document, std.io.getStdOut().writer(), out_width, out_height);
         return;
     }
 

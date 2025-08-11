@@ -130,6 +130,16 @@ pub fn renderDocumentToWriter(
     var tree = try allocateBoxTreeFromDOMAutoRoot(al, document);
     defer tree.deinit();
 
+    // Compute layout
+    var layout_engine = layout.init(al, &unicode, render_trace);
+    const root_node = tree.getNodeMut(0);
+    try layout_engine.computeFlexLayout(
+        &tree,
+        document,
+        root_node,
+        .{ .x = 0, .y = 0, .w = @intCast(width), .h = @intCast(height) },
+    );
+
     try paint.computePaintCommands(&ctx, document, &tree, &glyphs);
     try tty.rasterizeDisplayList(&r, al, &glyphs, &ctx);
     try r.writeToWriter(writer, &glyphs);

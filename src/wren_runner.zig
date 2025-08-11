@@ -80,8 +80,6 @@ pub fn init(allocator: std.mem.Allocator, document: *Dom) !*@This() {
     try this.vm.registerForeignModules();
     // Provide Wren convenience wrappers around DOM ids via embedded file
     try this.vm.interpret("dom", @embedFile("wren_wrappers/dom.wren"));
-    // Example: call into Wren instead of interpreting adhoc code
-    _ = try this.vm.callStaticGetNumber("main", "Num", "from(_)", .{1.0}); // no-op placeholder call
     return this;
 }
 
