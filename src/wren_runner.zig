@@ -170,6 +170,9 @@ pub fn init(allocator: std.mem.Allocator, document: *Dom) !*@This() {
     // Provide Wren convenience wrappers around DOM ids via embedded file
     try this.vm.interpret("dom", @embedFile("wren_wrappers/dom.wren"));
 
+    // Load editor module
+    try this.vm.interpret("editor", @embedFile("wren_wrappers/editor.wren"));
+
     // Import dom classes into main so scripts can use them
     try this.vm.interpret("main", "import \"dom\" for Document, Element");
     return this;
@@ -187,8 +190,8 @@ pub fn deinit(self: *@This()) void {
     self.output.deinit();
 }
 
-pub fn runScript(self: *@This(), script: []const u8) !void {
-    try self.vm.interpret("main", script);
+pub fn runScript(self: *@This(), script_id: []const u8, script: []const u8) !void {
+    try self.vm.interpret(script_id, script);
 }
 
 pub fn getOutput(self: *const @This()) []const u8 {

@@ -1,16 +1,16 @@
 // Orbital animation - a few elements moving in paths
-var document = Document.new()
+import "dom" for Document, Element
 
 class Orbit {
-  construct new(container, doc) {
+  construct new(container) {
     _container = container
-    _document = doc
+    _document = Document
     _frame = 0
     _planets = []
     
     // Get viewport size for centering
-    _width = doc.width
-    _height = doc.height
+    _width = Document.width
+    _height = Document.height
     _centerX = _width / 2
     _centerY = _height / 2
     
@@ -95,9 +95,9 @@ class Orbit {
 }
 
 // Main execution
-var container = document.getElementById("waves")
+var container = Document.getElementById("waves")
 if (container == null) {
   System.print("Error: Could not find waves element")
 } else {
-  var orbit = Orbit.new(container, document)
+  var orbit = Orbit.new(container)
 }

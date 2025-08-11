@@ -1,10 +1,10 @@
 // Matrix-style digital rain with per-column clocks
-var document = Document.new()
+import "dom" for Document, Element
 
 class MatrixDemo {
-  construct new(container, doc) {
+  construct new(container) {
     _container = container
-    _document = doc
+    _document = Document
     // Use terminal viewport if available
     _width = _document.width
     _height = _document.height - 3 // leave room for title/info
@@ -98,9 +98,9 @@ class MatrixDemo {
   }
 }
 
-var container = document.getElementById("matrix")
+var container = Document.getElementById("matrix")
 if (container) {
-  MatrixDemo.new(container, document)
+  MatrixDemo.new(container)
 }
 
 

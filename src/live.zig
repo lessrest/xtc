@@ -14,6 +14,7 @@ const wren_xml = @import("wren_xml.zig");
 const WrenRunner = @import("wren_runner.zig");
 const event_dispatch = @import("event_dispatch.zig");
 const clock = @import("clock.zig");
+const ticket = @import("ticket.zig");
 
 // External dependencies
 const Graphemes = @import("Graphemes");
@@ -57,6 +58,13 @@ pub fn run(allocator: std.mem.Allocator, xml_path: ?[]const u8, wren_path: ?[]co
 
     var root_id: DomNodeId = undefined;
 
+    // Initial render
+    var termsize = updateTerminalSize();
+
+    // Expose viewport to Wren scripts
+    runner.script_context.viewport_width = termsize[0];
+    runner.script_context.viewport_height = termsize[1];
+
     if (xml_path) |path| {
         // Load and parse XML file
         const xml_content = try std.fs.cwd().readFileAlloc(allocator, path, 1024 * 1024);
@@ -81,13 +89,14 @@ pub fn run(allocator: std.mem.Allocator, xml_path: ?[]const u8, wren_path: ?[]co
         // Load and run Wren script
         const wren_content = try std.fs.cwd().readFileAlloc(allocator, path, 1024 * 1024);
         defer allocator.free(wren_content);
-        
+
         // Create a basic root element
         root_id = try document.addElement("flex");
         try document.setDebugId(root_id, "root");
-        
+
         // Run the Wren script which will populate the DOM
-        try runner.vm.interpret("main", wren_content);
+        const script_id = ticket.from(wren_content) catch @panic("Failed to generate script ID");
+        try runner.runScript(&script_id, wren_content);
     } else {
         // Default demo UI when no XML or Wren provided
         root_id = try document.addElement(
@@ -118,11 +127,6 @@ pub fn run(allocator: std.mem.Allocator, xml_path: ?[]const u8, wren_path: ?[]co
         ctx.glyphs.deinit();
     }
 
-    // Initial render
-    updateTerminalSize(&ctx);
-    // Expose viewport to Wren scripts
-    runner.script_context.viewport_width = ctx.width;
-    runner.script_context.viewport_height = ctx.height;
     try renderDom(&ctx, session_trace);
 
     // Start clock threads for any clock nodes in the DOM
@@ -136,7 +140,10 @@ pub fn run(allocator: std.mem.Allocator, xml_path: ?[]const u8, wren_path: ?[]co
         // Check for terminal resize every loop and re-render immediately on change
         const prev_w = ctx.width;
         const prev_h = ctx.height;
-        updateTerminalSize(&ctx);
+        termsize = updateTerminalSize();
+        ctx.width = termsize[0];
+        ctx.height = termsize[1];
+
         if (ctx.width != prev_w or ctx.height != prev_h) {
             runner.script_context.viewport_width = ctx.width;
             runner.script_context.viewport_height = ctx.height;
@@ -154,7 +161,7 @@ pub fn run(allocator: std.mem.Allocator, xml_path: ?[]const u8, wren_path: ?[]co
             for (events) |event| {
                 // Update the DOM node's tick count
                 ctx.dom.updateClockTick(event.node_id, event.tick_count);
-                
+
                 // Dispatch tick event to the clock node
                 event_dispatch.dispatchTick(
                     runner.vm.ptr,
@@ -463,16 +470,20 @@ fn writeFullRaster(raster: *const Raster, glyphs: *const tty.GlyphTable) !void {
     try out_ansi.resetStyle();
 }
 
-fn updateTerminalSize(ctx: *RenderCtx) void {
+fn updateTerminalSize() [2]usize {
     var ws: posix.winsize = .{ .col = 0, .row = 0, .xpixel = 0, .ypixel = 0 };
 
     const result = posix.system.ioctl(std.io.getStdOut().handle, posix.T.IOCGWINSZ, &ws);
+
     if (result >= 0) {
         if (ws.col > 0 and ws.row > 0) {
-            ctx.width = ws.col;
-            ctx.height = ws.row;
+            return .{ ws.col, ws.row };
         }
     }
+    if (ws.col == 80 and ws.row == 24) {
+        @panic("seems unlikely");
+    }
+    return .{ ws.col, ws.row };
 }
 
 // const LineEditor = @import("editor.zig");

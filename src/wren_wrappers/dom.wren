@@ -8,41 +8,37 @@ import "meta" for Meta
 // ============================================================================
 
 class Document {
-  construct new() {
-    _root = DOM.root()
-  }
-
-  root { Element.new(_root) }
+  static root { Element.new(DOM.root()) }
 
   // Host viewport size
-  width { DOM.viewportWidth() }
-  height { DOM.viewportHeight() }
+  static width { DOM.viewportWidth() }
+  static height { DOM.viewportHeight() }
 
-  createElement(style) {
+  static createElement(style) {
     return Element.new(DOM.createElement(style))
   }
 
-  createText(text) {
+  static createText(text) {
     return Element.new(DOM.createText(text))
   }
 
-  createClock(style) {
+  static createClock(style) {
     // Create a clock node with the given style
     // The style should include interval (e.g., "clock interval-500 clock-spinner")
     return Element.new(DOM.createClock(style))
   }
 
-  getElementById(id) {
+  static getElementById(id) {
     var nodeId = DOM.getElementById(id)
     if (nodeId == 4294967295) return null  // maxInt means not found
     return Element.new(nodeId)
   }
 
-  addEventListener(eventType, handler) {
+  static addEventListener(eventType, handler) {
     return DOM.addEventListener(0, eventType, handler)
   }
 
-  removeEventListener(eventType, handlerId) {
+  static removeEventListener(eventType, handlerId) {
     return DOM.removeEventListener(0, eventType, handlerId)
   }
 }
@@ -91,9 +87,6 @@ class Element {
     return DOM.removeEventListener(_id, eventType, handlerId)
   }
 }
-
-// Global document instance
-var document = Document.new()
 
 // ============================================================================
 // Script Runner - Manages script module execution

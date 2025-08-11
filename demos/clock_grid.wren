@@ -1,10 +1,10 @@
 // 10x5 grid of animated spinners, each with different FPS and phase
-var document = Document.new()
+import "dom" for Document, Element
 
 class ClockGrid {
-  construct new(container, doc) {
+  construct new(container) {
     _container = container
-    _document = doc
+    _document = Document
     _cols = 10
     _rows = 5
     _cells = []
@@ -47,9 +47,9 @@ class ClockGrid {
   }
 }
 
-var container = document.getElementById("cgrid")
+var container = Document.getElementById("cgrid")
 if (container) {
-  ClockGrid.new(container, document)
+  ClockGrid.new(container)
 }
 
 

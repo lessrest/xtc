@@ -1,10 +1,10 @@
 // Smooth animated waves using clock-based animation
-var document = Document.new()
+import "dom" for Document, Element
 
 class WaveAnimation {
-  construct new(container, doc) {
+  construct new(container) {
     _container = container
-    _document = doc
+    _document = Document
     _frame = 0
     _rows = []
     _width = 60
@@ -168,9 +168,9 @@ class WaveAnimation {
 
 // Create second animation - particle field
 class ParticleField {
-  construct new(container, doc) {
+  construct new(container) {
     _container = container
-    _document = doc
+    _document = Document
     _frame = 0
     _cells = []
     _width = 60
@@ -283,13 +283,13 @@ class ParticleField {
 }
 
 // Main execution
-var container = document.getElementById("waves")
+var container = Document.getElementById("waves")
 if (container == null) {
   System.print("Error: Could not find waves element")
 } else {
   // Create both animations
-  var waves = WaveAnimation.new(container, document)
-  var particles = ParticleField.new(container, document)
+  var waves = WaveAnimation.new(container)
+  var particles = ParticleField.new(container)
   
   // No keyboard handling needed - just runs automatically
 }

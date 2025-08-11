@@ -8,6 +8,7 @@ const WrenRunner = @import("wren_runner.zig");
 const dom = @import("dom.zig");
 const xmlparse = @import("xmlparse.zig");
 const wren_xml = @import("wren_xml.zig");
+const ticket = @import("ticket.zig");
 
 // Global logging options using std.log
 pub const std_options: std.Options = .{
@@ -152,7 +153,7 @@ pub fn main() !void {
         } else if (std.mem.eql(u8, a, "-h") or std.mem.eql(u8, a, "--help")) {
             try std.io.getStdOut().writer().print(
                 "usage: xtc [--live] [--log <file>] [--xml <string>] [--wren <file|script>] [--width N] [--height N] [--[no-]unicode-boxes] [--debug]\n" ++
-                "  --live: Run in live mode with alternate screen buffer (use with --xml)\n",
+                    "  --live: Run in live mode with alternate screen buffer (use with --xml)\n",
                 .{},
             );
             return;
@@ -214,27 +215,27 @@ pub fn main() !void {
                 content
             else |_|
                 xml; // If file read fails, treat it as inline XML
-            
+
             // Parse XML and use Wren integration (handles both with and without scripts)
             var reader = std.io.fixedBufferStream(xml_content);
             var xml_doc = try xmlparse.parse(al, "inline", reader.reader());
             defer xml_doc.deinit();
-            
+
             var document = dom.Dom.init(al);
             // Note: WrenRunner.deinit() will handle document.deinit()
-            
+
             var runner = try WrenRunner.init(al, &document);
             defer runner.deinit();
-            
+
             // Build DOM and execute scripts (if any)
             try wren_xml.buildDomIntoAndRunScripts(WrenRunner.ScriptContext, al, &xml_doc, &runner.vm, &document);
-            
+
             // Print any Wren output to stderr for debugging
             const wren_output = runner.getOutput();
             if (wren_output.len > 0) {
                 _ = try std.io.getStdErr().write(wren_output);
             }
-            
+
             // Render the resulting DOM
             try lib.renderDocumentToWriter(al, &document, std.io.getStdOut().writer(), out_width, out_height);
             return;
@@ -249,7 +250,9 @@ pub fn main() !void {
             var runner = try WrenRunner.init(al, &document);
             defer runner.deinit();
 
-            runner.runScript(script_content) catch |err| {
+            const script_id = ticket.from(script_content) catch @panic("Failed to generate script ID");
+
+            runner.runScript(&script_id, script_content) catch |err| {
                 // Print output to stdout
                 const output = runner.getOutput();
                 if (output.len > 0) {

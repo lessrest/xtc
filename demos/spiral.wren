@@ -1,10 +1,10 @@
 // Spiral animation using sine/cosine field and color cycling
-var document = Document.new()
+import "dom" for Document, Element
 
 class Spiral {
-  construct new(container, doc) {
+  construct new(container) {
     _container = container
-    _document = doc
+    _document = Document
     _w = _document.width
     _h = _document.height - 2
     if (_h < 1) _h = 1
@@ -135,9 +135,9 @@ class Spiral {
   }
 }
 
-var container = document.getElementById("spiral")
+var container = Document.getElementById("spiral")
 if (container) {
-  Spiral.new(container, document)
+  Spiral.new(container)
 }
 
 

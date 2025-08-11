@@ -1,5 +1,5 @@
 // Simple Tetris - moves DOM nodes instead of recreating them
-var document = Document.new()
+import "dom" for Document, Element
 
 // Constants
 var BOARD_WIDTH = 10
@@ -26,9 +26,8 @@ var PIECES = [
 ]
 
 class SimpleTetris {
-  construct new(container, doc) {
+  construct new(container) {
     _container = container
-    _document = doc
     _board = List.filled(BOARD_HEIGHT, null)
     for (y in 0...BOARD_HEIGHT) {
       _board[y] = List.filled(BOARD_WIDTH, 0)
@@ -53,21 +52,21 @@ class SimpleTetris {
   
   setupDOM() {
     // Create main container
-    var gameBox = _document.createElement("flex flex-col p-2")
+    var gameBox = Document.createElement("flex flex-col p-2")
     
     // Score display
-    var scoreBox = _document.createElement("bg-gray-900 text-white p-2 mb-2")
-    _scoreText = _document.createText("Score: 0")
+    var scoreBox = Document.createElement("bg-gray-900 text-white p-2 mb-2")
+    _scoreText = Document.createText("Score: 0")
     scoreBox.append(_scoreText)
     gameBox.append(scoreBox)
     
     // Create board grid
-    var boardBox = _document.createElement("flex flex-col border-2 border-gray-700")
+    var boardBox = Document.createElement("flex flex-col border-2 border-gray-700")
     for (y in 0...BOARD_HEIGHT) {
-      var row = _document.createElement("flex flex-row")
+      var row = Document.createElement("flex flex-row")
       var rowCells = []
       for (x in 0...BOARD_WIDTH) {
-        var cell = _document.createElement("w-2 h-1 bg-gray-900")
+        var cell = Document.createElement("w-2 h-1 bg-gray-900")
         row.append(cell)
         rowCells.add(cell)
       }
@@ -77,14 +76,14 @@ class SimpleTetris {
     gameBox.append(boardBox)
     
     // Controls hint
-    var controlsBox = _document.createElement("text-gray-400 text-xs mt-2")
-    var controlsText = _document.createText("A/D: Move  W: Rotate  S: Drop  Space: Hard  R: Reset")
+    var controlsBox = Document.createElement("text-gray-400 text-xs mt-2")
+    var controlsText = Document.createText("A/D: Move  W: Rotate  S: Drop  Space: Hard  R: Reset")
     controlsBox.append(controlsText)
     gameBox.append(controlsBox)
     
     // Hidden game over message (empty initially)
-    _gameOverBox = _document.createElement("")
-    _gameOverText = _document.createText("")
+    _gameOverBox = Document.createElement("")
+    _gameOverText = Document.createText("")
     _gameOverBox.append(_gameOverText)
     gameBox.append(_gameOverBox)
     
@@ -298,13 +297,13 @@ class SimpleTetris {
 }
 
 // Main execution
-var container = document.getElementById("game-board")
+var container = Document.getElementById("game-board")
 if (container == null) {
   System.print("Error: Could not find game-board element")
 } else {
-  var game = SimpleTetris.new(container, document)
+  var game = SimpleTetris.new(container)
   
-  document.addEventListener("keypress", Fn.new { |event|
+  Document.addEventListener("keypress", Fn.new { |event|
     if (game != null) {
       game.handleKey(event["key"])
     }

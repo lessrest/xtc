@@ -119,7 +119,7 @@ fn processScriptElement(
 
     // Execute the script directly
     if (source_buf.items.len > 0) {
-        vm.interpret("main", source_buf.items) catch |err| {
+        vm.interpret(module_name orelse "global-script", source_buf.items) catch |err| {
             std.debug.print("Script error: {}\n", .{err});
             if (vm.user_data.output.items.len > 0) {
                 std.debug.print("Wren output: {s}\n", .{vm.user_data.output.items});

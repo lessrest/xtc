@@ -1,6 +1,6 @@
 // Tetris Game Module
-// Create document instance
-var document = Document.new()
+// Import DOM classes
+import "dom" for Document, Element
 
 // Internal game classes (module-scoped)
 class Piece {
@@ -149,9 +149,9 @@ class Board {
 }
 
 class TetrisGame {
-  construct new(container, doc) {
+  construct new(container) {
     _container = container
-    _document = doc
+    _document = Document
     _board = Board.new(10, 20)
     _score = 0
     _gameOver = false
@@ -318,13 +318,13 @@ class TetrisGame {
 }
 
 // Main script execution
-var container = document.getElementById("game-board")
+var container = Document.getElementById("game-board")
 if (container == null) {
   System.print("Error: Could not find game-board element")
 } else {
-  var game = TetrisGame.new(container, document)
+  var game = TetrisGame.new(container)
 
-  document.addEventListener("keypress", Fn.new { |event|
+  Document.addEventListener("keypress", Fn.new { |event|
     if (game != null) {
       game.handleKey(event["key"])
     }
