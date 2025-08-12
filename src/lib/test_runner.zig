@@ -391,17 +391,24 @@ const TestSuite = struct {
                         dumpAllStackFrames(trace);
                     }
                     if (failure.output.len > 0) {
-                        try tree.enter();
-                        defer tree.exit();
+                        var longest_line_len: usize = 0;
+                        for (failure.output) |line| {
+                            if (line.text.len > longest_line_len) {
+                                longest_line_len = line.text.len;
+                            }
+                        }
 
                         for (failure.output, 0..) |line, i| {
-                            const has_more = i < failure.output.len - 1;
-                            try tree.writePrefix(has_more);
+                            _ = i; // autofix
+                            try tree.writeVerticals();
                             if (line.kind == .out) {
-                                try tree.writeWrappedText(line.text, 60);
-                            } else {
-                                try tree.writeWrappedText(line.text, 60);
+                                try tree.ansi.setForegroundRgb(100, 100, 100);
+                            } else if (line.kind == .err) {
+                                try tree.ansi.setForegroundRgb(240, 150, 150);
                             }
+                            try tree.print(" {s}", .{line.text});
+                            try tree.newline();
+                            try tree.ansi.resetStyle();
                         }
                     }
                 } else {
