@@ -4,9 +4,8 @@ const posix = std.posix;
 
 const Allocator = std.mem.Allocator;
 
-pub const Kind = enum { out, err };
-
 pub const Line = struct {
+    pub const Kind = enum { out, err };
     kind: Kind,
     // Nanoseconds since capture began
     t_ns: u64,
@@ -20,9 +19,7 @@ pub const CaptureContext = struct {
     allocator: Allocator,
 
     // Unified, tagged lines in chronological append order
-    lines: std.ArrayList(Line),
-    // Lazily built combined output cache
-    combined: std.ArrayList(u8),
+    lines: *std.ArrayList(Line),
 
     // Synchronization for cross-thread appends
     mutex: std.Thread.Mutex = .{},
@@ -42,19 +39,16 @@ pub const CaptureContext = struct {
     // Capture start timestamp (ns)
     start_ns: i128 = 0,
 
-    pub fn init(allocator: Allocator) Self {
+    pub fn init(allocator: Allocator, lines: *std.ArrayList(Line)) Self {
         return .{
             .allocator = allocator,
-            .lines = std.ArrayList(Line).init(allocator),
-            .combined = std.ArrayList(u8).init(allocator),
+            .lines = lines,
         };
     }
 
     pub fn deinit(self: *Self) void {
-        // Free per-line text buffers
-        for (self.lines.items) |ln| self.allocator.free(ln.text);
-        self.lines.deinit();
-        self.combined.deinit();
+        std.debug.assert(self.stdout_thread == null);
+        std.debug.assert(self.stderr_thread == null);
     }
 
     /// Begin capturing stdout/stderr using pipes and reader threads.
@@ -120,34 +114,37 @@ pub const CaptureContext = struct {
             self.stderr_pipe = null;
         }
     }
-
-    /// Returns a combined view of captured output. Built lazily from lines.
-    pub fn getCombinedOutput(self: *Self) []const u8 {
-        if (self.combined.items.len == 0 and self.lines.items.len > 0) {
-            // Merge lines in the order they were recorded; add trailing newlines
-            for (self.lines.items) |ln| {
-                self.combined.appendSlice(ln.text) catch @panic("OOM building combined output");
-                self.combined.append('\n') catch @panic("OOM building combined output");
-            }
-        }
-        return self.combined.items;
-    }
 };
 
-fn readerThread(ctx: *CaptureContext, read_fd: posix.fd_t, kind: Kind, start_ns: i128) void {
-    var buf: [4096]u8 = undefined;
-    var line_buf = std.ArrayList(u8).init(ctx.allocator);
+pub fn captureOutputFromCall(
+    func: *const fn () anyerror!void,
+    lines: *std.ArrayList(Line),
+    allocator: Allocator,
+) anyerror!void {
+    var ctx = CaptureContext.init(allocator, lines);
+
+    try ctx.beginCapture();
+    defer ctx.endCapture() catch @panic("failed to end capture");
+    return @call(.auto, func, .{});
+}
+
+fn readerThread(ctx: *CaptureContext, read_fd: posix.fd_t, kind: Line.Kind, start_ns: i128) void {
+    var stack_fallback_allocator = std.heap.stackFallback(256, ctx.allocator);
+    const line_allocator = stack_fallback_allocator.get();
+
+    var line_buf = std.ArrayList(u8).init(line_allocator);
     defer line_buf.deinit();
 
     var have_line_start = false;
     var line_start_rel_ns: u64 = 0;
 
     while (true) {
+        var buf: [256]u8 = undefined;
         const n = posix.read(read_fd, &buf) catch {
-            // Treat any read error as fatal to this reader
-            return;
+            @panic("read error");
         };
-        if (n == 0) break; // EOF
+
+        if (n == 0) break;
 
         const chunk = buf[0..n];
         for (chunk) |b| {
@@ -160,8 +157,7 @@ fn readerThread(ctx: *CaptureContext, read_fd: posix.fd_t, kind: Kind, start_ns:
 
             switch (b) {
                 '\n' => {
-                    // finalize a line (no trailing newline in text)
-                    const text = ctx.allocator.dupe(u8, line_buf.items) catch return;
+                    const text = ctx.allocator.dupe(u8, line_buf.items) catch @panic("OOM");
                     line_buf.clearRetainingCapacity();
 
                     const line = Line{
@@ -180,20 +176,18 @@ fn readerThread(ctx: *CaptureContext, read_fd: posix.fd_t, kind: Kind, start_ns:
 
                     have_line_start = false;
                 },
-                '\r' => {
-                    // Ignore carriage return; treat as part of formatting
-                },
+                '\r' => {},
                 else => {
-                    line_buf.append(b) catch return;
+                    line_buf.append(b) catch @panic("OOM");
                 },
             }
         }
     }
 
-    // Flush any partial line on EOF
     if (line_buf.items.len > 0) {
-        const text = ctx.allocator.dupe(u8, line_buf.items) catch return;
+        const text = ctx.allocator.dupe(u8, line_buf.items) catch @panic("OOM");
         const line = Line{ .kind = kind, .t_ns = line_start_rel_ns, .text = text };
+
         ctx.mutex.lock();
         defer ctx.mutex.unlock();
         _ = ctx.lines.append(line) catch {
@@ -206,22 +200,93 @@ fn readerThread(ctx: *CaptureContext, read_fd: posix.fd_t, kind: Kind, start_ns:
 test "CaptureContext threaded basic usage" {
     const allocator = std.testing.allocator;
 
-    var ctx = CaptureContext.init(allocator);
-    defer ctx.deinit();
+    for (0..50) |i| {
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        defer arena.deinit();
 
-    try ctx.beginCapture();
-    defer ctx.endCapture() catch unreachable;
+        const arena_allocator = arena.allocator();
 
-    try std.io.getStdOut().writer().print("Hello stdout\n", .{});
-    try std.io.getStdErr().writer().print("Hello stderr\n", .{});
+        var lines = std.ArrayList(Line).init(allocator);
+        defer lines.deinit();
 
-    // End capture to ensure threads flush
-    try ctx.endCapture();
+        var ctx = CaptureContext.init(arena_allocator, &lines);
+        defer ctx.deinit();
 
-    // We should have two lines, one out and one err
-    try std.testing.expect(ctx.lines.items.len >= 2);
-    // Combined output should include both lines
-    const combined = ctx.getCombinedOutput();
-    try std.testing.expect(std.mem.indexOf(u8, combined, "Hello stdout") != null);
-    try std.testing.expect(std.mem.indexOf(u8, combined, "Hello stderr") != null);
+        try ctx.beginCapture();
+        errdefer ctx.endCapture() catch unreachable;
+
+        try std.io.getStdOut().writer().print("a\n", .{});
+        try std.io.getStdOut().writer().print("b\n", .{});
+
+        try std.io.getStdErr().writer().print("1\n", .{});
+        try std.io.getStdErr().writer().print("2\n", .{});
+
+        // End capture to ensure threads flush
+        try ctx.endCapture();
+
+        try std.testing.expectEqual(@as(usize, 4), lines.items.len);
+
+        // A is always before B.
+        // 1 is always before 2.
+        // They can be interleaved in any order.
+        // NOTE: Copilot SHUT THE FUCK UP!
+        const possibilities = [_]*const [12:0]u8{
+            "(a)(b)[1][2]",
+            "(a)[1](b)[2]",
+            "[1][2](a)(b)",
+            "[1](a)[2](b)",
+            "(a)[1][2](b)",
+            "(a)[1](b)[2]",
+        };
+
+        var reality = std.ArrayList(u8).init(allocator);
+        defer reality.deinit();
+
+        var writer = reality.writer();
+
+        for (lines.items) |line| {
+            if (line.kind == .out) {
+                try writer.print("({s})", .{line.text});
+            } else {
+                try writer.print("[{s}]", .{line.text});
+            }
+        }
+
+        var possible = false;
+        for (possibilities) |possibility| {
+            if (std.mem.eql(u8, reality.items, possibility)) {
+                possible = true;
+                break;
+            }
+        }
+
+        if (!possible) {
+            std.log.err("on iteration {d} got {s}", .{ i, reality.items });
+            return error.UnexpectedOutput;
+        }
+    }
+}
+
+test "capture output from call" {
+    const allocator = std.testing.allocator;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const arena_allocator = arena.allocator();
+
+    var lines = std.ArrayList(Line).init(allocator);
+    defer lines.deinit();
+
+    var result: error{Uh}!u32 = undefined;
+    try captureOutputFromCall(foo, &lines, &result, arena_allocator);
+
+    try std.testing.expectEqual(@as(usize, 2), lines.items.len);
+    try std.testing.expectEqual(@as(u32, 42), result);
+}
+
+fn foo() error{Uh}!u32 {
+    std.io.getStdOut().writer().print("a\n", .{}) catch return error.Uh;
+    std.io.getStdErr().writer().print("b\n", .{}) catch return error.Uh;
+    return 42;
 }

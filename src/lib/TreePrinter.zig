@@ -39,15 +39,17 @@ pub fn TreePrinter(comptime Writer: type) type {
             }
 
             // Draw the connector for the current level
+            try ansi_w.setForegroundRgb(100, 100, 100); // Dim gray
             if (self.indent_level > 0) {
-                try ansi_w.setForegroundRgb(100, 100, 100); // Dim gray
                 if (is_last) {
                     try ansi_w.writeAll("└─ ");
                 } else {
                     try ansi_w.writeAll("├─ ");
                 }
-                try ansi_w.resetStyle();
+            } else {
+                //                try ansi_w.writeAll("╒ ");
             }
+            try ansi_w.resetStyle();
         }
 
         pub fn writeVerticals(self: *Self) !void {
@@ -58,9 +60,9 @@ pub fn TreePrinter(comptime Writer: type) type {
                 for (self.level_has_more.items[0 .. self.level_has_more.items.len - 1]) |has_more| {
                     if (has_more) {
                         try ansi_w.setForegroundRgb(100, 100, 100); // Dim gray
-                        try ansi_w.writeAll("│  ");
+                        try ansi_w.writeAll("│");
                     } else {
-                        try ansi_w.writeAll("   ");
+                        try ansi_w.writeAll(" ");
                     }
                     try ansi_w.resetStyle();
                 }
@@ -74,9 +76,9 @@ pub fn TreePrinter(comptime Writer: type) type {
                     false;
                 if (current_level_has_more) {
                     try ansi_w.setForegroundRgb(100, 100, 100); // Dim gray
-                    try ansi_w.writeAll("│  ");
+                    try ansi_w.writeAll("│");
                 } else {
-                    try ansi_w.writeAll("   ");
+                    try ansi_w.writeAll(" ");
                 }
                 try ansi_w.resetStyle();
             }
@@ -100,6 +102,20 @@ pub fn TreePrinter(comptime Writer: type) type {
 
         pub fn indentColumns(self: *Self) usize {
             return @as(usize, self.indent_level) * 3;
+        }
+
+        pub fn newline(self: *Self) !void {
+            try self.ansi.resetStyle();
+            try self.ansi.writeAll("\n");
+        }
+
+        pub fn print(self: *Self, comptime format: []const u8, args: anytype) !void {
+            try std.fmt.format(self.ansi.writer, format, args);
+        }
+
+        pub fn println(self: *Self, comptime format: []const u8, args: anytype) !void {
+            try self.print(format, args);
+            try self.newline();
         }
 
         pub fn writeWrappedText(self: *Self, text: []const u8, max_width: usize) !void {

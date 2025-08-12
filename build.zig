@@ -59,14 +59,26 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(exe);
 
     const unit_tests = b.addTest(.{
+        .name = "xtc-test-suite",
         .root_module = xtc,
         .optimize = .Debug,
         .test_runner = .{
-            .path = b.path("test_runner.zig"),
+            .path = b.path("src/lib/test_runner.zig"),
             .mode = .simple,
         },
     });
 
+    b.installArtifact(unit_tests);
+
     const run_unit_tests = b.addRunArtifact(unit_tests);
     b.step("test", "Run unit tests").dependOn(&run_unit_tests.step);
+
+    const install_docs = b.addInstallDirectory(.{
+        .source_dir = exe.getEmittedDocs(),
+        .install_dir = .prefix,
+        .install_subdir = "doc",
+    });
+
+    const docs_step = b.step("docs", "Install docs into zig-out/docs");
+    docs_step.dependOn(&install_docs.step);
 }
