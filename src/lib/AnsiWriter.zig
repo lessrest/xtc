@@ -1,12 +1,24 @@
 const std = @import("std");
 
-// Import types
-const Rgba8 = @import("paint.zig").Rgba8;
-const rgba8 = @import("paint.zig").rgba8;
-const rgba8Red = @import("paint.zig").rgba8Red;
-const rgba8Green = @import("paint.zig").rgba8Green;
-const rgba8Blue = @import("paint.zig").rgba8Blue;
-const GlyphId = @import("tty.zig").GlyphId;
+const Rgba8 = u32;
+
+pub fn rgba8(r: u8, g: u8, b: u8, a: u8) Rgba8 {
+    return @as(u32, r) | (@as(u32, g) << 8) | (@as(u32, b) << 16) | (@as(u32, a) << 24);
+}
+
+pub fn rgba8Red(color: Rgba8) u8 {
+    return @truncate(color);
+}
+
+pub fn rgba8Green(color: Rgba8) u8 {
+    return @truncate(color >> 8);
+}
+
+pub fn rgba8Blue(color: Rgba8) u8 {
+    return @truncate(color >> 16);
+}
+
+const GlyphId = u32;
 
 /// ANSI escape sequence writer with semantic methods
 pub fn AnsiWriter(comptime WriterType: type) type {

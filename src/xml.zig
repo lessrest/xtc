@@ -8,7 +8,7 @@ pub const XmlDom = struct { dom: Dom, root: DomNodeId };
 fn xmlAddElementRecursive(dom: *Dom, el: @import("xmlparse.zig").Element) !DomNodeId {
     const class_attr = el.attr("class") orelse "";
     const id = try dom.addElement(class_attr);
-    
+
     // Set debug ID if present
     if (el.attr("id")) |id_attr| {
         try dom.setDebugId(id, id_attr);
@@ -34,14 +34,16 @@ fn xmlAddElementRecursive(dom: *Dom, el: @import("xmlparse.zig").Element) !DomNo
     return id;
 }
 
-pub fn loadDocumentFromMarkup(alloc: std.mem.Allocator, doc: *const @import("xmlparse.zig").Document) !Dom {
-    var dom = Dom.init(alloc);
+pub fn loadDocumentFromMarkup(alloc: std.mem.Allocator, doc: *const @import("xmlparse.zig").Document) !*Dom {
+    var dom = try Dom.init(alloc);
+    errdefer dom.deinit();
+
     doc.acquire();
     defer doc.release();
 
     const root = doc.root;
     const tag_name = root.tag_name.slice();
-    
+
     // Special handling for top-level <root> element:
     // Instead of creating a new node, reuse the document root (node 0)
     if (std.mem.eql(u8, tag_name, "root")) {
@@ -49,11 +51,11 @@ pub fn loadDocumentFromMarkup(alloc: std.mem.Allocator, doc: *const @import("xml
         if (root.attr("id")) |id_attr| {
             try dom.setDebugId(0, id_attr);
         }
-        
+
         if (root.attr("class")) |class_attr| {
             try dom.updateClass(0, class_attr);
         }
-        
+
         // Process children of <root> and attach them to the document root
         if (root.content) |_| {
             const kids = root.children();
@@ -62,7 +64,7 @@ pub fn loadDocumentFromMarkup(alloc: std.mem.Allocator, doc: *const @import("xml
                 const n = kids[i].v();
                 switch (n) {
                     .element => |child_el| {
-                        const cid = try xmlAddElementRecursive(&dom, child_el);
+                        const cid = try xmlAddElementRecursive(dom, child_el);
                         dom.appendChild(0, cid);
                     },
                     .text => |sidx| {
@@ -75,10 +77,10 @@ pub fn loadDocumentFromMarkup(alloc: std.mem.Allocator, doc: *const @import("xml
         }
     } else {
         // Normal case: create a new element and attach to document root
-        const root_id = try xmlAddElementRecursive(&dom, root);
+        const root_id = try xmlAddElementRecursive(dom, root);
         dom.appendChild(0, root_id);
     }
-    
+
     return dom;
 }
 

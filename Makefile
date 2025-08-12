@@ -1,3 +1,13 @@
+.PHONY: vscode-build-and-test
+
+vscode-build-and-test:
+	@echo "[begin compile]"
+	@zig build || { status=$$?; echo "[end compile]"; exit $$status; }
+	@echo "[end compile]"
+	@echo "[begin test]"
+	@zig build test || { status=$$?; echo "[end test]"; exit $$status; }
+	@echo "[end test]"
+
 ZIG ?= zig
 ZIG_PROJECT := zig-xtc
 BUILD_DIR := zig-out

@@ -93,6 +93,7 @@ pub fn intrinsicSize(dom_: *const Dom, id: DomNodeId, max_w: usize, max_h: usize
             const clamp_w: usize = if (max_w == 0) text_cols else @min(max_w, text_cols);
 
             const old_h = h;
+            _ = old_h; // autofix
 
             if (w == 0) {
                 // When unconstrained (max_w == 0), use natural text width
@@ -110,11 +111,6 @@ pub fn intrinsicSize(dom_: *const Dom, id: DomNodeId, max_w: usize, max_h: usize
                 // When unconstrained (max_h == 0), use natural line count
                 h = if (max_h == 0) (pad_y + lines) else @min(max_h, pad_y + lines);
             }
-
-            // Log the text measurement calculation
-            var id_buf: [32]u8 = undefined;
-            const debug_id = dom_.getDebugIdOrDefault(id, &id_buf);
-            std.log.info("  [measure] text {s}: text_cols={d} max_w={d} max_h={d} pad=({d}x{d}) lines={d} -> ({d}x{d})", .{ debug_id, text_cols, max_w, max_h, pad_x, pad_y, if (h > 0 and old_h == 0) (h - pad_y) else 1, w, h });
         } else if (kind == .element) {
             // Element containers: calculate intrinsic size from children
             const child_count = items.items(.child_count)[@as(usize, @intCast(id))];
@@ -123,7 +119,7 @@ pub fn intrinsicSize(dom_: *const Dom, id: DomNodeId, max_w: usize, max_h: usize
                 var max_child_w: usize = 0;
                 var total_child_h: usize = 0;
                 var max_child_h: usize = 0;
-                
+
                 // Measure all children to find container's intrinsic size
                 var cur_child = items.items(.first_child)[@as(usize, @intCast(id))];
                 while (cur_child != Dom.NullId) {
@@ -131,17 +127,17 @@ pub fn intrinsicSize(dom_: *const Dom, id: DomNodeId, max_w: usize, max_h: usize
                     const child_max_w = if (max_w > pad_x) (max_w - pad_x) else 0;
                     const child_max_h = if (max_h > pad_y) (max_h - pad_y) else 0;
                     const child_size = intrinsicSize(dom_, cur_child, child_max_w, child_max_h, unicode);
-                    
+
                     // Track both sum and max for both dimensions
                     total_child_w += child_size[0];
                     max_child_w = @max(max_child_w, child_size[0]);
                     total_child_h += child_size[1];
                     max_child_h = @max(max_child_h, child_size[1]);
-                    
+
                     // Move to next sibling
                     cur_child = items.items(.next_sibling)[@as(usize, @intCast(cur_child))];
                 }
-                
+
                 // Container size depends on flex direction
                 if (row.flex_dir == .row) {
                     // Horizontal layout: width is sum, height is max

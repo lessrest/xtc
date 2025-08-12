@@ -187,7 +187,16 @@ pub fn ScriptEngine(comptime ScriptContext: type) type {
                 }
 
                 // Interpret generated source in the module namespace
-                try self.interpret(mod_spec.module_name, src.items);
+                if (self.interpret(mod_spec.module_name, src.items)) |_| {
+                    // ok
+                } else |err| {
+                    std.debug.print("Error interpreting module {s}: {any}\n", .{
+                        mod_spec.module_name,
+                        err,
+                    });
+                    std.debug.print("Source:\n{s}\n", .{src.items});
+                    return err;
+                }
             }
         }
 

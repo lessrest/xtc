@@ -30,8 +30,11 @@ pub const Dom = struct {
     debug_ids: std.AutoHashMap(DomNodeId, []const u8),
     event_registry: EventRegistry,
 
-    pub fn init(alloc: std.mem.Allocator) Dom {
-        var dom = Dom{
+    pub fn init(alloc: std.mem.Allocator) !*Dom {
+        var dom = try alloc.create(Dom);
+        errdefer alloc.destroy(dom);
+
+        dom.* = .{
             .alloc = alloc,
             .headers = .{},
             .styles = StyleTable.init(alloc),
@@ -67,7 +70,7 @@ pub const Dom = struct {
         }
         self.debug_ids.deinit();
         self.event_registry.deinit();
-        self.* = undefined;
+        self.alloc.destroy(self);
     }
 
     pub fn addElement(self: *Dom, style_bytes: []const u8) !DomNodeId {

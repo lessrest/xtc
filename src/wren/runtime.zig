@@ -1,6 +1,7 @@
 const std = @import("std");
 const wren = @import("vm.zig");
 const dom = @import("../dom.zig");
+const scheduler_mod = @import("../scheduler.zig");
 const Dom = dom.Dom;
 const DomNodeId = dom.DomNodeId;
 const events = @import("../events.zig");
@@ -11,8 +12,6 @@ script_context: ScriptContext,
 event_handles: std.ArrayList(*wren.c.Handle),
 output: std.ArrayList(u8),
 
-document: *Dom,
-
 allocator: std.mem.Allocator,
 
 pub const ScriptContext = struct {
@@ -22,10 +21,15 @@ pub const ScriptContext = struct {
     event_handles: *std.ArrayList(*wren.c.Handle),
     viewport_width: usize = 80,
     viewport_height: usize = 24,
+    // Optional fiber scheduler used by Tui module
+    scheduler: ?*scheduler_mod.Scheduler = null,
 
     pub const Modules = struct {
         pub const dom = struct {
             pub const DOM = @import("platform/DOM.zig");
+        };
+        pub const tui = struct {
+            pub const Tui = @import("platform/Tui.zig");
         };
     };
 
@@ -63,6 +67,12 @@ pub const ScriptContext = struct {
                 ) catch {};
             },
         }
+        std.log.warn("VM {s} error in {s}:{d}: {s}\n", .{
+            @tagName(error_type),
+            module,
+            line,
+            message,
+        });
     }
 };
 
@@ -70,7 +80,6 @@ pub fn init(allocator: std.mem.Allocator, document: *Dom) !*@This() {
     var this = try allocator.create(@This());
     this.* = .{
         .allocator = allocator,
-        .document = document,
         .output = std.ArrayList(u8).init(allocator),
         .vm = undefined,
         .script_context = undefined,
@@ -79,7 +88,7 @@ pub fn init(allocator: std.mem.Allocator, document: *Dom) !*@This() {
 
     this.script_context = .{
         .allocator = allocator,
-        .document = this.document,
+        .document = document,
         .output = &this.output,
         .event_handles = &this.event_handles,
     };
@@ -90,6 +99,7 @@ pub fn init(allocator: std.mem.Allocator, document: *Dom) !*@This() {
 
     try this.vm.interpret("dom", @embedFile("modules/dom.wren"));
     try this.vm.interpret("editor", @embedFile("modules/editor.wren"));
+    try this.vm.interpret("tui", @embedFile("modules/tui.wren"));
     try this.vm.interpret("main", "import \"dom\" for Document, Element");
 
     return this;
@@ -102,7 +112,6 @@ pub fn deinit(self: *@This()) void {
 
     self.event_handles.deinit();
     self.vm.deinit();
-    self.document.deinit();
     self.output.deinit();
     self.allocator.destroy(self);
 }

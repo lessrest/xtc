@@ -4,24 +4,38 @@ const std = @import("std");
 pub const Args = struct {
     // Execution mode
     mode: Mode,
-    
+
     // Input source
     input: Input,
-    
+
     // Output configuration
     output: OutputConfig,
-    
+
     // Debug/logging
     log_path: ?[]const u8 = "xtc.log",
     debug_mode: bool = false,
-    
+    trace: TraceOption = .off,
+
     // Deprecated options
     unicode_boxes: ?bool = null,
+
+    pub fn deinit(self: *Args, allocator: std.mem.Allocator) void {
+        if (self.input == .xml_file) allocator.free(self.input.xml_file);
+        if (self.input == .xml_string) allocator.free(self.input.xml_string);
+        if (self.input == .wren_file) allocator.free(self.input.wren_file);
+        if (self.input == .wren_string) allocator.free(self.input.wren_string);
+    }
 };
 
 pub const Mode = enum {
-    one_shot,  // Render once and exit
-    live,      // Interactive mode
+    one_shot, // Render once and exit
+    live, // Interactive mode
+};
+
+pub const TraceOption = union(enum) {
+    off: void,
+    on: void,
+    depth: usize,
 };
 
 pub const Input = union(enum) {
@@ -40,15 +54,15 @@ pub const OutputConfig = struct {
 /// Parse command-line arguments into structured form
 pub fn parse(allocator: std.mem.Allocator, args: []const []const u8) !Args {
     var result = Args{
-        .mode = .one_shot,  // Default to one-shot
+        .mode = .one_shot, // Default to one-shot
         .input = .{ .default = {} },
         .output = .{},
     };
-    
-    var i: usize = 1;  // Skip program name
+
+    var i: usize = 1; // Skip program name
     while (i < args.len) : (i += 1) {
         const arg = args[i];
-        
+
         if (std.mem.eql(u8, arg, "--live")) {
             result.mode = .live;
         } else if (std.mem.eql(u8, arg, "--log")) {
@@ -71,6 +85,12 @@ pub fn parse(allocator: std.mem.Allocator, args: []const []const u8) !Args {
             result.unicode_boxes = false;
         } else if (std.mem.eql(u8, arg, "--debug")) {
             result.debug_mode = true;
+        } else if (std.mem.eql(u8, arg, "--trace")) {
+            result.trace = .on;
+        } else if (std.mem.eql(u8, arg, "--trace-depth")) {
+            const value = try expectValue(arg, args, &i);
+            const depth = try parseNumber(usize, value, arg);
+            result.trace = .{ .depth = depth };
         } else if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
             printHelp();
             std.process.exit(0);
@@ -79,12 +99,12 @@ pub fn parse(allocator: std.mem.Allocator, args: []const []const u8) !Args {
             std.process.exit(2);
         }
     }
-    
+
     // Auto-detect live mode if no input provided
     if (result.input == .default and result.mode == .one_shot) {
         result.mode = .live;
     }
-    
+
     return result;
 }
 
@@ -107,22 +127,22 @@ fn parseNumber(comptime T: type, value: []const u8, flag: []const u8) !T {
 fn parseXmlInput(allocator: std.mem.Allocator, value: []const u8) !Input {
     // Check if it's a file or inline XML
     if (std.fs.cwd().readFileAlloc(allocator, value, 1024 * 1024)) |content| {
-        _ = content;  // We'll read it again when needed
-        return .{ .xml_file = value };
+        _ = content; // We'll read it again when needed
+        return .{ .xml_file = try allocator.dupe(u8, value) };
     } else |_| {
         // Treat as inline XML
-        return .{ .xml_string = value };
+        return .{ .xml_string = try allocator.dupe(u8, value) };
     }
 }
 
 fn parseWrenInput(allocator: std.mem.Allocator, value: []const u8) !Input {
     // Check if it's a file or inline script
     if (std.fs.cwd().readFileAlloc(allocator, value, 1024 * 1024)) |content| {
-        allocator.free(content);  // Just checking existence
-        return .{ .wren_file = value };
+        _ = content; // autofix
+        return .{ .wren_file = try allocator.dupe(u8, value) };
     } else |_| {
         // Treat as inline script
-        return .{ .wren_string = value };
+        return .{ .wren_string = try allocator.dupe(u8, value) };
     }
 }
 
@@ -140,6 +160,8 @@ fn printHelp() void {
         \\  --height <N>          Output height (default: 24)
         \\  --log <file>          Log file path (default: xtc.log)
         \\  --debug               Enable debug mode with trace formatting
+        \\  --trace               Enable full execution tracing
+        \\  --trace-depth <N>     Enable tracing up to depth N
         \\  -h, --help           Show this help message
         \\
         \\Examples:

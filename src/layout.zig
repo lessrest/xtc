@@ -4,15 +4,19 @@ const DomNodeId = @import("dom.zig").DomNodeId;
 const Layout = @import("lib.zig").Layout;
 const DisplayWidth = @import("lib.zig").DisplayWidth;
 const UnicodeData = @import("paint.zig").UnicodeData;
-const Trace = @import("Trace.zig");
+const Trace = @import("Trace.zig").Trace;
 
 const LayoutEngine = @This();
 
 allocator: std.mem.Allocator,
 unicode: *const UnicodeData,
-trace: Trace,
+trace: *Trace,
 
-pub fn init(allocator: std.mem.Allocator, unicode: *const UnicodeData, trace: Trace) LayoutEngine {
+pub fn init(
+    allocator: std.mem.Allocator,
+    unicode: *const UnicodeData,
+    trace: *Trace,
+) LayoutEngine {
     return .{
         .allocator = allocator,
         .unicode = unicode,
@@ -35,8 +39,8 @@ pub const Rect = struct {
     w: usize,
     h: usize,
 
-    pub fn trace(self: Rect, span: *const Trace) void {
-        span.print("({d} {d} {d}×{d})", .{ self.x, self.y, self.w, self.h });
+    pub fn trace(self: Rect, tracer: *Trace) void {
+        tracer.print("({d} {d} {d}×{d})", .{ self.x, self.y, self.w, self.h });
     }
 };
 
@@ -105,9 +109,9 @@ fn computeIntrinsicSizesForFlexItems(
     content_rect: Rect,
     flex_container_style: StyleRow,
 ) ![]FlexItem {
-    const span = self.trace.enter();
-    defer span.exit();
-    span.info("Calculating intrinsic sizes for flex items");
+    self.trace.enter();
+    defer self.trace.exit();
+    self.trace.info("Calculating intrinsic sizes for flex items");
 
     const flex_item_count = container_node.child_count;
     var flex_items = try self.allocator.alloc(FlexItem, flex_item_count);
@@ -131,10 +135,10 @@ fn computeIntrinsicSizesForFlexItems(
             const display_width_cols = self.unicode.monospacedTextWidth(text_slice);
             var id_buf: [32]u8 = undefined;
             const debug_id = dom.getDebugIdOrDefault(item_dom_id, &id_buf);
-            const text_span = self.trace.enter();
-            defer text_span.exit();
-            text_span.info("Measuring text dimensions");
-            _ = text_span.put("id", debug_id)
+            self.trace.enter();
+            defer self.trace.exit();
+            self.trace.info("Measuring text dimensions");
+            _ = self.trace.put("id", debug_id)
                 .put("text", text_slice)
                 .put("text length", text_slice.len)
                 .put("display width", display_width_cols)
@@ -143,7 +147,7 @@ fn computeIntrinsicSizesForFlexItems(
                 .put("measured size", intrinsic_size);
 
             if (display_width_cols > content_rect.w) {
-                text_span.note("Text exceeds container width, may be clipped");
+                self.trace.note("Text exceeds container width, may be clipped");
             }
         }
 
@@ -177,32 +181,32 @@ fn computeIntrinsicSizesForFlexItems(
         };
 
         // Trace the sizing decisions
-        const item_span = self.trace.enter();
-        defer item_span.exit();
+        self.trace.enter();
+        defer self.trace.exit();
         var id_buf: [32]u8 = undefined;
         const debug_id = dom.getDebugIdOrDefault(item_dom_id, &id_buf);
-        item_span.info("Processing flex item");
+        self.trace.info("Processing flex item");
 
         if (flex_container_style.overflow_y == .scroll) {
-            item_span.decision("Container has overflow:scroll, using unlimited height constraint for child measurement");
+            self.trace.decision("Container has overflow:scroll, using unlimited height constraint for child measurement");
         }
 
-        item_span.data("item-info").put("index", item_index).put("id", debug_id).put("node kind", dom.getNodeKind(item_dom_id)).end();
-        _ = item_span.put("natural", Size{ .w = @intCast(natural_width), .h = @intCast(natural_height) });
-        _ = item_span.put("intrinsic", Size{ .w = @intCast(intrinsic_size[0]), .h = @intCast(intrinsic_size[1]) });
+        self.trace.data("item-info").put("index", item_index).put("id", debug_id).put("node kind", dom.getNodeKind(item_dom_id)).end();
+        _ = self.trace.put("natural", Size{ .w = @intCast(natural_width), .h = @intCast(natural_height) });
+        _ = self.trace.put("intrinsic", Size{ .w = @intCast(intrinsic_size[0]), .h = @intCast(intrinsic_size[1]) });
         if (item_style.width != 0 or item_style.height != 0) {
             if (item_style.width != 0) {
-                item_span.decision("Overriding natural width with explicit width from style");
+                self.trace.decision("Overriding natural width with explicit width from style");
             }
             if (item_style.height != 0) {
-                item_span.decision("Overriding natural height with explicit height from style");
+                self.trace.decision("Overriding natural height with explicit height from style");
             }
-            _ = item_span.put("override", Size{ .w = item_style.width, .h = item_style.height });
+            _ = self.trace.put("override", Size{ .w = item_style.width, .h = item_style.height });
         }
 
-        _ = item_span.put("style", item_style);
-        _ = item_span.put("margin start", main_axis_margin_start);
-        _ = item_span.put("margin end", main_axis_margin_end);
+        _ = self.trace.put("style", item_style);
+        _ = self.trace.put("margin start", main_axis_margin_start);
+        _ = self.trace.put("margin end", main_axis_margin_end);
     }
     return flex_items;
 }
@@ -211,9 +215,9 @@ fn computeIntrinsicSizesForFlexItems(
 /// This implements the CSS flexbox order resolution phase where items are reordered
 /// according to their flex order value while preserving document order for equal values.
 fn resolveFlexItemOrder(self: *LayoutEngine, flex_items: []FlexItem) void {
-    const span = self.trace.enter();
-    defer span.exit();
-    span.info("Resolving flex item order based on order property");
+    self.trace.enter();
+    defer self.trace.exit();
+    self.trace.info("Resolving flex item order based on order property");
 
     const item_count = flex_items.len;
 
@@ -242,9 +246,9 @@ fn resolveFlexItemOrder(self: *LayoutEngine, flex_items: []FlexItem) void {
 /// Resolves main axis sizes for flex items by computing natural content extent
 /// and total flex-grow factor. This is part of the CSS flexbox main size resolution phase.
 fn resolveFlexItemMainSizes(self: *LayoutEngine, flex_items: []const FlexItem, flex_container_style: StyleRow) FlexItemMainSizeInfo {
-    const span = self.trace.enter();
-    defer span.exit();
-    span.info("Computing main axis sizes and total flex grow factor");
+    self.trace.enter();
+    defer self.trace.exit();
+    self.trace.info("Computing main axis sizes and total flex grow factor");
 
     var total_content_extent: i32 = 0;
     var total_grow_factor: usize = 0;
@@ -275,18 +279,18 @@ fn distributeFlexGrow(
     total_grow_factor: usize,
     flex_items: []FlexItem,
 ) void {
-    const span = self.trace.enter();
-    defer span.exit();
-    span.info("Distributing flex-grow space to items");
-    _ = span.put("available space", available_space)
+    self.trace.enter();
+    defer self.trace.exit();
+    self.trace.info("Distributing flex-grow space to items");
+    _ = self.trace.put("available space", available_space)
         .put("total grow factor", total_grow_factor);
 
     // If no space to distribute or no growing items, leave all extra sizes at 0
     if (!(available_space > 0 and total_grow_factor > 0)) {
         if (available_space <= 0) {
-            span.decision("No available space for flex-grow distribution");
+            self.trace.decision("No available space for flex-grow distribution");
         } else {
-            span.decision("No flex items have grow factor, skipping distribution");
+            self.trace.decision("No flex items have grow factor, skipping distribution");
         }
         for (flex_items) |*flex_item| {
             flex_item.extra_main_size = 0;
@@ -294,7 +298,7 @@ fn distributeFlexGrow(
         return;
     }
 
-    span.decision("Distributing space proportionally based on flex-grow factors");
+    self.trace.decision("Distributing space proportionally based on flex-grow factors");
 
     // Distribute proportional shares based on flex-grow factors
     var remaining_space = available_space;
@@ -325,15 +329,15 @@ fn distributeFlexGrow(
     for (flex_items) |item| {
         total_distributed += item.extra_main_size;
     }
-    _ = span.put("distributed", total_distributed);
+    _ = self.trace.put("distributed", total_distributed);
 }
 
 const FlexItemPosition = struct {
     final_rect: Rect,
     main_axis_advance: usize,
 
-    pub fn trace(self: FlexItemPosition, span: *const Trace) void {
-        span.data("flex-item-position")
+    pub fn trace(self: FlexItemPosition, tracer: *Trace) void {
+        tracer.data("flex-item-position")
             .put("rect", self.final_rect)
             .put("advance", self.main_axis_advance)
             .end();
@@ -399,9 +403,9 @@ fn alignFlexItemOnBothAxes(
     main_axis_cursor: i32,
     flex_item: FlexItem,
 ) FlexItemPosition {
-    const span = self.trace.enter();
-    defer span.exit();
-    span.info("Aligning flex item on cross axis");
+    self.trace.enter();
+    defer self.trace.exit();
+    self.trace.info("Aligning flex item on cross axis");
 
     // Start with intrinsic size
     var item_width = flex_item.intrinsic_size[0];
@@ -434,13 +438,13 @@ fn alignFlexItemOnBothAxes(
         item_y = cross_result.cross_position;
         item_height = cross_result.cross_size;
 
-        _ = span.put("main position", item_x)
+        _ = self.trace.put("main position", item_x)
             .put("cross alignment", cross_alignment)
             .put("height", item_height)
             .put("available height", content_rect.h);
 
         if (cross_alignment == .stretch) {
-            span.decision("Item stretches to fill cross axis");
+            self.trace.decision("Item stretches to fill cross axis");
         }
     } else {
         // Main axis is vertical
@@ -457,13 +461,13 @@ fn alignFlexItemOnBothAxes(
         item_x = cross_result.cross_position;
         item_width = cross_result.cross_size;
 
-        _ = span.put("main position", item_y)
+        _ = self.trace.put("main position", item_y)
             .put("cross alignment", cross_alignment)
             .put("width", item_width)
             .put("available width", content_rect.w);
 
         if (cross_alignment == .stretch) {
-            span.decision("Item stretches to fill cross axis");
+            self.trace.decision("Item stretches to fill cross axis");
         }
     }
 
@@ -531,9 +535,9 @@ pub fn computeFlexLayout(
     container_node: *BoxTree.Node,
     container_rect: Rect,
 ) !void {
-    const span = self.trace.enter();
-    defer span.exit();
-    span.info("Computing flexbox layout for container");
+    self.trace.enter();
+    defer self.trace.exit();
+    self.trace.info("Computing flexbox layout for container");
 
     var container_header = container_node;
     const flex_container_style = dom.getNodeStyle(container_header.data.dom_id);
@@ -541,11 +545,14 @@ pub fn computeFlexLayout(
     // Compute the inner content area after padding and border
     const content_rect = computeInnerContentRect(flex_container_style, container_rect);
     container_header.data.rect = container_rect;
-    if (container_header.child_count == 0) return;
+    if (container_header.child_count == 0) {
+        self.trace.note("Container has no children, skipping layout");
+        return;
+    }
 
     var container_id_buf: [32]u8 = undefined;
     const container_debug_id = dom.getDebugIdOrDefault(container_header.data.dom_id, &container_id_buf);
-    _ = span.put("container id", container_debug_id)
+    _ = self.trace.put("container id", container_debug_id)
         .put("container rect", container_rect)
         .put("content rect", content_rect)
         .put("container style", flex_container_style);
@@ -568,15 +575,15 @@ pub fn computeFlexLayout(
     // Phase 3: Resolve main axis sizes and compute flex-grow distribution
     const main_size_info = self.resolveFlexItemMainSizes(flex_items, flex_container_style);
     const container_main_size: i32 = @as(i32, @intCast(if (flex_container_style.flex_dir == .row) content_rect.w else content_rect.h));
-    _ = span.put("total content extent", main_size_info.content_extent)
+    _ = self.trace.put("total content extent", main_size_info.content_extent)
         .put("container main size", container_main_size)
         .put("main gap", flex_container_style.gaps.main)
         .put("cross gap", flex_container_style.gaps.cross);
 
     if (main_size_info.content_extent > container_main_size) {
-        span.note("Content exceeds container size, items may overflow");
+        self.trace.note("Content exceeds container size, items may overflow");
     } else if (main_size_info.content_extent < container_main_size) {
-        span.note("Container has extra space for distribution");
+        self.trace.note("Container has extra space for distribution");
     }
 
     const available_space_for_growth: i32 = container_main_size - main_size_info.content_extent;
@@ -591,7 +598,7 @@ pub fn computeFlexLayout(
         total_distributed_space += @max(0, flex_item.extra_main_size);
     }
     const content_extent_after_grow: i32 = main_size_info.content_extent + total_distributed_space;
-    _ = span.put("final content extent", content_extent_after_grow);
+    _ = self.trace.put("final content extent", content_extent_after_grow);
 
     // Phase 4: Distribute remaining space according to justify-content
     const available_space_for_justify = container_main_size - content_extent_after_grow;
@@ -609,41 +616,39 @@ pub fn computeFlexLayout(
     var main_axis_cursor: i32 = spacing.start_space;
 
     {
-        const justify_span = self.trace.enter();
-        defer justify_span.exit();
-        justify_span.info("Computing justify-content spacing distribution");
+        self.trace.enter();
+        defer self.trace.exit();
+        self.trace.info("Computing justify-content spacing distribution");
 
         if (available_space_for_justify > 0) {
             switch (justify_mode) {
-                .start => justify_span.decision("Items aligned to start, no spacing distribution"),
-                .end => justify_span.decision("Items aligned to end, all space goes before first item"),
-                .center => justify_span.decision("Items centered, half space before and after"),
-                .space_between => justify_span.decision("Space distributed evenly between items"),
-                .space_around => justify_span.decision("Equal space around each item"),
-                .space_evenly => justify_span.decision("Equal space between items and edges"),
+                .start => self.trace.decision("Items aligned to start, no spacing distribution"),
+                .end => self.trace.decision("Items aligned to end, all space goes before first item"),
+                .center => self.trace.decision("Items centered, half space before and after"),
+                .space_between => self.trace.decision("Space distributed evenly between items"),
+                .space_around => self.trace.decision("Equal space around each item"),
+                .space_evenly => self.trace.decision("Equal space between items and edges"),
             }
         } else {
-            justify_span.note("No space available for justify-content distribution");
+            self.trace.note("No space available for justify-content distribution");
         }
-        _ = justify_span.put("spacing", spacing)
+        _ = self.trace.put("spacing", spacing)
             .put("available space", available_space_for_justify)
             .put("item count", flex_item_count);
     }
 
-    const positioning_span = self.trace.enter();
-    defer positioning_span.exit();
-    positioning_span.info("Positioning flex items with final layout");
+    self.trace.enter();
+    defer self.trace.exit();
+    self.trace.info("Positioning flex items with final layout");
 
     // Phase 5: Position each flex item and recursively layout subtrees
-    for (flex_items, 0..) |flex_item, _item_index| {
-        _ = _item_index; // autofix
-
+    for (flex_items) |flex_item| {
         var item_id_buf: [32]u8 = undefined;
         const item_debug_id = dom.getDebugIdOrDefault(flex_item.dom_id, &item_id_buf);
-        const item_position_span = self.trace.enter();
-        defer item_position_span.exit();
-        item_position_span.info("Positioning flex item");
-        _ = item_position_span.put("id", item_debug_id);
+        self.trace.enter();
+        defer self.trace.exit();
+        self.trace.info("Positioning flex item");
+        _ = self.trace.put("id", item_debug_id);
 
         // Phase 5a: Align item on both axes and compute final rect
         const item_position = self.alignFlexItemOnBothAxes(
@@ -653,7 +658,7 @@ pub fn computeFlexLayout(
             flex_item,
         );
         const item_box_node = container_header.getChildNodeMut(box_tree, flex_item.original_index);
-        item_position_span.data("final-item-layout")
+        self.trace.data("final-item-layout")
             .put("extra size", @max(0, flex_item.extra_main_size))
             .put("trailing space", flex_item.trailing_space)
             .put("item position", item_position)
@@ -682,21 +687,21 @@ pub fn computeFlexLayout(
 
         var scroll_id_buf: [32]u8 = undefined;
         const scroll_debug_id = dom.getDebugIdOrDefault(container_header.data.dom_id, &scroll_id_buf);
-        const scroll_span = self.trace.enter();
-        defer scroll_span.exit();
-        scroll_span.info("Configuring scroll container");
+        self.trace.enter();
+        defer self.trace.exit();
+        self.trace.info("Configuring scroll container");
 
         // Auto-scroll to bottom: set scroll offset to show the bottom of content
         const viewport_height = content_rect.h;
         if (content_height > viewport_height) {
-            scroll_span.decision("Content exceeds viewport, auto-scrolling to bottom");
+            self.trace.decision("Content exceeds viewport, auto-scrolling to bottom");
             container_header.data.scroll_offset_y = content_height - viewport_height;
         } else {
-            scroll_span.decision("Content fits in viewport, no scrolling needed");
+            self.trace.decision("Content fits in viewport, no scrolling needed");
             container_header.data.scroll_offset_y = 0;
         }
 
-        _ = scroll_span.put("id", scroll_debug_id)
+        _ = self.trace.put("id", scroll_debug_id)
             .put("content width", content_rect.w)
             .put("content height", content_height)
             .put("viewport width", content_rect.w)
@@ -715,8 +720,8 @@ const JustifyContentSpacing = struct {
     between_space: i32, // Space between each pair of items
     remaining_pixels: i32, // Extra pixels to distribute
 
-    pub fn trace(self: JustifyContentSpacing, span: *const Trace) void {
-        span.data("justify-content-spacing")
+    pub fn trace(self: JustifyContentSpacing, tracer: *Trace) void {
+        tracer.data("justify-content-spacing")
             .put("start space", self.start_space)
             .put("between space", self.between_space)
             .put("remaining pixels", self.remaining_pixels)

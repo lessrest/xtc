@@ -3,8 +3,9 @@ const dom = @import("dom.zig");
 const renderer = @import("renderer.zig");
 const clock = @import("clock.zig");
 const WrenRunner = @import("wren/runtime.zig");
-const Trace = @import("Trace.zig");
+const Trace = @import("Trace.zig").Trace;
 const event_dispatch = @import("event_dispatch.zig");
+const scheduler_mod = @import("scheduler.zig");
 
 /// Core session state - the "model" in our architecture
 pub const LiveSession = struct {
@@ -12,9 +13,10 @@ pub const LiveSession = struct {
     document: *dom.Dom,
     renderer: renderer.Renderer,
     wren_runner: *WrenRunner,
+    scheduler: *scheduler_mod.Scheduler,
     clock_registry: *clock.ClockRegistry,
     root_id: dom.DomNodeId,
-    trace: Trace,
+    trace: *Trace,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -22,8 +24,9 @@ pub const LiveSession = struct {
         render_instance: renderer.Renderer,
         wren_runner: *WrenRunner,
         clock_registry: *clock.ClockRegistry,
+        scheduler: *scheduler_mod.Scheduler,
         root_id: dom.DomNodeId,
-        trace: Trace,
+        trace: *Trace,
     ) LiveSession {
         return .{
             .allocator = allocator,
@@ -33,17 +36,20 @@ pub const LiveSession = struct {
             .clock_registry = clock_registry,
             .root_id = root_id,
             .trace = trace,
+            .scheduler = scheduler,
         };
     }
 
     /// Render the current document state
     pub fn render(self: *LiveSession) !void {
-        const render_trace = self.trace.enter();
-        defer render_trace.exit();
-        render_trace.info("Rendering frame");
+        self.trace.enter();
+        defer self.trace.exit();
+        self.trace.info("Rendering frame");
 
         const stdout = std.io.getStdOut().writer();
-        try self.renderer.renderAndPresent(self.document, self.root_id, render_trace, stdout);
+        try self.renderer.renderAndPresent(self.document, self.root_id, self.trace, stdout);
+        // Resume any nextFrame fibers
+        self.scheduler.onFramePresented(self.wren_runner.vm.vm);
     }
 
     /// Handle terminal resize
@@ -56,10 +62,10 @@ pub const LiveSession = struct {
 
     /// Process a clock tick - returns true if re-render needed
     pub fn processClock(self: *LiveSession) !bool {
-        // TODO: Implement clock processing with the actual Clock API
-        // For now, just check if any events are waiting
-        _ = self;
-        return false;
+        // Pump timers and ready fibers with a small budget
+        const now_ms = std.time.milliTimestamp();
+        const resumed = self.scheduler.pump(self.wren_runner.vm.vm, now_ms, 64);
+        return resumed > 0;
     }
 
     /// Handle keyboard input
@@ -78,16 +84,20 @@ pub const LiveSession = struct {
             },
         };
 
-        const event_trace = self.trace.enter();
-        defer event_trace.exit();
-        event_trace.info("Handling keypress");
-        event_trace.data("key").put("char", key).put("string", key_str).end();
+        self.trace.enter();
+        defer self.trace.exit();
+        self.trace.info("Handling keypress");
+        self.trace.data("key").put("char", key).put("string", key_str).end();
 
-        event_dispatch.dispatchKeypress(
-            self.wren_runner.*.vm.vm,
-            self.document,
-            key_str,
-        ) catch |err| {
+        // Post to fiber awaiters first
+        self.scheduler.postEvent(self.wren_runner.vm.vm, .{
+            .type = .keypress,
+            .target = 0,
+            .key = key_str,
+            .timestamp = std.time.milliTimestamp(),
+        });
+        // Then deliver to callback listeners (optional)
+        event_dispatch.dispatchKeypress(self.wren_runner.vm.vm, self.document, key_str) catch |err| {
             std.log.warn("Failed to dispatch keypress event: {}", .{err});
         };
 
@@ -112,13 +122,13 @@ pub const Terminal = struct {
         self.raw_mode = try RawMode.enable(std.posix.STDIN_FILENO);
 
         // Enter alternate screen and hide cursor
-        var ansi_writer = @import("ansi.zig").stdout();
+        var ansi_writer = @import("ansi").stdout();
         try ansi_writer.initializeTerminal();
     }
 
     pub fn exitLiveMode(self: *Terminal) void {
         // Restore terminal state
-        var ansi_writer = @import("ansi.zig").stdout();
+        var ansi_writer = @import("ansi").stdout();
         ansi_writer.restoreTerminal() catch {};
 
         if (self.raw_mode) |*raw| {

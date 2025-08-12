@@ -215,7 +215,7 @@ pub const Raster = struct {
     }
 
     pub fn writeAnsiToWriter(self: *const Raster, writer: anytype, glyphs: *const GlyphTable) !void {
-        const ansi = @import("ansi.zig");
+        const ansi = @import("ansi");
         var out_ansi = ansi.AnsiWriter(@TypeOf(writer)).init(writer);
         try out_ansi.resetStyle();
 

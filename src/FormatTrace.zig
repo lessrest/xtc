@@ -3,14 +3,15 @@
 
 const std = @import("std");
 const xmlparse = @import("xmlparse.zig");
-const ansi = @import("ansi.zig");
-const tree_mod = @import("lib/TreePrinter.zig");
+const ansi = @import("ansi");
+
+const TreePrinter = ansi.TreePrinter(ansi.ArrayListAnsiWriter);
 
 const Formatter = struct {
     allocator: std.mem.Allocator,
     output: std.ArrayList(u8),
     ansi: ansi.ArrayListAnsiWriter,
-    tree: tree_mod.TreePrinter,
+    tree: TreePrinter,
 
     const Self = @This();
 
@@ -19,7 +20,7 @@ const Formatter = struct {
             .allocator = allocator,
             .output = std.ArrayList(u8).init(allocator),
             .ansi = undefined, // Will be set after initialization
-            .tree = tree_mod.TreePrinter.init(allocator),
+            .tree = undefined, // Will be set after initialization
         };
     }
 
@@ -146,6 +147,13 @@ const Formatter = struct {
                 try self.formatStandaloneItem(child_element, child_is_last);
             } else if (std.mem.eql(u8, tag, "span")) {
                 try self.formatSpan(child_element, child_is_last);
+            } else if (std.mem.eql(u8, tag, "note")) {
+                try self.formatNote(child_element, child_is_last);
+            } else {
+                try self.writeTreePrefix(child_is_last);
+                try self.ansi.writeBold("Unsupported element: ");
+                try self.ansi.writeAll(tag);
+                try self.ansi.writeAll("\n");
             }
         }
     }
@@ -372,6 +380,13 @@ const Formatter = struct {
         }
     }
 
+    fn formatNote(self: *Self, element: xmlparse.Element, is_last: bool) anyerror!void {
+        try self.writeTreePrefix(is_last);
+        try self.ansi.writeBold("Note: ");
+        try self.ansi.writeColoredText(Self.getElementTextContent(element) orelse "", 150, 150, 150);
+        try self.ansi.writeAll("\n");
+    }
+
     fn formatKeyValuePair(self: *Self, key: []const u8, item: xmlparse.Element) !void {
         try self.ansi.writeColoredText(key, 150, 150, 150); // Gray for field names
         try self.ansi.writeAll(" ");
@@ -484,7 +499,7 @@ pub fn formatLogXmlNoColor(allocator: std.mem.Allocator, log_bytes: []const u8) 
 
     // Use no-color ANSI writer
     fmt.ansi = ansi.arrayListWriterNoColor(&fmt.output);
-    fmt.tree.setWriter(fmt.ansi);
+    fmt.tree = TreePrinter.init(allocator, fmt.ansi);
 
     try fmt.formatSpan(doc.root, true);
 
@@ -514,7 +529,7 @@ pub fn formatLogXml(allocator: std.mem.Allocator, log_bytes: []const u8) ![]u8 {
 
     // Fix the ansi writer after the struct is in its final location
     fmt.ansi = ansi.arrayListWriter(&fmt.output);
-    fmt.tree.setWriter(fmt.ansi);
+    fmt.tree = TreePrinter.init(allocator, fmt.ansi);
 
     try fmt.formatSpan(doc.root, true);
 

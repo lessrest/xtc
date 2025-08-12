@@ -2,10 +2,22 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "watch: zig build",
+      "label": "watch: build+test",
       "type": "shell",
       "command": "watchexec",
-      "args": ["-e", "zig,zon", "-w", "src", "--", "zig", "build"],
+      "args": [
+        "-e",
+        "zig,zon",
+        "-w",
+        "src",
+        "-w",
+        "build.zig",
+        "-w",
+        "test_runner.zig",
+        "--",
+        "make",
+        "vscode-build-and-test"
+      ],
       "isBackground": true,
       "presentation": {
         "reveal": "never",
@@ -16,8 +28,8 @@
       "runOptions": { "runOn": "folderOpen" },
       "problemMatcher": [
         {
-          "owner": "zig",
-          "fileLocation": ["relative", "${workspaceFolder}"],
+          "owner": "zig-build",
+          "fileLocation": ["autoDetect", "${workspaceFolder}"],
           "pattern": {
             "regexp": "^((?:[A-Za-z]:)?[^:]+):(\\d+):(\\d+):\\s+(error|warning|note):\\s+(.*)$",
             "file": 1,
@@ -28,8 +40,31 @@
           },
           "background": {
             "activeOnStart": false,
-            "beginsPattern": "^\\[Running: zig build]$",
-            "endsPattern": "^\\[(?:Command exited with \\d+|Command was successful)\\]$"
+            "beginsPattern": "^\\[begin compile]$",
+            "endsPattern": "^\\[end compile]$"
+          }
+        },
+        {
+          "owner": "zig-tests",
+          "severity": "error",
+          "fileLocation": ["autoDetect", "${workspaceFolder}"],
+          "pattern": [
+            {
+              "regexp": "^\\[xtc-test] ((?:[A-Za-z]:)?[^:]+):(\\d+):(\\d+): test \\\"(.*)\\\" - ([^:]+): (.*)$",
+              "file": 1,
+              "line": 2,
+              "column": 3,
+              "message": 6
+            },
+            {
+              "regexp": ".*",
+              "message": 0
+            }
+          ],
+          "background": {
+            "activeOnStart": false,
+            "beginsPattern": "^\\[begin test]$",
+            "endsPattern": "^\\[end test]$"
           }
         }
       ]

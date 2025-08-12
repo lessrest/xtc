@@ -2,6 +2,11 @@ const std = @import("std");
 const app = @import("app.zig");
 const logging = @import("logging.zig");
 
+comptime {
+    // run all the tests
+    _ = @import("lib.zig");
+}
+
 /// Global logging configuration
 pub const std_options: std.Options = .{
     .log_level = .debug,
@@ -16,15 +21,15 @@ pub fn main() !void {
     // Initialize memory management
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    
+
     var arena = std.heap.ArenaAllocator.init(gpa.allocator());
     defer arena.deinit();
-    
+
     const allocator = arena.allocator();
-    
+
     // Create and run application
     var application = try app.Application.init(allocator);
     defer application.deinit();
-    
+
     try application.run();
 }

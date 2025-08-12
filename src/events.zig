@@ -335,7 +335,7 @@ test "DOM with event registry" {
     const allocator = gpa.allocator();
 
     // Create a DOM with event support
-    var document = dom.Dom.init(allocator);
+    var document = try dom.Dom.init(allocator);
     defer document.deinit();
 
     // Add some elements
@@ -373,7 +373,7 @@ test "Event system with multiple nodes" {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    var document = dom.Dom.init(allocator);
+    var document = try dom.Dom.init(allocator);
     defer document.deinit();
 
     // Create a small DOM tree
@@ -513,7 +513,7 @@ test "Integration: DOM node lifecycle with events" {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    var document = dom.Dom.init(allocator);
+    var document = try dom.Dom.init(allocator);
     defer document.deinit();
 
     // Simulate creating elements with event listeners

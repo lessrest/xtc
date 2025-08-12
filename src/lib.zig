@@ -74,23 +74,21 @@ pub fn renderXmlAscii(
     var document = try xml.loadDocumentFromMarkup(al, &xdoc);
     defer document.deinit();
 
-    var tree = try allocateBoxTreeFromDOMAutoRoot(al, &document);
+    var tree = try allocateBoxTreeFromDOMAutoRoot(al, document);
     defer tree.deinit();
 
     var unicode = try paint.UnicodeData.init(al);
     defer unicode.deinit(al);
 
     // Initialize root tracer for the entire rendering pipeline
-    const root_trace = Trace.init(false); // Disabled for performance
-    const render_trace = root_trace.enter();
-    defer render_trace.exit();
-    render_trace.info("Rendering XML to ASCII");
-    render_trace.data("render-params").put("width", width).put("height", height).end();
+    var trace = Trace.file(std.io.getStdErr(), .{});
+    trace.info("Rendering XML to ASCII");
+    trace.data("render-params").put("width", width).put("height", height).end();
 
-    var layout_engine = layout.init(al, &unicode, render_trace);
+    var layout_engine = layout.init(al, &unicode, &trace);
     try layout_engine.computeFlexLayout(
         &tree,
-        &document,
+        document,
         tree.getNodeMut(0),
         .{ .x = 0, .y = 0, .w = width, .h = height },
     );
@@ -99,9 +97,9 @@ pub fn renderXmlAscii(
     defer r.deinit(al);
     var glyphs = try tty.GlyphTable.init(al);
     defer glyphs.deinit();
-    var ctx = paint.PaintContext.init(al, &unicode, render_trace);
+    var ctx = paint.PaintContext.init(al, &unicode, &trace);
     defer ctx.deinit();
-    try paint.computePaintCommands(&ctx, &document, &tree, &glyphs);
+    try paint.computePaintCommands(&ctx, document, &tree, &glyphs);
 
     // Paint commands are now logged via the tracing system
 
@@ -122,18 +120,16 @@ pub fn renderDocumentToWriter(
     defer glyphs.deinit();
     var unicode = try paint.UnicodeData.init(al);
     defer unicode.deinit(al);
-    const root_trace = Trace.init(false); // Disabled for performance
-    const render_trace = root_trace.enter();
-    defer render_trace.exit();
-    render_trace.info("Rendering DOM");
-    render_trace.data("render-params").put("width", width).put("height", height).end();
-    var ctx = paint.PaintContext.init(al, &unicode, render_trace);
+    var trace = Trace.file(std.io.getStdErr(), .{});
+    trace.info("Rendering DOM");
+    trace.data("render-params").put("width", width).put("height", height).end();
+    var ctx = paint.PaintContext.init(al, &unicode, &trace);
     defer ctx.deinit();
     var tree = try allocateBoxTreeFromDOMAutoRoot(al, document);
     defer tree.deinit();
 
     // Compute layout
-    var layout_engine = layout.init(al, &unicode, render_trace);
+    var layout_engine = layout.init(al, &unicode, &trace);
     const root_node = tree.getNodeMut(0);
     try layout_engine.computeFlexLayout(
         &tree,

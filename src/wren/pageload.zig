@@ -159,10 +159,10 @@ test "xml <script> executes and manipulates DOM" {
     defer _ = gpa.deinit();
     const al = gpa.allocator();
 
-    var doc = Dom.init(al);
-    // Note: WrenRunner.deinit() will handle document.deinit()
+    var doc = try Dom.init(al);
+    defer doc.deinit();
 
-    var runner = try WrenRunner.init(al, &doc);
+    var runner = try WrenRunner.init(al, doc);
     defer runner.deinit();
 
     // XML with a script that appends a child and sets a debug id
@@ -182,7 +182,7 @@ test "xml <script> executes and manipulates DOM" {
     var xml_doc = try xmlparse.parse(al, "inline", reader.reader());
     defer xml_doc.deinit();
 
-    try wren_xml.buildDomIntoAndRunScripts(WrenRunner.ScriptContext, al, &xml_doc, &runner.vm, &doc);
+    try wren_xml.buildDomIntoAndRunScripts(WrenRunner.ScriptContext, al, &xml_doc, &runner.vm, doc);
 
     // TODO: Fix test - getElementById is returning wrong node
     // For now, just check that the script executed and created nodes
@@ -205,8 +205,10 @@ test "Wren syntax error handling" {
     defer _ = gpa.deinit();
     const al = gpa.allocator();
 
-    var doc = Dom.init(al);
-    var runner = try WrenRunner.init(al, &doc);
+    var doc = try Dom.init(al);
+    defer doc.deinit();
+
+    var runner = try WrenRunner.init(al, doc);
     defer runner.deinit();
 
     const xml_src =
@@ -223,7 +225,7 @@ test "Wren syntax error handling" {
     defer xml_doc.deinit();
 
     // Should return compile error
-    const result = wren_xml.buildDomIntoAndRunScripts(WrenRunner.ScriptContext, al, &xml_doc, &runner.vm, &doc);
+    const result = wren_xml.buildDomIntoAndRunScripts(WrenRunner.ScriptContext, al, &xml_doc, &runner.vm, doc);
     try std.testing.expectError(error.CompileError, result);
 }
 
@@ -232,8 +234,10 @@ test "Wren runtime error handling" {
     defer _ = gpa.deinit();
     const al = gpa.allocator();
 
-    var doc = Dom.init(al);
-    var runner = try WrenRunner.init(al, &doc);
+    var doc = try Dom.init(al);
+    defer doc.deinit();
+
+    var runner = try WrenRunner.init(al, doc);
     defer runner.deinit();
 
     const xml_src =
@@ -250,6 +254,6 @@ test "Wren runtime error handling" {
     defer xml_doc.deinit();
 
     // Should return runtime error
-    const result = wren_xml.buildDomIntoAndRunScripts(WrenRunner.ScriptContext, al, &xml_doc, &runner.vm, &doc);
+    const result = wren_xml.buildDomIntoAndRunScripts(WrenRunner.ScriptContext, al, &xml_doc, &runner.vm, doc);
     try std.testing.expectError(error.RuntimeError, result);
 }

@@ -6,6 +6,7 @@ const tty = @import("tty.zig");
 const WrenRunner = @import("wren/runtime.zig");
 const DocumentLoader = @import("document_loader.zig").DocumentLoader;
 const cli = @import("cli.zig");
+const Trace = @import("Trace.zig").Trace;
 
 /// One-shot rendering session - render once and exit
 pub const OneShotSession = struct {
@@ -15,6 +16,7 @@ pub const OneShotSession = struct {
     pub const Config = struct {
         output: cli.OutputConfig,
         log_file: ?std.fs.File = null,
+        trace: *Trace,
     };
 
     pub fn init(allocator: std.mem.Allocator, config: Config) OneShotSession {
@@ -33,7 +35,7 @@ pub const OneShotSession = struct {
         // Load document
         var loader = DocumentLoader.init(
             self.allocator,
-            &components.document,
+            components.document,
             components.wren_runner,
         );
 
@@ -64,26 +66,22 @@ pub const OneShotSession = struct {
         );
         defer render_instance.deinit();
 
-        // Render to stdout
-        const trace = @import("Trace.zig").init(false);
-        const stdout = std.io.getStdOut().writer();
-
-        // For one-shot, we just want the final raster, not a diff
-        try render_instance.render(&components.document, load_result.root_id, trace);
-        try render_instance.writeFullRaster(stdout);
+        try render_instance.render(components.document, load_result.root_id, self.config.trace);
+        try render_instance.writeFullRaster(std.io.getStdOut().writer());
     }
 };
 
 /// Component bundle for one-shot rendering
 const Components = struct {
     unicode: paint.UnicodeData,
-    document: dom.Dom,
+    document: *dom.Dom,
     wren_runner: *WrenRunner,
     glyphs: tty.GlyphTable,
 
     fn deinit(self: *Components) void {
         self.unicode.deinit(self.document.alloc);
-        self.wren_runner.deinit(); // This also calls document.deinit()
+        self.wren_runner.deinit();
+        self.document.deinit();
         self.glyphs.deinit();
     }
 };
@@ -93,10 +91,10 @@ fn initializeComponents(allocator: std.mem.Allocator) !Components {
     var unicode = try paint.UnicodeData.init(allocator);
     errdefer unicode.deinit(allocator);
 
-    var document = dom.Dom.init(allocator);
-    // Note: WrenRunner.deinit() will handle document.deinit()
+    var document = try dom.Dom.init(allocator);
+    errdefer document.deinit();
 
-    var wren_runner = try WrenRunner.init(allocator, &document);
+    var wren_runner = try WrenRunner.init(allocator, document);
     errdefer wren_runner.deinit();
 
     var glyphs = try tty.GlyphTable.init(allocator);
