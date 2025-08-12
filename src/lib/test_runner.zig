@@ -2,6 +2,8 @@ const std = @import("std");
 const builtin = @import("builtin");
 const ansi = @import("ansi");
 const stdio = ansi.stdio;
+const treenest = @import("treenest.zig");
+const dank = @import("dank.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -9,7 +11,11 @@ const BORDER = "=" ** 80;
 
 // use in custom panic handler
 var current_test: ?*TestCase = null;
-var current_tree: ?*AnsiTreePrinter = null;
+
+const Tree = treenest.TreeNest(std.fs.File.Writer);
+const Dank = dank.Dank(std.fs.File.Writer);
+
+var current_tree: *Tree = undefined;
 
 // Test hierarchy structures
 const TestCase = struct {
@@ -35,7 +41,7 @@ const TestCase = struct {
         self: *TestCase,
         allocator: Allocator,
         timing: *SlowTracker,
-        tree: *AnsiTreePrinter,
+        tree: *Tree,
         verbose: bool,
         failures: *std.ArrayList(*TestCase),
     ) !void {
@@ -49,7 +55,6 @@ const TestCase = struct {
         std.testing.allocator_instance = DebugAllocator.init;
 
         current_test = self;
-        current_tree = tree;
 
         const nothing = stdio.captureOutputFromCall(self.func, &lines, allocator);
         if (nothing) |_| {
@@ -71,64 +76,33 @@ const TestCase = struct {
             self.status = .leak;
         }
 
-        try self.displayTestResult(tree, verbose);
+        try self.displayTestResult(allocator, tree, verbose);
     }
 
     fn displayTestResult(
         case: *TestCase,
-        tree: *AnsiTreePrinter,
+        allocator: Allocator,
+        tree: *Tree,
         verbose: bool,
     ) !void {
+        _ = allocator; // autofix
         const ms = @as(f64, @floatFromInt(case.duration_ns)) / 1_000_000.0;
+        var dk = tree.dk();
 
         if (verbose) {
-            const is_last = false; // todo
-
-            tree.setHasMore(!is_last);
-            try tree.writeVerticals();
-
             switch (case.status) {
-                .pass => {
-                    try tree.ansi.writeColoredText("✓ ", 0, 200, 0);
+                .pass => try dk.testPass(case.friendly_name, ms),
+                .fail => {
+                    const err_name = if (case.error_value) |err| @errorName(err) else "unknown";
+                    try dk.testFail(case.friendly_name, err_name, ms);
                 },
-                .fail, .leak => {
-                    try tree.ansi.writeColoredText("✗ ", 255, 0, 0);
-                },
-                .skip => {
-                    try tree.ansi.writeColoredText("⊘ ", 200, 200, 0);
-                },
+                .skip => try dk.testSkip(case.friendly_name),
+                .leak => try dk.testFail(case.friendly_name, "memory leak", ms),
                 .pending => unreachable,
             }
-
-            try tree.print("{s} ({d:.2}ms)", .{ case.friendly_name, ms });
-
-            if (case.status == .fail) {
-                if (case.error_value) |err| {
-                    try tree.print(" - {s}", .{@errorName(err)});
-                }
-            } else if (case.status == .skip) {
-                try tree.ansi.writeColoredText(" [skipped] ", 200, 200, 0);
-            } else if (case.status == .leak) {
-                try tree.ansi.writeColoredText(" [memory leak] ", 255, 0, 0);
-            }
-
-            try tree.newline();
         } else {
             // Concise mode
-            switch (case.status) {
-                .pass => {
-                    try tree.ansi.writeColoredText("▒", 0, 150, 0);
-                },
-                .fail, .leak => {
-                    try tree.ansi.writeColoredText("█", 200, 0, 0);
-                    //                    try tree.ansi.writeAll(" ");
-                    try tree.ansi.resetStyle();
-                },
-                .skip => {
-                    try tree.ansi.writeColoredText(" ", 200, 200, 0);
-                },
-                .pending => unreachable,
-            }
+            try dk.testCompact(case.status == .pass);
         }
     }
 };
@@ -176,10 +150,12 @@ const TestGroup = struct {
         timing: *SlowTracker,
         filter: ?[]const u8,
         fail_first: bool,
-        tree: *AnsiTreePrinter,
+        tree: *Tree,
         verbose: bool,
         failures: *std.ArrayList(*TestCase),
     ) !void {
+        current_tree = tree;
+
         // Skip empty groups
         if (group.tests.items.len == 0) return;
 
@@ -197,13 +173,11 @@ const TestGroup = struct {
             has_matching_tests = true;
         }
 
-        try tree.enter();
-        defer tree.exit();
-        try group.header(tree, verbose);
+        try group.header(allocator, tree, verbose);
 
         for (group.setup_funcs.items) |setup_func| {
             setup_func() catch |err| {
-                try tree.println("setup failed: {s}", .{@errorName(err)});
+                try tree.dk().errorMsg(try std.fmt.allocPrint(allocator, "setup failed: {s}", .{@errorName(err)}));
                 return err;
             };
         }
@@ -223,43 +197,41 @@ const TestGroup = struct {
         }
 
         if (!verbose) {
-            try tree.ansi.writeColoredText("\n", 100, 100, 100);
+            try tree.newline();
         }
 
         // Run teardown functions
         for (group.teardown_funcs.items) |teardown_func| {
             teardown_func() catch |err| {
-                try tree.println("teardown failed: {s}", .{@errorName(err)});
+                try tree.dk().errorMsg(try std.fmt.allocPrint(allocator, "teardown failed: {s}", .{@errorName(err)}));
                 return err;
             };
         }
     }
 
-    fn header(self: *TestGroup, tree: *AnsiTreePrinter, verbose: bool) !void {
+    fn header(self: *TestGroup, allocator: Allocator, tree: *Tree, verbose: bool) !void {
+        _ = allocator; // autofix
         if (verbose) {
-            try tree.writePrefix(false);
-            try tree.ansi.setBold();
-            try tree.ansi.setForegroundRgb(150, 150, 255);
-            try tree.println("{s}", .{self.path});
+            try tree.dk().section(self.path);
+            try tree.begin();
         } else {
             const path = std.mem.trimLeft(u8, self.path, "src/");
 
             const padding = 24 - path.len;
             for (0..padding) |_| {
-                try tree.ansi.writeAll(" ");
+                try tree.raw(" ");
             }
 
             const location = std.fs.path.dirname(path) orelse "";
-            try tree.ansi.writeColoredText(location, 150, 150, 150);
+            if (location.len > 0) {
+                try tree.styled(location, .{ .fg = treenest.Color.gray });
+                try tree.styled("/", .{ .fg = treenest.Color.rgb(150, 150, 160) });
+            }
 
             const name = std.fs.path.basename(path);
             const nameWithoutExtension = std.mem.trimRight(u8, name, ".zig");
-            if (location.len > 0) {
-                try tree.ansi.writeColoredText("/", 150, 150, 160);
-            }
-            try tree.ansi.writeBoldColored(nameWithoutExtension, 150, 150, 170);
-            //            try tree.ansi.writeColoredText(".zig", 150, 150, 150);
-            try tree.ansi.writeColoredText(" ", 100, 100, 100);
+            try tree.styled(nameWithoutExtension, .{ .fg = treenest.Color.rgb(150, 150, 170), .bold = true });
+            try tree.raw(" ");
         }
     }
 };
@@ -352,8 +324,9 @@ const TestSuite = struct {
     }
 
     fn run(self: *TestSuite) !void {
-        const ansi_writer = ansi.stdout();
-        var tree_printer = AnsiTreePrinter.init(self.allocator, ansi_writer);
+        const stdout = std.io.getStdOut().writer();
+        var tree = treenest.treeNest(self.allocator, stdout);
+        defer tree.deinit();
 
         // Run all groups
         for (self.groups.items) |*group| {
@@ -362,7 +335,7 @@ const TestSuite = struct {
                 &self.slowest,
                 self.env.filter,
                 self.env.fail_first,
-                &tree_printer,
+                &tree,
                 self.env.verbose,
                 &self.failures,
             );
@@ -370,45 +343,34 @@ const TestSuite = struct {
             if (self.env.fail_first and self.fail_count > 0) {
                 break;
             }
+
+            if (self.env.verbose and group.tests.items.len > 0) {
+                tree.end();
+            }
         }
 
         if (self.env.verbose) {
-            try tree_printer.newline();
+            try tree.newline();
         }
 
-        try self.displayResults(&tree_printer);
+        try self.displayResults(&tree);
     }
 
-    fn displayResults(self: *TestSuite, tree: *AnsiTreePrinter) !void {
+    fn displayResults(self: *TestSuite, tree: *Tree) !void {
+        var dk = tree.dk();
+
         // Display failures
         if (self.failures.items.len > 0) {
             for (self.failures.items) |failure| {
                 if (self.env.verbose) {
-                    try tree.println("✗ {s}: {s}", .{ failure.friendly_name, failure.errorName() });
-                    try tree.enter();
-                    defer tree.exit();
+                    try dk.errorMsg(try std.fmt.allocPrint(self.allocator, "{s}: {s}", .{ failure.friendly_name, failure.errorName() }));
+
                     if (failure.stack_trace) |trace| {
-                        dumpAllStackFrames(trace);
+                        try dumpVerboseStackTrace(tree, trace, failure.friendly_name);
                     }
                     if (failure.output.len > 0) {
-                        var longest_line_len: usize = 0;
                         for (failure.output) |line| {
-                            if (line.text.len > longest_line_len) {
-                                longest_line_len = line.text.len;
-                            }
-                        }
-
-                        for (failure.output, 0..) |line, i| {
-                            _ = i; // autofix
-                            try tree.writeVerticals();
-                            if (line.kind == .out) {
-                                try tree.ansi.setForegroundRgb(100, 100, 100);
-                            } else if (line.kind == .err) {
-                                try tree.ansi.setForegroundRgb(240, 150, 150);
-                            }
-                            try tree.print(" {s}", .{line.text});
-                            try tree.newline();
-                            try tree.ansi.resetStyle();
+                            try dk.subprocessOutput(line.text, line.kind == .err);
                         }
                     }
                 } else {
@@ -423,19 +385,19 @@ const TestSuite = struct {
 
         // Display summary
         const total_tests = self.pass_count + self.fail_count;
-        try tree.println("{d} of {d} test{s} passed", .{ self.pass_count, total_tests, if (total_tests != 1) "s" else "" });
+        try tree.line(try std.fmt.allocPrint(self.allocator, "{d} of {d} test{s} passed", .{ self.pass_count, total_tests, if (total_tests != 1) "s" else "" }));
 
         if (self.skip_count > 0) {
-            try tree.println("{d} test{s} skipped", .{ self.skip_count, if (self.skip_count != 1) "s" else "" });
+            try tree.line(try std.fmt.allocPrint(self.allocator, "{d} test{s} skipped", .{ self.skip_count, if (self.skip_count != 1) "s" else "" }));
         }
 
         if (self.leak_count > 0) {
-            try tree.println("{d} test{s} leaked", .{ self.leak_count, if (self.leak_count != 1) "s" else "" });
+            try tree.line(try std.fmt.allocPrint(self.allocator, "{d} test{s} leaked", .{ self.leak_count, if (self.leak_count != 1) "s" else "" }));
         }
 
         if (self.env.verbose) {
             try tree.newline();
-            try self.slowest.display(tree);
+            try self.slowest.display(self.allocator, tree);
         }
 
         try tree.newline();
@@ -486,8 +448,6 @@ pub fn main() !void {
     // Exit with appropriate code
     std.posix.exit(if (suite.fail_count == 0) 0 else 1);
 }
-
-const AnsiTreePrinter = ansi.TreePrinter(ansi.StdoutAnsiWriter);
 
 const SlowTracker = struct {
     const SlowestQueue = std.PriorityDequeue(TestInfo, void, compareTiming);
@@ -542,13 +502,13 @@ const SlowTracker = struct {
         return ns;
     }
 
-    fn display(self: *SlowTracker, tree: *AnsiTreePrinter) !void {
+    fn display(self: *SlowTracker, allocator: Allocator, tree: anytype) !void {
         var slowest = self.slowest;
         const count = slowest.count();
-        try tree.println("Slowest {d} test{s}:", .{ count, if (count != 1) "s" else "" });
+        try tree.line(try std.fmt.allocPrint(allocator, "Slowest {d} test{s}:", .{ count, if (count != 1) "s" else "" }));
+
         while (slowest.removeMinOrNull()) |info| {
-            const ms = @as(f64, @floatFromInt(info.ns)) / 1_000_000.0;
-            try tree.println("  {d:.2}ms\t{s}", .{ ms, info.name });
+            try tree.dk().timing(info.name, info.ns);
         }
     }
 
@@ -597,20 +557,17 @@ const Env = struct {
 
 pub const panic = std.debug.FullPanic(struct {
     pub fn panicFn(msg: []const u8, first_trace_addr: ?usize) noreturn {
+        const stderr = std.io.getStdErr().writer();
+        const allocator = std.heap.page_allocator;
+        var dk = current_tree.dk();
+
         if (current_test) |ct| {
-            std.debug.print("\x1b[31m{s}\npanic running \"{s}\"\n{s}\x1b[0m\n", .{
-                BORDER,
-                ct.friendly_name,
-                BORDER,
-            });
+            dk.errorMsg(std.fmt.allocPrint(allocator, "panic in test: {s}", .{ct.friendly_name}) catch "panic in test") catch {};
+            dk.errorMsg(msg) catch {};
+            stderr.writeAll("\n") catch {};
+
             if (@errorReturnTrace()) |trace| {
-                dumpAllStackFrames(trace.*);
-                emitMatcherFailureLine(
-                    current_tree.?,
-                    ct.friendly_name,
-                    "panic",
-                    trace.*,
-                ) catch {};
+                dumpVerboseStackTrace(current_tree, trace.*, ct.friendly_name) catch {};
             }
         }
         std.debug.defaultPanic(msg, first_trace_addr);
@@ -645,17 +602,121 @@ fn copyStackTrace(allocator: Allocator, trace: std.builtin.StackTrace) !std.buil
     return copy;
 }
 
-fn dumpAllStackFrames(stack_trace: std.builtin.StackTrace) void {
-    const stderr = std.io.getStdErr().writer();
+fn dumpVerboseStackTrace(tree: anytype, stack_trace: std.builtin.StackTrace, test_name: []const u8) !void {
+    _ = test_name;
+    const allocator = tree.allocator;
+    var dk = tree.dk();
+
     if (std.debug.getSelfDebugInfo() catch null) |dbg| {
-        const tty_config = std.io.tty.detectConfig(std.io.getStdErr());
-        std.debug.writeStackTrace(stack_trace, stderr, dbg, tty_config) catch {};
+        var frames = std.ArrayList(FrameInfo).init(allocator);
+        defer frames.deinit();
+
+        // Collect frames up to test function
+        var frame_index: usize = 0;
+        var frames_left: usize = @min(stack_trace.index, stack_trace.instruction_addresses.len);
+
+        while (frames_left != 0) : ({
+            frames_left -= 1;
+            frame_index = (frame_index + 1) % stack_trace.instruction_addresses.len;
+        }) {
+            const return_address = stack_trace.instruction_addresses[frame_index];
+            const address = return_address -| 1;
+
+            const module = dbg.getModuleForAddress(address) catch continue;
+            const si = module.getSymbolAtAddress(dbg.allocator, address) catch continue;
+            defer if (si.source_location) |sl| dbg.allocator.free(sl.file_name);
+
+            if (si.source_location) |sl| {
+                const cwd = std.fs.cwd().realpathAlloc(allocator, ".") catch continue;
+                defer allocator.free(cwd);
+
+                // Strip pwd prefix or zig lib path to get relative path
+                const file_path = if (std.mem.indexOf(u8, sl.file_name, "/zig/") != null and
+                    std.mem.indexOf(u8, sl.file_name, "/lib/") != null)
+                blk: {
+                    // This is a zig stdlib path, show as $zig/lib/...
+                    if (std.mem.indexOf(u8, sl.file_name, "/lib/")) |lib_idx| {
+                        const after_lib = sl.file_name[lib_idx + 5 ..];
+                        const formatted = try std.fmt.allocPrint(allocator, "$zig/lib/{s}", .{after_lib});
+                        break :blk formatted;
+                    }
+                    break :blk sl.file_name;
+                } else if (std.mem.startsWith(u8, sl.file_name, cwd)) blk: {
+                    const rel_path = try allocator.dupe(u8, sl.file_name[cwd.len + 1 ..]);
+                    break :blk rel_path;
+                } else sl.file_name;
+
+                try frames.append(.{
+                    .file = file_path,
+                    .line = sl.line,
+                    .column = sl.column,
+                    .func_name = try allocator.dupe(u8, si.name),
+                });
+
+                // Stop after we've collected the test function frame
+                if (std.mem.startsWith(u8, si.name, "test.")) break;
+            }
+        }
+
+        // Reverse to show test frame first
+        std.mem.reverse(FrameInfo, frames.items);
+
+        if (frames.items.len == 0) {
+            return;
+        }
+
+        {
+            const frame = frames.items[0];
+
+            try tree.newline();
+            const func_display = if (std.mem.lastIndexOf(u8, frame.func_name, ".")) |idx|
+                frame.func_name[idx + 1 ..]
+            else
+                frame.func_name;
+
+            try dk.stackFrame(frame.file, frame.line, frame.column, func_display);
+
+            const source = try getSourceLines(allocator, frame.file);
+            try dk.sourceBlock(source, frame.line, frame.column, 3);
+        }
+
+        for (frames.items[1..]) |frame| {
+            const func_display = if (std.mem.lastIndexOf(u8, frame.func_name, ".")) |idx|
+                frame.func_name[idx + 1 ..]
+            else
+                frame.func_name;
+            try dk.stackFrame(frame.file, frame.line, frame.column, func_display);
+        }
+
+        // Cleanup
+        for (frames.items) |frame| {
+            allocator.free(frame.file);
+            allocator.free(frame.func_name);
+        }
     }
 }
 
-fn dumpConciseStackTrace(tree: *AnsiTreePrinter, stack_trace: std.builtin.StackTrace, test_name: []const u8) !void {
-    _ = test_name; // autofix
+const FrameInfo = struct {
+    file: []const u8,
+    line: u64,
+    column: u64,
+    func_name: []const u8,
+};
+
+fn getSourceLines(allocator: Allocator, file_path: []const u8) ![]const u8 {
+    var f = try std.fs.cwd().openFile(file_path, .{});
+    defer f.close();
+    return try f.readToEndAlloc(allocator, 1024 * 1024);
+}
+
+fn dumpConciseStackTrace(tree: *Tree, stack_trace: std.builtin.StackTrace, test_name: []const u8) !void {
+    _ = test_name;
     const dbg = std.debug.getSelfDebugInfo() catch return;
+    const allocator = tree.allocator;
+
+    // Get current working directory for path stripping
+    const cwd = std.fs.cwd().realpathAlloc(allocator, ".") catch null;
+    defer if (cwd) |c| allocator.free(c);
 
     var frame_index: usize = 0;
     var frames_left: usize = @min(stack_trace.index, stack_trace.instruction_addresses.len);
@@ -676,26 +737,46 @@ fn dumpConciseStackTrace(tree: *AnsiTreePrinter, stack_trace: std.builtin.StackT
         if (!std.mem.startsWith(u8, si.name, "test.")) continue;
 
         if (si.source_location) |sl| {
-            try tree.print("  {s}:{d}:{d}: ", .{ sl.file_name, sl.line, sl.column });
+            // Strip pwd prefix or zig lib path to get relative path
+            const file_path = if (std.mem.indexOf(u8, sl.file_name, "/zig/") != null and
+                std.mem.indexOf(u8, sl.file_name, "/lib/") != null)
+            blk: {
+                // This is a zig stdlib path, show as $zig/lib/...
+                if (std.mem.indexOf(u8, sl.file_name, "/lib/")) |lib_idx| {
+                    const after_lib = sl.file_name[lib_idx + 5 ..];
+                    const formatted = std.fmt.allocPrint(allocator, "$zig/lib/{s}", .{after_lib}) catch sl.file_name;
+                    break :blk formatted;
+                }
+                break :blk sl.file_name;
+            } else if (cwd) |c| blk: {
+                if (std.mem.startsWith(u8, sl.file_name, c)) {
+                    break :blk sl.file_name[c.len + 1 ..];
+                }
+                break :blk sl.file_name;
+            } else sl.file_name;
 
-            if (std.mem.lastIndexOf(u8, si.name, ".")) |idx| {
-                const func_name = si.name[idx + 1 ..];
-                try tree.print("{s}\n", .{func_name});
-            } else {
-                try tree.print("{s}\n", .{si.name});
-            }
+            const func_name = if (std.mem.lastIndexOf(u8, si.name, ".")) |idx|
+                si.name[idx + 1 ..]
+            else
+                si.name;
+
+            try tree.dk().stackFrame(file_path, sl.line, sl.column, func_name);
             shown_frames += 1;
         }
     }
 }
 
 fn emitMatcherFailureLine(
-    tree: *AnsiTreePrinter,
+    tree: *Tree,
     test_name: []const u8,
     error_name: []const u8,
     stack_trace: std.builtin.StackTrace,
 ) !void {
     if (std.debug.getSelfDebugInfo() catch null) |dbg| {
+        const allocator = tree.allocator;
+        const cwd = std.fs.cwd().realpathAlloc(allocator, ".") catch null;
+        defer if (cwd) |c| allocator.free(c);
+
         var frame_index: usize = 0;
         var frames_left: usize = @min(stack_trace.index, stack_trace.instruction_addresses.len);
         while (frames_left != 0) : ({
@@ -710,24 +791,41 @@ fn emitMatcherFailureLine(
             if (!std.mem.startsWith(u8, si.name, "test.")) continue;
 
             if (si.source_location) |sl| {
-                try tree.writeVerticals();
-                try tree.print(
-                    "{s}:{d}:{d}: test \"{s}\": {s}\n",
-                    .{ sl.file_name, sl.line, sl.column, test_name, error_name },
-                );
-                try tree.writeVerticals();
-                try printSourceLineOnly(tree.ansi.writer, sl);
-                try tree.newline();
+                // Strip pwd prefix or zig lib path to get relative path
+                const file_path = if (std.mem.indexOf(u8, sl.file_name, "/zig/") != null and
+                    std.mem.indexOf(u8, sl.file_name, "/lib/") != null)
+                blk: {
+                    // This is a zig stdlib path, show as $zig/lib/...
+                    if (std.mem.indexOf(u8, sl.file_name, "/lib/")) |lib_idx| {
+                        const after_lib = sl.file_name[lib_idx + 5 ..];
+                        const formatted = std.fmt.allocPrint(allocator, "$zig/lib/{s}", .{after_lib}) catch sl.file_name;
+                        break :blk formatted;
+                    }
+                    break :blk sl.file_name;
+                } else if (cwd) |c| blk: {
+                    if (std.mem.startsWith(u8, sl.file_name, c)) {
+                        break :blk sl.file_name[c.len + 1 ..];
+                    }
+                    break :blk sl.file_name;
+                } else sl.file_name;
+
+                // Use dank for better formatting
+                try tree.dk().errorMsg(try std.fmt.allocPrint(allocator, "in {s}", .{test_name}));
+
+                var src_buf: [4096]u8 = undefined;
+                if (try getSourceLine(&src_buf, sl)) |src_line| {
+                    try tree.styledLine(try std.fmt.allocPrint(allocator, "{s}:{d}:{d}: {s}", .{ file_path, sl.line, sl.column, error_name }), .{ .fg = treenest.Color.red });
+                    try tree.styledLine(src_line, .{ .fg = treenest.Color.dimGray });
+                }
             }
             break;
         }
     }
 }
 
-fn printSourceLineOnly(writer: anytype, sl: std.debug.SourceLocation) !void {
-    var f = try std.fs.cwd().openFile(sl.file_name, .{});
+fn getSourceLine(buf: []u8, sl: std.debug.SourceLocation) !?[]const u8 {
+    var f = std.fs.cwd().openFile(sl.file_name, .{}) catch return null;
     defer f.close();
-    var buf: [4096]u8 = undefined;
     var amt_read = try f.read(buf[0..]);
     var current_line_start: usize = 0;
     var next_line: usize = 1;
@@ -740,7 +838,7 @@ fn printSourceLineOnly(writer: anytype, sl: std.debug.SourceLocation) !void {
                 current_line_start = 0;
             } else current_line_start += pos + 1;
         } else if (amt_read < buf.len) {
-            return error.EndOfFile;
+            return null;
         } else {
             amt_read = try f.read(buf[0..]);
             current_line_start = 0;
@@ -750,10 +848,10 @@ fn printSourceLineOnly(writer: anytype, sl: std.debug.SourceLocation) !void {
     if (std.mem.indexOfScalar(u8, slice, '\n')) |pos| {
         const line = slice[0..pos];
         std.mem.replaceScalar(u8, line, '\t', ' ');
-        try writer.writeAll(line);
+        return line;
     } else {
         const line = slice;
         std.mem.replaceScalar(u8, line, '\t', ' ');
-        try writer.writeAll(line);
+        return line;
     }
 }

@@ -10,7 +10,10 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/lib/libansi.zig"),
     });
 
-    const wren = b.addModule("wren", .{});
+    const wren = b.addModule("wren", .{
+        .target = target,
+        .optimize = optimize,
+    });
 
     wren.addIncludePath(b.path("deps/wren/src/include"));
     wren.addIncludePath(b.path("deps/wren/src/vm"));
@@ -30,6 +33,11 @@ pub fn build(b: *std.Build) void {
         .flags = &.{ "-std=c99", "-Wall", "-Wextra", "-Wno-unused-parameter" },
     });
 
+    const libwren = b.addStaticLibrary(.{
+        .name = "wren",
+        .root_module = wren,
+    });
+
     const xtc = b.addModule("xtc", .{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
@@ -39,7 +47,6 @@ pub fn build(b: *std.Build) void {
     const pretty = b.dependency("pretty", .{ .target = target, .optimize = optimize });
 
     xtc.addImport("ansi", ansi);
-    xtc.addImport("wren", wren);
 
     xtc.addImport("code_point", zg.module("code_point"));
     xtc.addImport("Graphemes", zg.module("Graphemes"));
@@ -55,6 +62,7 @@ pub fn build(b: *std.Build) void {
     });
 
     exe.linkSystemLibrary("m");
+    exe.linkLibrary(libwren);
 
     b.installArtifact(exe);
 
@@ -67,6 +75,8 @@ pub fn build(b: *std.Build) void {
             .mode = .simple,
         },
     });
+
+    unit_tests.linkLibrary(libwren);
 
     b.installArtifact(unit_tests);
 
