@@ -753,7 +753,7 @@ test "alpha: simple SrcOver blend" {
     try std.testing.expectEqual(@as(u8, 255), rgba8Alpha(dst));
 }
 
-test "paint: stroke rect via display list (ascii)" {
+test "paint: stroke rect via display list (unicode)" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const al = gpa.allocator();
@@ -767,18 +767,16 @@ test "paint: stroke rect via display list (ascii)" {
     var ctx = PaintContext.init(al, &unicode, trace);
     defer ctx.deinit();
     try ctx.push(PaintOp{ .StrokeRect = .{ .x = 2, .y = 1, .w = 6, .h = 4, .color = rgba8(255, 255, 255, 255), .style = .line_light, .bg_color = rgba8(0, 0, 0, 255) } });
-    // Force ASCII fallback for this test
-    tty.setUseUnicodeBoxes(false);
-    defer tty.setUseUnicodeBoxes(true);
+    // This test checks Unicode border rendering
     try tty.rasterizeDisplayList(&r, al, &glyphs, &ctx);
     const got = try r.toStringAlloc(al, &glyphs);
     defer al.free(got);
     const want =
         "          \n" ++
-        "  +----+  \n" ++
-        "  |    |  \n" ++
-        "  |    |  \n" ++
-        "  +----+  \n" ++
+        "  ┌────┐  \n" ++
+        "  │    │  \n" ++
+        "  │    │  \n" ++
+        "  └────┘  \n" ++
         "          \n";
     try std.testing.expectEqualStrings(want, got);
 }

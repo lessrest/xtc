@@ -1,0 +1,136 @@
+const std = @import("std");
+const cli = @import("cli.zig");
+const live = @import("live.zig");
+const one_shot = @import("one_shot.zig");
+const FormatTrace = @import("FormatTrace.zig");
+
+/// Main application coordinator
+pub const Application = struct {
+    allocator: std.mem.Allocator,
+    args: cli.Args,
+    log_file: ?std.fs.File = null,
+    
+    pub fn init(allocator: std.mem.Allocator) !Application {
+        const args_array = try std.process.argsAlloc(allocator);
+        defer std.process.argsFree(allocator, args_array);
+        
+        const args = try cli.parse(allocator, args_array);
+        
+        return Application{
+            .allocator = allocator,
+            .args = args,
+        };
+    }
+    
+    pub fn deinit(self: *Application) void {
+        if (self.log_file) |*f| {
+            f.close();
+            self.log_file = null;
+        }
+    }
+    
+    /// Run the application based on parsed arguments
+    pub fn run(self: *Application) !void {
+        // Setup logging if requested
+        if (self.args.log_path) |path| {
+            self.log_file = std.fs.cwd().createFile(path, .{
+                .truncate = true,
+                .read = false,
+                .exclusive = false,
+            }) catch null;
+            
+            if (self.log_file) |f| {
+                @import("logging.zig").setLogFile(f);
+                std.log.info("Logging to {s}", .{path});
+            }
+        }
+        
+        // Handle deprecated options
+        if (self.args.unicode_boxes != null) {
+            std.log.warn("--[no-]unicode-boxes option is deprecated and ignored", .{});
+        }
+        
+        // Defer debug trace formatting if requested
+        defer if (self.args.debug_mode and self.args.log_path != null) {
+            self.formatDebugTrace() catch |err| {
+                std.log.warn("Failed to format trace: {}", .{err});
+            };
+        };
+        
+        // Route to appropriate mode
+        switch (self.args.mode) {
+            .live => try self.runLive(),
+            .one_shot => try self.runOneShot(),
+        }
+    }
+    
+    fn runLive(self: *Application) !void {
+        // Extract input paths if provided
+        const xml_path = switch (self.args.input) {
+            .xml_file => |path| path,
+            .xml_string => |xml| blk: {
+                // Save inline XML to temp file for live mode
+                const temp_path = try self.writeTempFile("live_input.xml", xml);
+                break :blk temp_path;
+            },
+            else => null,
+        };
+        
+        const wren_path = switch (self.args.input) {
+            .wren_file => |path| path,
+            .wren_string => |script| blk: {
+                // Save inline script to temp file for live mode
+                const temp_path = try self.writeTempFile("live_input.wren", script);
+                break :blk temp_path;
+            },
+            else => null,
+        };
+        
+        try live.run(self.allocator, xml_path, wren_path);
+    }
+    
+    fn runOneShot(self: *Application) !void {
+        var session = one_shot.OneShotSession.init(self.allocator, .{
+            .output = self.args.output,
+            .log_file = self.log_file,
+        });
+        
+        try session.run(self.args.input);
+    }
+    
+    fn writeTempFile(self: *Application, name: []const u8, content: []const u8) ![]const u8 {
+        const temp_dir = std.fs.cwd();
+        const path = try std.fmt.allocPrint(self.allocator, "/tmp/xtc_{s}", .{name});
+        
+        const file = try temp_dir.createFile(path, .{});
+        defer file.close();
+        
+        try file.writeAll(content);
+        return path;
+    }
+    
+    fn formatDebugTrace(self: *Application) !void {
+        const log_path = self.args.log_path.?;
+        
+        var file = std.fs.cwd().openFile(log_path, .{ .mode = .read_only }) catch |err| {
+            std.log.warn("Could not open log file {s}: {}", .{ log_path, err });
+            return;
+        };
+        defer file.close();
+        
+        const stat = try file.stat();
+        const size: usize = @intCast(stat.size);
+        const bytes = try self.allocator.alloc(u8, size);
+        defer self.allocator.free(bytes);
+        _ = try file.readAll(bytes);
+        
+        const formatted = FormatTrace.formatLogXml(self.allocator, bytes) catch |err| {
+            std.log.warn("Trace format failed: {}", .{err});
+            return;
+        };
+        defer self.allocator.free(formatted);
+        
+        const stdout = std.io.getStdOut().writer();
+        try stdout.writeAll(formatted);
+    }
+};
