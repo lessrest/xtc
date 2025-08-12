@@ -11,32 +11,32 @@ const cli = @import("cli.zig");
 pub const OneShotSession = struct {
     allocator: std.mem.Allocator,
     config: Config,
-    
+
     pub const Config = struct {
         output: cli.OutputConfig,
         log_file: ?std.fs.File = null,
     };
-    
+
     pub fn init(allocator: std.mem.Allocator, config: Config) OneShotSession {
         return .{
             .allocator = allocator,
             .config = config,
         };
     }
-    
+
     /// Run one-shot render with the given input
     pub fn run(self: *OneShotSession, input: cli.Input) !void {
         // Initialize components
         var components = try initializeComponents(self.allocator);
         defer components.deinit();
-        
+
         // Load document
         var loader = DocumentLoader.init(
             self.allocator,
             &components.document,
-            &components.wren_runner,
+            components.wren_runner,
         );
-        
+
         const load_result = switch (input) {
             .xml_file => |path| try loader.loadXmlFile(path),
             .xml_string => |xml| try loader.loadXmlString(xml, "inline"),
@@ -44,12 +44,12 @@ pub const OneShotSession = struct {
             .wren_string => |script| try loader.loadWrenString(script, "inline"),
             .default => try loader.createDefault(),
         };
-        
+
         // Print any Wren output to stderr for debugging
         if (components.wren_runner.output.items.len > 0) {
             _ = try std.io.getStdErr().write(components.wren_runner.output.items);
         }
-        
+
         // Create renderer
         var render_instance = try renderer.Renderer.init(
             .{
@@ -63,11 +63,11 @@ pub const OneShotSession = struct {
             },
         );
         defer render_instance.deinit();
-        
+
         // Render to stdout
         const trace = @import("Trace.zig").init(false);
         const stdout = std.io.getStdOut().writer();
-        
+
         // For one-shot, we just want the final raster, not a diff
         try render_instance.render(&components.document, load_result.root_id, trace);
         try render_instance.writeFullRaster(stdout);
@@ -78,11 +78,11 @@ pub const OneShotSession = struct {
 const Components = struct {
     unicode: paint.UnicodeData,
     document: dom.Dom,
-    wren_runner: WrenRunner,
+    wren_runner: *WrenRunner,
     glyphs: tty.GlyphTable,
-    
+
     fn deinit(self: *Components) void {
-        self.unicode.deinit(self.document.allocator);
+        self.unicode.deinit(self.document.alloc);
         self.wren_runner.deinit(); // This also calls document.deinit()
         self.glyphs.deinit();
     }
@@ -92,16 +92,16 @@ const Components = struct {
 fn initializeComponents(allocator: std.mem.Allocator) !Components {
     var unicode = try paint.UnicodeData.init(allocator);
     errdefer unicode.deinit(allocator);
-    
+
     var document = dom.Dom.init(allocator);
     // Note: WrenRunner.deinit() will handle document.deinit()
-    
+
     var wren_runner = try WrenRunner.init(allocator, &document);
     errdefer wren_runner.deinit();
-    
+
     var glyphs = try tty.GlyphTable.init(allocator);
     errdefer glyphs.deinit();
-    
+
     return Components{
         .unicode = unicode,
         .document = document,

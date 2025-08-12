@@ -15,7 +15,7 @@ pub const LiveSession = struct {
     clock_registry: *clock.ClockRegistry,
     root_id: dom.DomNodeId,
     trace: Trace,
-    
+
     pub fn init(
         allocator: std.mem.Allocator,
         document: *dom.Dom,
@@ -35,17 +35,17 @@ pub const LiveSession = struct {
             .trace = trace,
         };
     }
-    
+
     /// Render the current document state
     pub fn render(self: *LiveSession) !void {
         const render_trace = self.trace.enter();
         defer render_trace.exit();
         render_trace.info("Rendering frame");
-        
+
         const stdout = std.io.getStdOut().writer();
         try self.renderer.renderAndPresent(self.document, self.root_id, render_trace, stdout);
     }
-    
+
     /// Handle terminal resize
     pub fn handleResize(self: *LiveSession, width: usize, height: usize) !void {
         try self.renderer.setViewport(width, height);
@@ -53,7 +53,7 @@ pub const LiveSession = struct {
         self.wren_runner.script_context.viewport_height = height;
         try self.render();
     }
-    
+
     /// Process a clock tick - returns true if re-render needed
     pub fn processClock(self: *LiveSession) !bool {
         // TODO: Implement clock processing with the actual Clock API
@@ -61,7 +61,7 @@ pub const LiveSession = struct {
         _ = self;
         return false;
     }
-    
+
     /// Handle keyboard input
     pub fn handleKeypress(self: *LiveSession, key: u8) !void {
         // Build key string for event dispatch
@@ -77,21 +77,20 @@ pub const LiveSession = struct {
                 break :blk key_buf[0..1];
             },
         };
-        
+
         const event_trace = self.trace.enter();
         defer event_trace.exit();
         event_trace.info("Handling keypress");
         event_trace.data("key").put("char", key).put("string", key_str).end();
-        
-        event_dispatch.dispatchKeypressEvent(
-            self.allocator,
+
+        event_dispatch.dispatchKeypress(
             self.wren_runner.*.vm.vm,
             self.document,
             key_str,
         ) catch |err| {
             std.log.warn("Failed to dispatch keypress event: {}", .{err});
         };
-        
+
         // Re-render after input
         self.wren_runner.script_context.viewport_width = self.renderer.opts.width;
         self.wren_runner.script_context.viewport_height = self.renderer.opts.height;
@@ -103,35 +102,35 @@ pub const LiveSession = struct {
 pub const Terminal = struct {
     raw_mode: ?RawMode = null,
     original_termios: ?std.posix.termios = null,
-    
+
     pub fn init() Terminal {
         return .{};
     }
-    
+
     pub fn enterLiveMode(self: *Terminal) !void {
         // Save original terminal state and enter raw mode
         self.raw_mode = try RawMode.enable(std.posix.STDIN_FILENO);
-        
+
         // Enter alternate screen and hide cursor
         var ansi_writer = @import("ansi.zig").stdout();
         try ansi_writer.initializeTerminal();
     }
-    
+
     pub fn exitLiveMode(self: *Terminal) void {
         // Restore terminal state
         var ansi_writer = @import("ansi.zig").stdout();
         ansi_writer.restoreTerminal() catch {};
-        
+
         if (self.raw_mode) |*raw| {
             raw.disable() catch {};
         }
     }
-    
+
     pub fn getSize(self: *const Terminal) [2]usize {
         _ = self;
         var ws: std.posix.winsize = .{ .col = 0, .row = 0, .xpixel = 0, .ypixel = 0 };
         const result = std.posix.system.ioctl(std.io.getStdOut().handle, std.posix.T.IOCGWINSZ, &ws);
-        
+
         if (result >= 0 and ws.col > 0 and ws.row > 0) {
             return .{ ws.col, ws.row };
         }
@@ -142,11 +141,11 @@ pub const Terminal = struct {
 /// Input stream processor
 pub const InputReader = struct {
     stdin: std.fs.File,
-    
+
     pub fn init() InputReader {
         return .{ .stdin = std.io.getStdIn() };
     }
-    
+
     /// Read next input byte with timeout (returns null on timeout)
     pub fn readByteTimeout(self: *InputReader, timeout_ms: i32) !?u8 {
         var fds = [_]std.posix.pollfd{.{
@@ -154,7 +153,7 @@ pub const InputReader = struct {
             .events = std.posix.POLL.IN,
             .revents = 0,
         }};
-        
+
         const poll_result = try std.posix.poll(&fds, timeout_ms);
         if (poll_result > 0 and (fds[0].revents & std.posix.POLL.IN) != 0) {
             var buf: [1]u8 = undefined;
@@ -167,8 +166,8 @@ pub const InputReader = struct {
 
 /// Event loop configuration
 pub const EventLoopConfig = struct {
-    clock_interval_ms: i32 = 50,  // How often to check clocks
-    exit_key: u8 = 'q',            // Key to exit the loop
+    clock_interval_ms: i32 = 50, // How often to check clocks
+    exit_key: u8 = 'q', // Key to exit the loop
 };
 
 /// Main event loop - coordinates all the pieces
@@ -177,7 +176,7 @@ pub const EventLoop = struct {
     terminal: *const Terminal,
     input: InputReader,
     config: EventLoopConfig,
-    
+
     pub fn init(session: *LiveSession, terminal: *const Terminal, config: EventLoopConfig) EventLoop {
         return .{
             .session = session,
@@ -186,10 +185,10 @@ pub const EventLoop = struct {
             .config = config,
         };
     }
-    
+
     pub fn run(self: *EventLoop) !void {
         var last_size = self.terminal.getSize();
-        
+
         while (true) {
             // Check for resize
             const current_size = self.terminal.getSize();
@@ -197,19 +196,19 @@ pub const EventLoop = struct {
                 try self.session.handleResize(current_size[0], current_size[1]);
                 last_size = current_size;
             }
-            
+
             // Process clocks
             if (try self.session.processClock()) {
                 try self.session.render();
             }
-            
+
             // Read input with timeout
             if (try self.input.readByteTimeout(self.config.clock_interval_ms)) |byte| {
                 // Check for exit
                 if (byte == self.config.exit_key or byte == self.config.exit_key & 0x1F) {
                     return;
                 }
-                
+
                 // Handle the keypress
                 try self.session.handleKeypress(byte);
             }
@@ -221,42 +220,42 @@ pub const EventLoop = struct {
 const RawMode = struct {
     orig_termios: std.posix.termios,
     fd: std.posix.fd_t,
-    
+
     pub fn enable(fd: std.posix.fd_t) !RawMode {
         const orig = try std.posix.tcgetattr(fd);
         var raw = orig;
-        
+
         // Input modes: no break, no CR to NL, no parity check, no strip char, no start/stop output control
         raw.iflag.BRKINT = false;
         raw.iflag.ICRNL = false;
         raw.iflag.INPCK = false;
         raw.iflag.ISTRIP = false;
         raw.iflag.IXON = false;
-        
+
         // Output modes: disable post processing
         raw.oflag.OPOST = false;
-        
+
         // Control modes: set 8 bit chars
         raw.cflag.CSIZE = .CS8;
-        
+
         // Local modes: no echo, no canonical mode, no extended functions, no signal chars
         raw.lflag.ECHO = false;
         raw.lflag.ICANON = false;
         raw.lflag.IEXTEN = false;
         raw.lflag.ISIG = false;
-        
+
         // Control chars: set return condition to 1 byte, no timeout
         raw.cc[@intFromEnum(std.posix.V.MIN)] = 1;
         raw.cc[@intFromEnum(std.posix.V.TIME)] = 0;
-        
+
         try std.posix.tcsetattr(fd, .FLUSH, raw);
-        
+
         return RawMode{
             .orig_termios = orig,
             .fd = fd,
         };
     }
-    
+
     pub fn disable(self: *RawMode) !void {
         try std.posix.tcsetattr(self.fd, .FLUSH, self.orig_termios);
     }
