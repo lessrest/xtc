@@ -196,9 +196,7 @@ const TestGroup = struct {
             }
         }
 
-        if (!verbose) {
-            try tree.newline();
-        }
+        try tree.newline();
 
         // Run teardown functions
         for (group.teardown_funcs.items) |teardown_func| {
@@ -211,12 +209,10 @@ const TestGroup = struct {
 
     fn header(self: *TestGroup, allocator: Allocator, tree: *Tree, verbose: bool) !void {
         _ = allocator; // autofix
+        const path = std.mem.trimLeft(u8, self.path, "src/");
         if (verbose) {
-            try tree.dk().section(self.path);
-            try tree.begin();
+            try tree.line(self.path);
         } else {
-            const path = std.mem.trimLeft(u8, self.path, "src/");
-
             const padding = 24 - path.len;
             for (0..padding) |_| {
                 try tree.raw(" ");
@@ -230,7 +226,7 @@ const TestGroup = struct {
 
             const name = std.fs.path.basename(path);
             const nameWithoutExtension = std.mem.trimRight(u8, name, ".zig");
-            try tree.styled(nameWithoutExtension, .{ .fg = treenest.Color.rgb(150, 150, 170), .bold = true });
+            try tree.styled(nameWithoutExtension, .{ .fg = treenest.Color.rgb(150, 150, 170) });
             try tree.raw(" ");
         }
     }
@@ -318,7 +314,7 @@ const TestSuite = struct {
         std.sort.insertion(TestGroup, self.groups.items, {}, struct {
             fn compare(context: void, a: TestGroup, b: TestGroup) bool {
                 _ = context;
-                return a.path.len < b.path.len;
+                return a.tests.items.len < b.tests.items.len;
             }
         }.compare);
     }
@@ -343,14 +339,18 @@ const TestSuite = struct {
             if (self.env.fail_first and self.fail_count > 0) {
                 break;
             }
-
-            if (self.env.verbose and group.tests.items.len > 0) {
-                tree.end();
-            }
         }
 
-        if (self.env.verbose) {
-            try tree.newline();
+        for (self.groups.items) |*group| {
+            for (group.tests.items) |*case| {
+                switch (case.status) {
+                    .pass => self.pass_count += 1,
+                    .fail => self.fail_count += 1,
+                    .skip => self.skip_count += 1,
+                    .leak => self.leak_count += 1,
+                    .pending => unreachable,
+                }
+            }
         }
 
         try self.displayResults(&tree);
@@ -375,17 +375,21 @@ const TestSuite = struct {
                     }
                 } else {
                     if (failure.stack_trace) |trace| {
-                        try emitMatcherFailureLine(tree, failure.friendly_name, failure.errorName(), trace);
                         try dumpConciseStackTrace(tree, trace, failure.friendly_name);
+                        try emitMatcherFailureLine(tree, failure.friendly_name, failure.errorName(), trace);
                     }
                 }
             }
-            try tree.newline();
         }
 
         // Display summary
         const total_tests = self.pass_count + self.fail_count;
-        try tree.line(try std.fmt.allocPrint(self.allocator, "{d} of {d} test{s} passed", .{ self.pass_count, total_tests, if (total_tests != 1) "s" else "" }));
+
+        try tree.line(try std.fmt.allocPrint(self.allocator, "{d} of {d} test{s} passed", .{
+            self.pass_count,
+            total_tests,
+            if (total_tests != 1) "s" else "",
+        }));
 
         if (self.skip_count > 0) {
             try tree.line(try std.fmt.allocPrint(self.allocator, "{d} test{s} skipped", .{ self.skip_count, if (self.skip_count != 1) "s" else "" }));
@@ -395,12 +399,9 @@ const TestSuite = struct {
             try tree.line(try std.fmt.allocPrint(self.allocator, "{d} test{s} leaked", .{ self.leak_count, if (self.leak_count != 1) "s" else "" }));
         }
 
-        if (self.env.verbose) {
-            try tree.newline();
-            try self.slowest.display(self.allocator, tree);
-        }
-
-        try tree.newline();
+        // if (self.env.verbose) {
+        //     try self.slowest.display(tree);
+        // }
     }
 };
 
@@ -502,10 +503,10 @@ const SlowTracker = struct {
         return ns;
     }
 
-    fn display(self: *SlowTracker, allocator: Allocator, tree: anytype) !void {
+    fn display(self: *SlowTracker, tree: anytype) !void {
         var slowest = self.slowest;
-        const count = slowest.count();
-        try tree.line(try std.fmt.allocPrint(allocator, "Slowest {d} test{s}:", .{ count, if (count != 1) "s" else "" }));
+        try tree.dk().section("slowest tests");
+        defer tree.end();
 
         while (slowest.removeMinOrNull()) |info| {
             try tree.dk().timing(info.name, info.ns);
@@ -760,6 +761,7 @@ fn dumpConciseStackTrace(tree: *Tree, stack_trace: std.builtin.StackTrace, test_
             else
                 si.name;
 
+            try tree.dk().spaces(6);
             try tree.dk().stackFrame(file_path, sl.line, sl.column, func_name);
             shown_frames += 1;
         }
@@ -772,6 +774,8 @@ fn emitMatcherFailureLine(
     error_name: []const u8,
     stack_trace: std.builtin.StackTrace,
 ) !void {
+    _ = test_name; // autofix
+    _ = error_name; // autofix
     if (std.debug.getSelfDebugInfo() catch null) |dbg| {
         const allocator = tree.allocator;
         const cwd = std.fs.cwd().realpathAlloc(allocator, ".") catch null;
@@ -809,14 +813,8 @@ fn emitMatcherFailureLine(
                     break :blk sl.file_name;
                 } else sl.file_name;
 
-                // Use dank for better formatting
-                try tree.dk().errorMsg(try std.fmt.allocPrint(allocator, "in {s}", .{test_name}));
-
-                var src_buf: [4096]u8 = undefined;
-                if (try getSourceLine(&src_buf, sl)) |src_line| {
-                    try tree.styledLine(try std.fmt.allocPrint(allocator, "{s}:{d}:{d}: {s}", .{ file_path, sl.line, sl.column, error_name }), .{ .fg = treenest.Color.red });
-                    try tree.styledLine(src_line, .{ .fg = treenest.Color.dimGray });
-                }
+                const source = try getSourceLines(allocator, file_path);
+                try tree.dk().sourceBlock(source, sl.line, sl.column, 3);
             }
             break;
         }

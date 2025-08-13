@@ -31,6 +31,118 @@ pub const Style = struct {
     underline: bool = false,
 };
 
+/// A piece of text with an associated `Style`.
+pub const Part = struct {
+    text: []const u8,
+    style: Style = .{},
+    count: usize = 1,
+
+    pub fn repeat(self: Part, count: usize) Part {
+        return .{ .text = self.text, .style = self.style, .count = count };
+    }
+
+    pub fn underlined(self: Part) Part {
+        var part = self;
+        part.style.underline = true;
+        return part;
+    }
+};
+
+/// Convenience constructors for common styled parts
+pub fn plain(text: []const u8) Part {
+    return .{ .text = text };
+}
+
+pub fn bold(text: []const u8) Part {
+    return .{ .text = text, .style = .{ .bold = true } };
+}
+
+pub fn dim(text: []const u8) Part {
+    return .{ .text = text, .style = .{ .dim = true } };
+}
+
+pub fn italic(text: []const u8) Part {
+    return .{ .text = text, .style = .{ .italic = true } };
+}
+
+pub fn underline(text: []const u8) Part {
+    return .{ .text = text, .style = .{ .underline = true } };
+}
+
+pub fn colored(text: []const u8, color: Color) Part {
+    return .{ .text = text, .style = .{ .fg = color } };
+}
+
+pub fn onColor(text: []const u8, color: Color) Part {
+    return .{ .text = text, .style = .{ .bg = color } };
+}
+
+pub fn black(text: []const u8) Part {
+    return colored(text, Color.black);
+}
+pub fn white(text: []const u8) Part {
+    return colored(text, Color.white);
+}
+pub fn red(text: []const u8) Part {
+    return colored(text, Color.red);
+}
+pub fn green(text: []const u8) Part {
+    return colored(text, Color.green);
+}
+pub fn blue(text: []const u8) Part {
+    return colored(text, Color.blue);
+}
+pub fn yellow(text: []const u8) Part {
+    return colored(text, Color.yellow);
+}
+pub fn cyan(text: []const u8) Part {
+    return colored(text, Color.cyan);
+}
+pub fn magenta(text: []const u8) Part {
+    return colored(text, Color.magenta);
+}
+pub fn gray(text: []const u8) Part {
+    return colored(text, Color.gray);
+}
+pub fn dimGray(text: []const u8) Part {
+    return colored(text, Color.dimGray);
+}
+
+pub fn formatted(allocator: std.mem.Allocator, comptime fmt: []const u8, args: anytype) Part {
+    const text = std.fmt.allocPrint(allocator, fmt, args) catch return plain("");
+    return plain(text);
+}
+
+pub fn formattedStyled(allocator: std.mem.Allocator, comptime fmt: []const u8, args: anytype, style: Style) Part {
+    const text = std.fmt.allocPrint(allocator, fmt, args) catch return plain("");
+    return .{ .text = text, .style = style };
+}
+
+pub fn padLeft(allocator: std.mem.Allocator, text: []const u8, width: usize, pad_char: u8) Part {
+    if (text.len >= width) return plain(text);
+    const padding_len = width - text.len;
+    const padded = allocator.alloc(u8, width) catch return plain(text);
+    @memset(padded[0..padding_len], pad_char);
+    @memcpy(padded[padding_len..], text);
+    return plain(padded);
+}
+
+pub fn padRight(allocator: std.mem.Allocator, text: []const u8, width: usize, pad_char: u8) Part {
+    if (text.len >= width) return plain(text);
+    const padded = allocator.alloc(u8, width) catch return plain(text);
+    @memcpy(padded[0..text.len], text);
+    @memset(padded[text.len..], pad_char);
+    return plain(padded);
+}
+
+pub fn fixed(allocator: std.mem.Allocator, text: []const u8, width: usize) Part {
+    if (text.len == width) return plain(text);
+    if (text.len > width) {
+        return plain(text[0..width]);
+    }
+    return padRight(allocator, text, width, ' ');
+}
+
 pub fn TreeNest(comptime Writer: type) type {
     return struct {
         writer: Writer,
@@ -65,7 +177,7 @@ pub fn TreeNest(comptime Writer: type) type {
             self.no_color = no_color;
         }
 
-        fn applyStyle(self: *Self, style: Style) !void {
+        pub fn applyStyle(self: *Self, style: Style) !void {
             if (self.no_color) return;
 
             if (style.bold) {
@@ -88,7 +200,7 @@ pub fn TreeNest(comptime Writer: type) type {
             }
         }
 
-        fn resetStyle(self: *Self) !void {
+        pub fn resetStyle(self: *Self) !void {
             if (!self.no_color) {
                 try self.writer.writeAll("\x1b[0m");
             }
@@ -104,6 +216,8 @@ pub fn TreeNest(comptime Writer: type) type {
                     }
                     if (is_last) {
                         try self.writer.writeAll("└─ ");
+                    } else if (i == 0) {
+                        try self.writer.writeAll("┌─ ");
                     } else {
                         try self.writer.writeAll("├─ ");
                     }
@@ -116,9 +230,9 @@ pub fn TreeNest(comptime Writer: type) type {
                         try self.writer.writeAll("\x1b[38;2;100;100;100m");
                     }
                     if (level.has_more) {
-                        try self.writer.writeAll("│  ");
+                        try self.writer.writeAll("│ ");
                     } else {
-                        try self.writer.writeAll("   ");
+                        try self.writer.writeAll("  ");
                     }
                     if (!self.no_color) {
                         try self.writer.writeAll("\x1b[0m");
@@ -134,9 +248,9 @@ pub fn TreeNest(comptime Writer: type) type {
                     try self.writer.writeAll("\x1b[38;2;100;100;100m");
                 }
                 if (level.has_more) {
-                    try self.writer.writeAll("│  ");
+                    try self.writer.writeAll("│ ");
                 } else {
-                    try self.writer.writeAll("   ");
+                    try self.writer.writeAll("  ");
                 }
                 if (!self.no_color) {
                     try self.writer.writeAll("\x1b[0m");
@@ -220,6 +334,13 @@ pub fn TreeNest(comptime Writer: type) type {
             try self.resetStyle();
         }
 
+        /// Print a formatted string with the given style applied.
+        pub fn styledPrint(self: *Self, comptime fmt: []const u8, args: anytype, style: Style) !void {
+            try self.applyStyle(style);
+            try self.writer.print(fmt, args);
+            try self.resetStyle();
+        }
+
         pub fn newline(self: *Self) !void {
             try self.writer.writeAll("\n");
         }
@@ -227,6 +348,55 @@ pub fn TreeNest(comptime Writer: type) type {
         pub fn print(self: *Self, comptime fmt: []const u8, args: anytype) !void {
             try self.writer.print(fmt, args);
         }
+
+        /// Begin composing a line from `Part`s using a fluent API.
+        /// Example:
+        ///   try tree.compose(&.{ bold(name), dim(status), green("online") }).spaced();
+        pub fn compose(self: *Self, parts: []const Part) LineComposer {
+            return .{ .tree = self, .parts = parts };
+        }
+
+        pub const LineComposer = struct {
+            tree: *Self,
+            parts: []const Part,
+
+            /// Join parts with a custom separator and emit a newline.
+            pub fn joined(self: *const @This(), separator: []const u8) !void {
+                if (self.tree.depth > 0) {
+                    try self.tree.writeContinuation();
+                }
+                for (self.parts, 0..) |p, i| {
+                    if (i > 0) try self.tree.writer.writeAll(separator);
+                    try self.tree.applyStyle(p.style);
+                    for (0..p.count) |_| try self.tree.writer.writeAll(p.text);
+                    try self.tree.resetStyle();
+                }
+                try self.tree.writer.writeAll("\n");
+            }
+
+            /// Join parts with a single space and emit a newline.
+            pub fn spaced(self: *const @This()) !void {
+                try self.joined(" ");
+            }
+
+            /// Join parts with a custom separator without a trailing newline.
+            pub fn inlineJoined(self: *const @This(), separator: []const u8) !void {
+                if (self.tree.depth > 0) {
+                    try self.tree.writeContinuation();
+                }
+                for (self.parts, 0..) |p, i| {
+                    if (i > 0) try self.tree.writer.writeAll(separator);
+                    try self.tree.applyStyle(p.style);
+                    for (0..p.count) |_| try self.tree.writer.writeAll(p.text);
+                    try self.tree.resetStyle();
+                }
+            }
+
+            /// Join parts with a single space without a trailing newline.
+            pub fn inlineSpaced(self: *const @This()) !void {
+                try self.inlineJoined(" ");
+            }
+        };
     };
 }
 

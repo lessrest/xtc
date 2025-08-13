@@ -3,10 +3,6 @@
 
 import "meta" for Meta
 
-// ============================================================================
-// Core DOM Classes
-// ============================================================================
-
 class Document {
   static root { Element.new(DOM.root()) }
 
@@ -23,8 +19,6 @@ class Document {
   }
 
   static createClock(style) {
-    // Create a clock node with the given style
-    // The style should include interval (e.g., "clock interval-500 clock-spinner")
     return Element.new(DOM.createClock(style))
   }
 
@@ -88,12 +82,7 @@ class Element {
   }
 }
 
-// ============================================================================
-// Script Runner - Manages script module execution
-// ============================================================================
-
 class ScriptRunner {
-  // Execute a module that follows the Script.start(self) convention
   static executeModule(moduleName, selfId) {
     System.print("[ScriptRunner] Starting module '%(moduleName)' with selfId=%(selfId)")
 
@@ -107,9 +96,7 @@ class ScriptRunner {
     System.print("[ScriptRunner] Module '%(moduleName)' executed successfully")
   }
 
-  // Execute inline script with backward compatibility
   static executeInline(selfId, source) {
-    // Provide 'self' variable in the script's scope
     var code = "
       var self = Element.new(%(selfId))
       %(source)
@@ -124,19 +111,3 @@ class ScriptRunner {
     }
   }
 }
-
-// ============================================================================
-// Script Module Convention
-// ============================================================================
-// Script modules should export a Script class with this interface:
-//
-// class Script {
-//   static start(self) {
-//     // self is the Element this script is attached to
-//     // Initialize your script here
-//   }
-//
-//   static stop() {
-//     // Optional: cleanup when script is removed
-//   }
-// }

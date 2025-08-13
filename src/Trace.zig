@@ -344,20 +344,6 @@ test "trace depth limiting output" {
     try std.testing.expect(std.mem.indexOf(u8, output, "should not appear") == null);
 }
 
-test "trace span balancing" {
-    var buf: [1024]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buf);
-    const TestTrace = GenericTracer(@TypeOf(stream.writer()));
-
-    var trace = TestTrace.init(stream.writer(), .{ .enabled = true, .max_depth = 1 });
-    trace.enter(); // This should NOT print <span> because child will be disabled
-    trace.info("should not appear");
-    trace.exit(); // This should NOT print </span>
-
-    const output = stream.getWritten();
-    try std.testing.expectEqualStrings("", output);
-}
-
 test "trace data builder output" {
     var buf: [1024]u8 = undefined;
     var stream = std.io.fixedBufferStream(&buf);

@@ -98,7 +98,6 @@ pub fn init(allocator: std.mem.Allocator, document: *Dom) !*@This() {
     try this.vm.registerForeignModules();
 
     try this.vm.interpret("dom", @embedFile("modules/dom.wren"));
-    try this.vm.interpret("editor", @embedFile("modules/editor.wren"));
     try this.vm.interpret("tui", @embedFile("modules/tui.wren"));
     try this.vm.interpret("main", "import \"dom\" for Document, Element");
 
