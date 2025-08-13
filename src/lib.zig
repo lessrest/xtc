@@ -191,7 +191,7 @@ fn expectLayout(xml_input: []const u8, want: []const u8) !void {
     try expectAsciiEqual(want_trim, got_trim);
 }
 
-test "row start: two 4x3 tiles in 14x5 viewport" {
+test "flex row with justify-start places two boxes at the beginning of the container" {
     try expectLayout(
         \\<?xml version="1.0" standalone="yes" ?>
         \\<root class="flex flex-row bg-glyph-[.]">
@@ -207,7 +207,7 @@ test "row start: two 4x3 tiles in 14x5 viewport" {
     );
 }
 
-test "flex row with stretch" {
+test "flex row with items-stretch makes children fill the container's cross axis" {
     try expectLayout(
         \\<?xml version="1.0" standalone="yes" ?>
         \\<root class="h-5 bg-glyph-[.]">
@@ -225,7 +225,7 @@ test "flex row with stretch" {
     );
 }
 
-test "row center: centered 4x3 + 4x3 tiles in 14x5" {
+test "flex row with justify-center centers boxes horizontally in the container" {
     try expectLayout(
         \\<root class="flex flex-row justify-center bg-glyph-[.]">
         \\  <box class="w-4 h-3 bg-glyph-[a]" />
@@ -241,7 +241,7 @@ test "row center: centered 4x3 + 4x3 tiles in 14x5" {
     );
 }
 
-test "row space-between: separated 4x3 tiles in 14x5" {
+test "flex row with justify-between places first and last items at container edges" {
     try expectLayout(
         \\<root class="flex flex-row justify-between bg-glyph-[.]">
         \\  <box class="w-4 h-3 bg-glyph-[a]" />
@@ -257,7 +257,7 @@ test "row space-between: separated 4x3 tiles in 14x5" {
     );
 }
 
-test "grow distribution: three tiles grow to fill main axis" {
+test "flex-grow distributes available space proportionally among growing children" {
     try expectLayout(
         \\<root class="flex flex-row bg-glyph-[.]">
         \\  <box class="w-2 h-2 grow-1 bg-glyph-[a]" />
@@ -273,7 +273,7 @@ test "grow distribution: three tiles grow to fill main axis" {
     );
 }
 
-test "justify-around: equal around gaps across three tiles" {
+test "flex row with justify-around creates equal space around each item" {
     try expectLayout(
         \\<root class="flex flex-row justify-around bg-glyph-[.]">
         \\  <box class="w-2 h-2 bg-glyph-[a]" />
@@ -289,7 +289,7 @@ test "justify-around: equal around gaps across three tiles" {
     );
 }
 
-test "align-self overrides align-items (center vs start)" {
+test "align-self property overrides the container's align-items for individual children" {
     try expectLayout(
         \\<root class="flex flex-row items-start bg-glyph-[.] h-4">
         \\  <box class="w-4 h-2 self-center bg-glyph-[a]" />
@@ -304,7 +304,7 @@ test "align-self overrides align-items (center vs start)" {
     );
 }
 
-test "column grow distribution: one tile grows to fill main axis" {
+test "flex column with single growing child fills entire container height" {
     try expectLayout(
         \\<root class="flex flex-col bg-glyph-[.] h-16">
         \\  <box class="w-4 grow-1 bg-glyph-[a]" />
@@ -329,7 +329,7 @@ test "column grow distribution: one tile grows to fill main axis" {
     );
 }
 
-test "column grow distribution: *only* one tile grows to fill main axis" {
+test "flex column with one growing and one fixed child distributes space correctly" {
     try expectLayout(
         \\<root class="flex flex-col bg-glyph-[.] h-16">
         \\  <box class="w-4 grow-1 bg-glyph-[a]" />
@@ -355,7 +355,7 @@ test "column grow distribution: *only* one tile grows to fill main axis" {
     );
 }
 
-test "column grow distribution: only one tile grows to fill main axis, centered" {
+test "flex column with items-center aligns children horizontally while growing vertically" {
     try expectLayout(
         \\<root class="flex flex-col items-center bg-glyph-[.] w-8 h-16">
         \\  <box class="w-4 grow-1 bg-glyph-[a]" />
@@ -381,7 +381,7 @@ test "column grow distribution: only one tile grows to fill main axis, centered"
     );
 }
 
-test "flex with texts" {
+test "text nodes render inside flex containers and respect their layout properties" {
     try expectLayout(
         \\<root class="flex flex-col bg-glyph-[.] h-4">
         \\  <box class="w-3 grow-1 bg-glyph-[a]">foo</box>
@@ -395,7 +395,7 @@ test "flex with texts" {
     );
 }
 
-test "text with newlines" {
+test "text nodes containing newline characters render on multiple lines" {
     try expectLayout(
         \\<root class="w-5 h-5 bg-glyph-[.]">Line1
         \\Line2
@@ -409,7 +409,7 @@ test "text with newlines" {
     );
 }
 
-test "overflow-y-scroll with auto-scroll to bottom" {
+test "overflow-y-scroll containers automatically scroll to show bottom content" {
     try expectLayout(
         \\<root class="flex flex-col w-6 h-5 bg-glyph-[.]">
         \\  <box class="h-1 w-6 bg-glyph-[.]"></box>

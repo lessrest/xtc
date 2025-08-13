@@ -314,7 +314,7 @@ pub fn file(f: std.fs.File, options: Options) Trace {
 
 // ============ Tests ============
 
-test "trace output capture" {
+test "trace messages are written to the output stream in XML format" {
     var buf: [1024]u8 = undefined;
     var stream = std.io.fixedBufferStream(&buf);
     const TestTrace = GenericTracer(@TypeOf(stream.writer()));
@@ -326,7 +326,7 @@ test "trace output capture" {
     try std.testing.expectEqualStrings("<info>test message</info>\n", output);
 }
 
-test "trace depth limiting output" {
+test "trace output respects maximum depth setting and omits deeper messages" {
     var buf: [1024]u8 = undefined;
     var stream = std.io.fixedBufferStream(&buf);
     const TestTrace = GenericTracer(@TypeOf(stream.writer()));
@@ -344,7 +344,7 @@ test "trace depth limiting output" {
     try std.testing.expect(std.mem.indexOf(u8, output, "should not appear") == null);
 }
 
-test "trace data builder output" {
+test "trace data builder creates structured key-value groups in the output" {
     var buf: [1024]u8 = undefined;
     var stream = std.io.fixedBufferStream(&buf);
     const TestTrace = GenericTracer(@TypeOf(stream.writer()));

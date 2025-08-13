@@ -476,7 +476,7 @@ pub const RasterDiff = struct {
     }
 };
 
-test "RasterDiff iterator with runs" {
+test "raster diff iterator detects runs of changes with consistent colors" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const al = gpa.allocator();

@@ -176,7 +176,7 @@ pub fn ContiguousTree(comptime NodeData: type) type {
     };
 }
 
-test "ContiguousTree basic functionality" {
+test "contiguous tree stores nodes in a flat array with parent indices" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
@@ -191,7 +191,7 @@ test "ContiguousTree basic functionality" {
     try testing.expect(tree.nodeCount() == 0);
 }
 
-test "ContiguousTree BFS construction" {
+test "contiguous tree constructs nodes in breadth-first order for cache locality" {
     const testing = std.testing;
     const allocator = testing.allocator;
 

@@ -748,7 +748,7 @@ pub fn computePaintCommands(
         .put("final op count", ctx.ops.items.len);
 }
 
-test "alpha: simple SrcOver blend" {
+test "source-over alpha blending mixes foreground and background colors correctly" {
     var dst = rgba8(0, 0, 255, 255);
     const src = rgba8(255, 0, 0, 128);
     blendOver(&dst, src);
@@ -758,7 +758,7 @@ test "alpha: simple SrcOver blend" {
     try std.testing.expectEqual(@as(u8, 255), rgba8Alpha(dst));
 }
 
-test "paint: stroke rect via display list (unicode)" {
+test "stroke rect command renders unicode box-drawing characters to the raster" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const al = gpa.allocator();
@@ -786,7 +786,7 @@ test "paint: stroke rect via display list (unicode)" {
     try std.testing.expectEqualStrings(want, got);
 }
 
-test "text color inheritance: parent element color applies to child text glyph run" {
+test "text nodes inherit foreground color from their parent element's style" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     var arena = std.heap.ArenaAllocator.init(gpa.allocator());

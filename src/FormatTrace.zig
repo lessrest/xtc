@@ -537,7 +537,7 @@ pub fn formatLogXml(allocator: std.mem.Allocator, log_bytes: []const u8) ![]u8 {
     return allocator.dupe(u8, fmt.output.items);
 }
 
-test "format simple data group inline" {
+test "trace formatter displays simple data groups inline when they fit" {
     const log =
         \\<span>
         \\<info>Render</info>
@@ -563,7 +563,7 @@ test "format simple data group inline" {
     try std.testing.expectEqualStrings(expected, out);
 }
 
-test "format with decision and nested span" {
+test "trace formatter shows decisions and nested spans with proper hierarchy" {
     const log =
         \\<span>
         \\  <info>Parent</info>

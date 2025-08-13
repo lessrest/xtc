@@ -242,13 +242,13 @@ pub const EventRegistry = struct {
 };
 
 // Tests
-test "EventType string conversion" {
+test "event type enum converts to and from string representation correctly" {
     try std.testing.expectEqualStrings("click", EventType.click.toString());
     try std.testing.expectEqual(EventType.click, EventType.fromString("click"));
     try std.testing.expectEqual(@as(?EventType, null), EventType.fromString("invalid"));
 }
 
-test "EventRegistry basic operations" {
+test "event registry adds, queries, and removes single event listeners" {
     var registry = EventRegistry.init(std.testing.allocator);
     defer registry.deinit();
 
@@ -277,7 +277,7 @@ test "EventRegistry basic operations" {
     try std.testing.expect(!registry.removeEventListener(1, .click, handler_id));
 }
 
-test "EventRegistry multiple handlers" {
+test "event registry manages multiple handlers for the same node and event type" {
     var registry = EventRegistry.init(std.testing.allocator);
     defer registry.deinit();
 
@@ -306,7 +306,7 @@ test "EventRegistry multiple handlers" {
     try std.testing.expectEqual(id1, remaining.?[0].id);
 }
 
-test "EventRegistry removeAllListeners" {
+test "event registry removes all listeners for a specific node at once" {
     var registry = EventRegistry.init(std.testing.allocator);
     defer registry.deinit();
 
@@ -329,7 +329,7 @@ test "EventRegistry removeAllListeners" {
     try std.testing.expect(registry.hasListeners(2, .click));
 }
 
-test "DOM with event registry" {
+test "dom nodes can have event listeners attached through the event registry" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
@@ -368,7 +368,7 @@ test "DOM with event registry" {
     try std.testing.expect(!document.event_registry.hasListeners(button, .click));
 }
 
-test "Event system with multiple nodes" {
+test "event system handles different events on different nodes independently" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
@@ -411,7 +411,7 @@ test "Event system with multiple nodes" {
     try std.testing.expect(document.event_registry.hasListeners(header, .mousemove));
 }
 
-test "Event creation and modification" {
+test "event objects store type, target, and optional keyboard and mouse data" {
     const now = std.time.timestamp();
 
     var event = Event{
@@ -440,7 +440,7 @@ test "Event creation and modification" {
     try std.testing.expectEqual(@as(?i32, 200), event.mouse_y);
 }
 
-test "Event type string conversions" {
+test "all event type enums convert bidirectionally with their string names" {
     // Test all event types
     const test_cases = [_]struct {
         event_type: EventType,
@@ -471,7 +471,7 @@ test "Event type string conversions" {
     try std.testing.expectEqual(@as(?EventType, null), invalid);
 }
 
-test "Event registry memory management" {
+test "event registry properly manages memory when adding and removing many handlers" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
@@ -508,7 +508,7 @@ test "Event registry memory management" {
     // Check for memory leaks (gpa will detect them)
 }
 
-test "Integration: DOM node lifecycle with events" {
+test "dom nodes with event listeners clean up properly during lifecycle operations" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();

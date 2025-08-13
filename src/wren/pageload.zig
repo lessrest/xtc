@@ -154,7 +154,7 @@ fn collectScriptText(element: xmlparse.Element, out: *std.ArrayList(u8)) !void {
     }
 }
 
-test "xml <script> executes and manipulates DOM" {
+test "script tags in XML documents execute wren code that can manipulate the DOM" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const al = gpa.allocator();
@@ -200,7 +200,7 @@ test "xml <script> executes and manipulates DOM" {
     try std.testing.expect(found);
 }
 
-test "Wren syntax error handling" {
+test "wren syntax errors in script tags return compile error without crashing" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const al = gpa.allocator();
@@ -229,7 +229,7 @@ test "Wren syntax error handling" {
     try std.testing.expectError(error.CompileError, result);
 }
 
-test "Wren runtime error handling" {
+test "wren runtime errors in script tags return runtime error without crashing" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const al = gpa.allocator();

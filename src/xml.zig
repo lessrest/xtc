@@ -84,7 +84,7 @@ pub fn loadDocumentFromMarkup(alloc: std.mem.Allocator, doc: *const @import("xml
     return dom;
 }
 
-test "top-level <root> element becomes document root" {
+test "if the top-level XML element is <root>, it becomes the document root node" {
     const xmlparse = @import("xmlparse.zig");
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};

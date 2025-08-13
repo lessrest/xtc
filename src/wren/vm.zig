@@ -354,7 +354,7 @@ pub fn eval(allocator: std.mem.Allocator, source: []const u8) ![]u8 {
 }
 
 // Tests
-test "wren basic evaluation" {
+test "wren virtual machine evaluates basic scripts and returns printed output" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
@@ -369,7 +369,7 @@ test "wren basic evaluation" {
     try std.testing.expect(std.mem.indexOf(u8, result, "2 + 3 = 5") != null);
 }
 
-test "wren allocation tracking" {
+test "wren allocator tracks memory usage across list and map operations" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
@@ -394,7 +394,7 @@ test "wren allocation tracking" {
     try std.testing.expect(std.mem.indexOf(u8, result, "Map[3]: Value 9") != null);
 }
 
-test "wren error handling" {
+test "wren compilation errors are caught and returned as zig errors" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
@@ -408,7 +408,7 @@ test "wren error handling" {
     try std.testing.expectError(error.CompileError, result);
 }
 
-test "TrackedAllocator" {
+test "tracked allocator wrapper properly forwards allocation calls to underlying allocator" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
