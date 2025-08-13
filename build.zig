@@ -33,7 +33,8 @@ pub fn build(b: *std.Build) void {
         .flags = &.{ "-std=c99", "-Wall", "-Wextra", "-Wno-unused-parameter" },
     });
 
-    const libwren = b.addStaticLibrary(.{
+    const libwren = b.addLibrary(.{
+        .linkage = .static,
         .name = "wren",
         .root_module = wren,
     });
@@ -44,8 +45,6 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    const pretty = b.dependency("pretty", .{ .target = target, .optimize = optimize });
-
     xtc.addImport("ansi", ansi);
 
     xtc.addImport("code_point", zg.module("code_point"));
@@ -53,12 +52,10 @@ pub fn build(b: *std.Build) void {
     xtc.addImport("DisplayWidth", zg.module("DisplayWidth"));
     xtc.addImport("Words", zg.module("Words"));
 
-    xtc.addImport("pretty", pretty.module("pretty"));
-
     const exe = b.addExecutable(.{
         .name = "xtc",
         .root_module = xtc,
-        .optimize = optimize,
+        .linkage = .static,
     });
 
     exe.linkSystemLibrary("m");

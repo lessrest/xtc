@@ -2,75 +2,77 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "watch: build+test",
-      "type": "shell",
-      "command": "watchexec",
+      "label": "zig build --watch",
+      "type": "process",
+      "command": "zig",
       "args": [
-        "-o",
-        "queue",
-        "--clear",
-        "--notify",
-        "--quiet",
-        "-e",
-        "zig,zon",
-        "-w",
-        "src",
-        "-w",
-        "build.zig",
-        "--",
-        "make",
-        "vscode-build-and-test"
+        "build",
+        "--watch",
+        "--summary",
+        "none",
+        "--prominent-compile-errors"
       ],
       "isBackground": true,
       "presentation": {
-        "reveal": "never",
+        "reveal": "always",
         "panel": "dedicated",
         "clear": true
       },
-
-      "runOptions": { "runOn": "folderOpen" },
-      "problemMatcher": [
-        {
-          "owner": "zig-build",
-          "fileLocation": ["autoDetect", "${workspaceFolder}"],
-          "pattern": {
-            "regexp": "^((?:[A-Za-z]:)?[^:]+):(\\d+):(\\d+):\\s+(error|warning|note):\\s+(.*)$",
+      "group": "build",
+      "icon": { "id": "eye-watch", "color": "terminal.ansiCyan" },
+      "runOptions": { "instanceLimit": 1, "reevaluateOnRerun": false },
+      "problemMatcher": {
+        "owner": "zig-build",
+        "fileLocation": ["autoDetect", "${workspaceFolder}"],
+        "pattern": {
+          "regexp": "^((?:[A-Za-z]:)?[^:]+):(\\d+):(\\d+):\\s+(error|warning|note):\\s+(.*)$",
+          "file": 1,
+          "line": 2,
+          "column": 3,
+          "severity": 4,
+          "message": 5
+        },
+        "background": {
+          "activeOnStart": true
+        }
+      }
+    },
+    {
+      "label": "zig test",
+      "type": "process",
+      "command": "zig",
+      "args": ["build", "test"],
+      "group": "test",
+      "options": {
+        "env": { "TEST_VERBOSE": "false" }
+      },
+      "isTestCommand": true,
+      "runOptions": { "instanceLimit": 1, "runOn": "folderOpen" },
+      "presentation": {
+        "echo": false,
+        "reveal": "always",
+        "focus": false,
+        "panel": "dedicated",
+        "clear": true
+      },
+      "problemMatcher": {
+        "owner": "zig-tests",
+        "severity": "error",
+        "fileLocation": ["autoDetect", "${workspaceFolder}"],
+        "pattern": [
+          {
+            "regexp": "^\\((?:[A-Za-z]:)?[^:]+):(\\d+):(\\d+): test \\\"(.*)\\\" - ([^:]+): (.*)$",
             "file": 1,
             "line": 2,
             "column": 3,
-            "severity": 4,
-            "message": 5
+            "message": 6
           },
-          "background": {
-            "activeOnStart": false,
-            "beginsPattern": "^\\[begin compile]$",
-            "endsPattern": "^\\[end compile]$"
+          {
+            "regexp": ".*",
+            "message": 0
           }
-        },
-        {
-          "owner": "zig-tests",
-          "severity": "error",
-          "fileLocation": ["autoDetect", "${workspaceFolder}"],
-          "pattern": [
-            {
-              "regexp": "^\\[xtc-test] ((?:[A-Za-z]:)?[^:]+):(\\d+):(\\d+): test \\\"(.*)\\\" - ([^:]+): (.*)$",
-              "file": 1,
-              "line": 2,
-              "column": 3,
-              "message": 6
-            },
-            {
-              "regexp": ".*",
-              "message": 0
-            }
-          ],
-          "background": {
-            "activeOnStart": false,
-            "beginsPattern": "^\\[begin test]$",
-            "endsPattern": "^\\[end test]$"
-          }
-        }
-      ]
+        ]
+      }
     }
   ]
 }

@@ -375,6 +375,7 @@ const TestSuite = struct {
                     }
                 } else {
                     if (failure.stack_trace) |trace| {
+                        try tree.newline();
                         try dumpConciseStackTrace(tree, trace, failure.friendly_name);
                         try emitMatcherFailureLine(tree, failure.friendly_name, failure.errorName(), trace);
                     }

@@ -7,10 +7,6 @@
             .url = "https://codeberg.org/atman/zg/archive/v0.14.1.tar.gz",
             .hash = "zg-0.14.1-oGqU3IQ_tALZIiBN026_NTaPJqU-Upm8P_C7QED2Rzm8",
         },
-        .pretty = .{
-            .url = "https://github.com/timfayz/pretty/archive/refs/heads/main.tar.gz",
-            .hash = "pretty-0.10.4-AAAAAM9GAQATvLkzFJ6-Y9r_NWCAC2Q4hOKxHSnJXQLD",
-        },
     },
     .minimum_zig_version = "0.14.0",
     .paths = .{

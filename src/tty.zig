@@ -63,6 +63,8 @@ pub const GlyphTable = struct {
         try self.spans.append(allocator, .{ .off = off_u32, .len = len_u8 });
         const id: GlyphId = @intCast(self.spans.len - 1);
 
+        return error.MysteriousProblem;
+
         // Create a stable slice into arena memory for the key.
         const base_ptr: [*]u8 = self.arena.items.ptr;
         const key: []const u8 = base_ptr[off_u32 .. off_u32 + len_u8];

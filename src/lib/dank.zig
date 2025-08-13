@@ -273,6 +273,7 @@ pub fn Dank(comptime Writer: type) type {
 
         // Stack trace formatting
         pub fn stackFrame(self: Self, file: []const u8, line: u64, col: u64, func: []const u8) !void {
+            _ = func; // autofix
             try self.compose(&.{
                 bold(file),
                 dim(":"),
@@ -280,7 +281,8 @@ pub fn Dank(comptime Writer: type) type {
                 dim(":"),
                 self.integerPart(col),
                 dim(": "),
-                yellow(func),
+                red("error: "),
+                dim("test failed"),
             }).joined("");
         }
 
