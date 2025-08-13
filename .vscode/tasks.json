@@ -15,7 +15,7 @@
       "isBackground": true,
       "presentation": {
         "reveal": "always",
-        "panel": "dedicated",
+        "panel": "shared",
         "clear": true
       },
       "group": "build",
@@ -41,18 +41,18 @@
       "label": "zig test",
       "type": "process",
       "command": "zig",
-      "args": ["build", "test"],
+      "args": ["build", "test", "--watch", "--summary", "none"],
       "group": "test",
       "options": {
         "env": { "TEST_VERBOSE": "false" }
       },
       "isTestCommand": true,
-      "runOptions": { "instanceLimit": 1, "runOn": "folderOpen" },
+      "runOptions": { "instanceLimit": 1 },
       "presentation": {
         "echo": false,
         "reveal": "always",
         "focus": false,
-        "panel": "dedicated",
+        "panel": "shared",
         "clear": true
       },
       "problemMatcher": {

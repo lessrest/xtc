@@ -124,15 +124,13 @@ pub fn captureOutputFromCall(
     var ctx = CaptureContext.init(allocator, lines);
 
     try ctx.beginCapture();
-    defer ctx.endCapture() catch @panic("failed to end capture");
-    return @call(.auto, func, .{});
+    const x = @call(.auto, func, .{});
+    try ctx.endCapture();
+    return x;
 }
 
 fn readerThread(ctx: *CaptureContext, read_fd: posix.fd_t, kind: Line.Kind, start_ns: i128) void {
-    var stack_fallback_allocator = std.heap.stackFallback(256, ctx.allocator);
-    const line_allocator = stack_fallback_allocator.get();
-
-    var line_buf = std.ArrayList(u8).init(line_allocator);
+    var line_buf = std.ArrayList(u8).init(ctx.allocator);
     defer line_buf.deinit();
 
     var have_line_start = false;

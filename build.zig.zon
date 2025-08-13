@@ -8,7 +8,7 @@
             .hash = "zg-0.14.1-oGqU3IQ_tALZIiBN026_NTaPJqU-Upm8P_C7QED2Rzm8",
         },
     },
-    .minimum_zig_version = "0.14.0",
+    .minimum_zig_version = "0.14.1",
     .paths = .{
         "build.zig",
         "build.zig.zon",

@@ -378,6 +378,11 @@ const TestSuite = struct {
                         try tree.newline();
                         try dumpConciseStackTrace(tree, trace, failure.friendly_name);
                         try emitMatcherFailureLine(tree, failure.friendly_name, failure.errorName(), trace);
+                        if (failure.output.len > 0) {
+                            for (failure.output) |line| {
+                                try dk.subprocessOutput(line.text, line.kind == .err);
+                            }
+                        }
                     }
                 }
             }
@@ -434,21 +439,29 @@ fn isTeardown(t: std.builtin.TestFn) bool {
 }
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    var ok = true;
+    {
+        var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+        defer _ = gpa.deinit();
+        const allocator = gpa.allocator();
 
-    var suite = try TestSuite.init(allocator);
-    defer suite.deinit();
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        defer arena.deinit();
+        const arena_allocator = arena.allocator();
 
-    // Build test hierarchy from builtin test functions
-    try suite.buildFromTestFunctions();
+        var suite = try TestSuite.init(arena_allocator);
+        defer suite.deinit();
 
-    // Run the test suite
-    try suite.run();
+        // Build test hierarchy from builtin test functions
+        try suite.buildFromTestFunctions();
+
+        // Run the test suite
+        try suite.run();
+        ok = suite.fail_count == 0;
+    }
 
     // Exit with appropriate code
-    std.posix.exit(if (suite.fail_count == 0) 0 else 1);
+    std.posix.exit(if (ok) 0 else 1);
 }
 
 const SlowTracker = struct {
@@ -559,19 +572,19 @@ const Env = struct {
 
 pub const panic = std.debug.FullPanic(struct {
     pub fn panicFn(msg: []const u8, first_trace_addr: ?usize) noreturn {
-        const stderr = std.io.getStdErr().writer();
-        const allocator = std.heap.page_allocator;
-        var dk = current_tree.dk();
+        // const stderr = std.io.getStdErr().writer();
+        // const allocator = std.heap.page_allocator;
+        // var dk = current_tree.dk();
 
-        if (current_test) |ct| {
-            dk.errorMsg(std.fmt.allocPrint(allocator, "panic in test: {s}", .{ct.friendly_name}) catch "panic in test") catch {};
-            dk.errorMsg(msg) catch {};
-            stderr.writeAll("\n") catch {};
+        // if (current_test) |ct| {
+        //     dk.errorMsg(std.fmt.allocPrint(allocator, "panic in test: {s}", .{ct.friendly_name}) catch "panic in test") catch {};
+        //     dk.errorMsg(msg) catch {};
+        //     stderr.writeAll("\n") catch {};
 
-            if (@errorReturnTrace()) |trace| {
-                dumpVerboseStackTrace(current_tree, trace.*, ct.friendly_name) catch {};
-            }
-        }
+        //     if (@errorReturnTrace()) |trace| {
+        //         dumpVerboseStackTrace(current_tree, trace.*, ct.friendly_name) catch {};
+        //     }
+        // }
         std.debug.defaultPanic(msg, first_trace_addr);
     }
 }.panicFn);
@@ -679,7 +692,7 @@ fn dumpVerboseStackTrace(tree: anytype, stack_trace: std.builtin.StackTrace, tes
             try dk.stackFrame(frame.file, frame.line, frame.column, func_display);
 
             const source = try getSourceLines(allocator, frame.file);
-            try dk.sourceBlock(source, frame.line, frame.column, 3);
+            try dk.sourceBlock(source, frame.line, frame.column, 2);
         }
 
         for (frames.items[1..]) |frame| {

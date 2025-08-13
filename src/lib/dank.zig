@@ -287,7 +287,7 @@ pub fn Dank(comptime Writer: type) type {
         }
 
         // Source block with box drawing borders
-        pub fn sourceBlock(self: Self, code: []const u8, highlight_line: u64, highlight_col: ?u64, context_lines: u32) !void {
+        pub fn sourceBlock(self: Self, code: []const u8, highlight_line: ?u64, highlight_col: ?u64, context_lines: u32) !void {
             var lines = std.mem.splitScalar(u8, code, '\n');
             var line_buf = std.ArrayList([]const u8).init(self.allocator);
             defer line_buf.deinit();
@@ -299,8 +299,8 @@ pub fn Dank(comptime Writer: type) type {
             }
 
             const total_lines = line_buf.items.len;
-            const start_line = if (highlight_line > context_lines) highlight_line - context_lines else 0;
-            const end_line = @min(highlight_line + context_lines, @as(u64, @intCast(total_lines)));
+            const start_line = if (highlight_line) |hl| if (hl > context_lines) hl - context_lines else 0 else 0;
+            const end_line = if (highlight_line) |hl| @min(hl + context_lines, @as(u64, @intCast(total_lines))) else total_lines - 1;
 
             for (line_buf.items[start_line..end_line]) |line| {
                 if (line.len > longest_line) longest_line = line.len;
@@ -314,11 +314,12 @@ pub fn Dank(comptime Writer: type) type {
             var line_num = start_line;
             while (line_num <= end_line) : (line_num += 1) {
                 if (line_num > total_lines) break;
-                const line_idx = line_num - 1;
-                const line = line_buf.items[line_idx];
-                const is_highlight = line_num == highlight_line;
 
-                const after_highlight = line_num > highlight_line;
+                const line_idx = line_num;
+                const line = line_buf.items[line_idx];
+                const is_highlight = highlight_line != null and line_num == highlight_line.?;
+
+                const after_highlight = highlight_line != null and line_num > highlight_line.?;
 
                 try self.tree.beginLine();
 
@@ -397,31 +398,21 @@ pub fn Dank(comptime Writer: type) type {
         }
 
         // Code snippet with line numbers
-        pub fn codeSnippet(self: Self, code: []const u8, start_line: u32, highlight_line: ?u32) !void {
+        pub fn codeSnippet(self: Self, code: []const u8) !void {
             var lines = std.mem.splitScalar(u8, code, '\n');
-            var line_num = start_line;
+            var i: usize = 1;
 
             while (lines.next()) |line| {
-                const is_highlight = if (highlight_line) |hl| line_num == hl else false;
+                try self.tree.beginLine();
+                const num_part = treenest.formattedStyled(self.allocator, "{d:>4} │", .{i}, .{ .fg = Color.rgb(60, 60, 80) });
+                try self.tree.applyStyle(num_part.style);
+                try self.tree.raw(num_part.text);
+                try self.tree.resetStyle();
+                try self.tree.raw(" ");
+                try self.tree.raw(line);
+                try self.tree.newline();
 
-                if (is_highlight) {
-                    const num_part = treenest.formattedStyled(self.allocator, "{d:>4} │ ", .{line_num}, .{ .bold = true, .fg = Color.yellow });
-                    try self.tree.applyStyle(num_part.style);
-                    try self.tree.raw(num_part.text);
-                    try self.tree.resetStyle();
-                    try self.tree.raw(line);
-                    try self.tree.newline();
-                } else {
-                    const num_part = treenest.formattedStyled(self.allocator, "{d:>4} │", .{line_num}, .{ .fg = Color.rgb(60, 60, 80) });
-                    try self.tree.applyStyle(num_part.style);
-                    try self.tree.raw(num_part.text);
-                    try self.tree.resetStyle();
-                    try self.tree.raw(" ");
-                    try self.tree.raw(line);
-                    try self.tree.newline();
-                }
-
-                line_num += 1;
+                i += 1;
             }
         }
 

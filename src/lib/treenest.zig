@@ -403,3 +403,7 @@ pub fn TreeNest(comptime Writer: type) type {
 pub fn treeNest(allocator: std.mem.Allocator, writer: anytype) TreeNest(@TypeOf(writer)) {
     return TreeNest(@TypeOf(writer)).init(allocator, writer);
 }
+
+pub fn testNest(allocator: std.mem.Allocator) TreeNest(std.fs.File.Writer) {
+    return treeNest(allocator, std.io.getStdOut().writer());
+}

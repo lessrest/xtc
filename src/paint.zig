@@ -115,7 +115,6 @@ pub const UnicodeData = struct {
     }
 
     pub fn graphemeClusterIterator(self: *const UnicodeData, text: []const u8) @TypeOf(self.graphemes.iterator(text)) {
-
         return self.graphemes.iterator(text);
     }
 

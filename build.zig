@@ -47,7 +47,7 @@ pub fn build(b: *std.Build) void {
 
     xtc.addImport("ansi", ansi);
 
-    xtc.addImport("code_point", zg.module("code_point"));
+    //    xtc.addImport("code_point", zg.module("code_point"));
     xtc.addImport("Graphemes", zg.module("Graphemes"));
     xtc.addImport("DisplayWidth", zg.module("DisplayWidth"));
     xtc.addImport("Words", zg.module("Words"));
@@ -55,7 +55,6 @@ pub fn build(b: *std.Build) void {
     const exe = b.addExecutable(.{
         .name = "xtc",
         .root_module = xtc,
-        .linkage = .static,
     });
 
     exe.linkSystemLibrary("m");
@@ -66,7 +65,6 @@ pub fn build(b: *std.Build) void {
     const unit_tests = b.addTest(.{
         .name = "xtc-test-suite",
         .root_module = xtc,
-        .optimize = .Debug,
         .test_runner = .{
             .path = b.path("src/lib/test_runner.zig"),
             .mode = .simple,
@@ -80,12 +78,12 @@ pub fn build(b: *std.Build) void {
     const run_unit_tests = b.addRunArtifact(unit_tests);
     b.step("test", "Run unit tests").dependOn(&run_unit_tests.step);
 
-    const install_docs = b.addInstallDirectory(.{
-        .source_dir = exe.getEmittedDocs(),
-        .install_dir = .prefix,
-        .install_subdir = "doc",
-    });
+    // const install_docs = b.addInstallDirectory(.{
+    //     .source_dir = exe.getEmittedDocs(),
+    //     .install_dir = .prefix,
+    //     .install_subdir = "doc",
+    // });
 
-    const docs_step = b.step("docs", "Install docs into zig-out/docs");
-    docs_step.dependOn(&install_docs.step);
+    //    const docs_step = b.step("docs", "Install docs into zig-out/docs");
+    //  docs_step.dependOn(&install_docs.step);
 }

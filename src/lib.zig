@@ -7,6 +7,8 @@ pub usingnamespace @import("tty.zig");
 pub usingnamespace @import("xml.zig");
 pub usingnamespace @import("FormatTrace.zig");
 
+pub const TreeNest = @import("ansi").nest;
+
 comptime {
     _ = @import("wren/pageload.zig");
     _ = @import("events.zig");
@@ -58,7 +60,18 @@ pub fn allocateBoxTreeFromDOMAutoRoot(alloc: std.mem.Allocator, document: *const
 
 // --- Test helpers (compact and integration-focused) ---
 fn expectAsciiEqual(want: []const u8, got: []const u8) !void {
-    try std.testing.expectEqualStrings(want, got);
+    if (!std.mem.eql(u8, want, got)) {
+        var itw = std.mem.splitScalar(u8, want, '\n');
+        while (itw.next()) |line| {
+            std.debug.print("yay: \"{s}\"\n", .{line});
+        }
+        std.debug.print("\n", .{});
+        var itg = std.mem.splitScalar(u8, got, '\n');
+        while (itg.next()) |line| {
+            std.debug.print("nay: \"{s}\"\n", .{line});
+        }
+        return error.AsciiMismatch;
+    }
 }
 
 pub fn renderXmlAscii(
@@ -188,7 +201,22 @@ fn expectLayout(xml_input: []const u8, want: []const u8) !void {
     while (j < got_lines.items.len) : (j += 1) {
         try std.testing.expectEqual(@as(usize, width), got_lines.items[j].len);
     }
-    try expectAsciiEqual(want_trim, got_trim);
+
+    if (std.mem.eql(u8, want_trim, got_trim)) return;
+
+    var nest = TreeNest.testNest(al);
+    defer nest.deinit();
+    var dk = nest.dk();
+
+    try dk.errorMsg("Rendered document violated expectations.");
+    try dk.info("Document source:");
+    try dk.sourceBlock(xml_input, null, null, 0);
+    try dk.info("Expected:");
+    try dk.sourceBlock(want_trim, null, null, 0);
+    try dk.info("Actual:");
+    try dk.sourceBlock(got_trim, null, null, 0);
+
+    return error.UnexpectedRendering;
 }
 
 test "flex row with justify-start places two boxes at the beginning of the container" {
