@@ -2,3 +2,4 @@
 zig-out
 bin/*
 *.log
+node_modules

@@ -468,7 +468,7 @@ fn emitClockVisuals(
     switch (row.clock_visual) {
         .spinner => {
             const spinner_chars = [_][]const u8{ "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" };
-            const char = spinner_chars[@mod(tick_count, spinner_chars.len)];
+            const char = spinner_chars[@as(usize, @intCast(@mod(tick_count, spinner_chars.len)))];
             const glyph_id = try glyphs.intern(ctx.ops.allocator, char);
             try ctx.push(PaintOp{ .GlyphRun = .{
                 .x = cb.rect.x,

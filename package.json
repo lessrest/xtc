@@ -1,0 +1,18 @@
+{
+  "name": "xtc-web",
+  "version": "1.0.0",
+  "description": "XTC terminal UI compositor web demo",
+  "type": "module",
+  "scripts": {
+    "build": "bun run ./build.js",
+    "dev": "NODE_ENV=development bun run ./build.js --watch"
+  },
+  "dependencies": {
+    "@xterm/xterm": "^5.5.0",
+    "@xterm/addon-webgl": "^0.18.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0",
+    "@types/node": "^20.0.0"
+  }
+}
