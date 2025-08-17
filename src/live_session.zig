@@ -62,10 +62,33 @@ pub const LiveSession = struct {
 
     /// Process a clock tick - returns true if re-render needed
     pub fn processClock(self: *LiveSession) !bool {
-        // Pump timers and ready fibers with a small budget
+        var needs_render = false;
+        
+        // Process old ClockRegistry events first
+        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena.deinit();
+        const clock_events = try self.clock_registry.processEvents(arena.allocator());
+        
+        // Dispatch clock events through the event system
+        for (clock_events) |event| {
+            // Update the DOM tick count
+            self.document.updateClockTick(event.node_id, event.tick_count);
+            
+            // Dispatch to Wren event listeners
+            try event_dispatch.dispatchTick(
+                self.wren_runner.vm.vm,
+                self.document,
+                event.node_id,
+                event.tick_count
+            );
+            needs_render = true;
+        }
+        
+        // Also pump timers and ready fibers with a small budget
         const now_ms = std.time.milliTimestamp();
         const resumed = self.scheduler.pump(self.wren_runner.vm.vm, now_ms, 64);
-        return resumed > 0;
+        
+        return needs_render or resumed > 0;
     }
 
     /// Handle keyboard input

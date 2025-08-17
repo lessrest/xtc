@@ -7,7 +7,7 @@ class MatrixDemo {
     _document = Document
     // Use terminal viewport if available
     _width = _document.width
-    _height = _document.height - 3 // leave room for title/info
+    _height = _document.height
     _columns = []
 
     setupDOM()
@@ -15,9 +15,6 @@ class MatrixDemo {
 
   setupDOM() {
     var main = _document.createElement("flex flex-col items-center justify-center bg-black text-green-400")
-    var title = _document.createElement("text-green-300 mb-1")
-    title.append(_document.createText("Matrix Rain"))
-    main.append(title)
 
     // Grid container
     var grid = _document.createElement("flex flex-col")
@@ -43,56 +40,79 @@ class MatrixDemo {
     // Per-column state and clocks
     for (x in 0..._width) {
       _columns.add({
-        "head": (-(x * 3) % _height),
+        "head": -((x * 7 + (x * x * 3)) % (_height + 10)), // More varied starting positions
         // Randomize speed 1..3 with per-column jitter
         "speed": 1 + ((x * 931 + System.clock.floor) % 3),
         // Random per-column density (how often blanks appear)
-        "density": 3 + ((x * 57) % 6),
+        "density": 4 + ((x * 11) % 4),
         // Occasional long bursts
         "burst": (x * 17) % 23 == 0,
       })
 
-      var clk = _document.createClock("clock fps-30 clock-hidden")
+      // Stagger the clock updates across columns for more organic movement
+      var fps = 10 + (x % 20)
+      var clk = _document.createClock("clock fps-" + fps.toString + " clock-hidden")
       clk.addEventListener("tick", Fn.new { |tick|
         updateColumn(x)
       })
       main.append(clk)
     }
 
-    // Legend
-    var info = _document.createElement("text-green-700 text-xs mt-1")
-    info.append(_document.createText("Q to quit"))
-    main.append(info)
-
     _container.append(main)
   }
 
   updateColumn(x) {
     var col = _columns[x]
-    col["head"] = (col["head"] + col["speed"]) % _height
 
-    // Fade entire column
-    for (y in 0..._height) {
-      _cells[y][x][1].updateText(" ")
-      _cells[y][x][0].updateClass("w-1 h-1 text-green-700")
+    // Update position more smoothly
+    col["head"] = col["head"] + 1
+    if (col["head"] >= _height + 15) {
+      col["head"] = -((x * 7) % 10) // Random restart position
+      // Randomize parameters on restart
+      col["speed"] = 1 + ((System.clock * 13 + x * 17) % 3)
+      col["density"] = 4 + ((System.clock * 7 + x * 11) % 4)
+      col["burst"] = ((System.clock + x) % 19) == 0
     }
 
-    // Draw a variable trail
-    var trailLen = col["burst"] ? 10 : 4 + ((x + col["head"]) % 4)
-    for (t in 0...trailLen) {
-      var y = (col["head"] - t)
-      while (y < 0) y = y + _height
-      if (y >= 0 && y < _height) {
-        // Random blanks to create gaps
-        if (((x * 131 + y * 97 + t * 17) % col["density"]) == 0 && t > 2) {
+    // Draw the trail
+    var trailLen = col["burst"] ? 15 : 8 + ((x * 3) % 5)
+
+    for (y in 0..._height) {
+      var distance = col["head"] - y
+
+      if (distance < 0 || distance >= trailLen) {
+        // Clear cells outside the trail
+        _cells[y][x][1].updateText(" ")
+        _cells[y][x][0].updateClass("w-1 h-1")
+      } else {
+        // Random chance to skip (create gaps in trail)
+        if (distance > 3 && ((x * 29 + y * 31 + col["head"]) % col["density"]) == 0) {
           _cells[y][x][1].updateText(" ")
+          _cells[y][x][0].updateClass("w-1 h-1")
           continue
         }
-        var charset = ["ｱ","ｶ","ｻ","ﾀ","ﾅ","ﾊ","ﾏ","ﾔ","ﾗ","ﾜ","0","1","2","3","4","5","6","7","8","9","A","B","C","D","E","F"]
-        var ch = charset[(_height + x + y + t + System.clock.floor) % charset.count]
+
+        // Character selection - change characters as they fall
+        var charset = ["ｱ","ｲ","ｳ","ｴ","ｵ","ｶ","ｷ","ｸ","ｹ","ｺ","ｻ","ｼ","ｽ","ｾ","ｿ","ﾀ","ﾁ","ﾂ","ﾃ","ﾄ","ﾅ","ﾆ","ﾇ","ﾈ","ﾉ","ﾊ","ﾋ","ﾌ","ﾍ","ﾎ","ﾏ","ﾐ","ﾑ","ﾒ","ﾓ","ﾔ","ﾕ","ﾖ","ﾗ","ﾘ","ﾙ","ﾚ","ﾛ","ﾜ","ｦ","ﾝ"]
+        var ch = charset[(col["head"] + x * 13 + y * 7) % charset.count]
         _cells[y][x][1].updateText(ch)
-        var cls = (t == 0) ? "text-white" : (t < 3) ? "text-green-300" : (t < 6) ? "text-green-500" : "text-green-700"
-        _cells[y][x][0].updateClass("w-1 h-1 " + cls)
+
+        // Color based on position in trail
+        var cls = ""
+        if (distance == 0) {
+          cls = "w-1 h-1 text-white" // Leading character is white
+        } else if (distance < 2) {
+          cls = "w-1 h-1 text-green-200" // Very bright green
+        } else if (distance < 4) {
+          cls = "w-1 h-1 text-green-300" // Bright green
+        } else if (distance < 7) {
+          cls = "w-1 h-1 text-green-400" // Medium green
+        } else if (distance < 10) {
+          cls = "w-1 h-1 text-green-500" // Darker green
+        } else {
+          cls = "w-1 h-1 text-green-600" // Darkest green in trail
+        }
+        _cells[y][x][0].updateClass(cls)
       }
     }
   }

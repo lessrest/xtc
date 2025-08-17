@@ -33,14 +33,14 @@ pub fn run(
     var components = try initializeComponents(allocator);
     defer components.deinit();
 
-    // 4. Load document content
-    var loader = DocumentLoader.init(allocator, components.document, components.wren_runner);
-    const load_result = try loadContent(&loader, xml_path, wren_path);
-
     // 5. Configure viewport
     const initial_size = terminal.getSize();
     components.wren_runner.script_context.viewport_width = initial_size[0];
     components.wren_runner.script_context.viewport_height = initial_size[1];
+
+    // 4. Load document content
+    var loader = DocumentLoader.init(allocator, components.document, components.wren_runner);
+    const load_result = try loadContent(&loader, xml_path, wren_path);
 
     // 6. Create renderer
     var render_instance = try renderer.Renderer.init(
