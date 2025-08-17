@@ -10,10 +10,9 @@ const LiveSession = @import("live_session.zig").LiveSession;
 const Terminal = @import("live_session.zig").Terminal;
 const EventLoop = @import("live_session.zig").EventLoop;
 const EventLoopConfig = @import("live_session.zig").EventLoopConfig;
-const document_loader = @import("document_loader.zig");
+const DocumentLoader = @import("pageload.zig");
 const Scheduler = @import("scheduler.zig").Scheduler;
-const DocumentLoader = document_loader.DocumentLoader;
-const LoadResult = document_loader.LoadResult;
+const LoadResult = DocumentLoader.LoadResult;
 
 /// Entry point for live mode - much cleaner!
 pub fn run(

@@ -9,7 +9,7 @@ src/wren/
 ├── vm.zig          # Wren VM bindings and FFI integration
 ├── runner.zig      # High-level script runner with DOM context
 ├── dom.zig         # DOM manipulation API for Wren
-├── xml.zig         # XML-to-DOM with embedded scripts
+├── pageload.zig    # XML-to-DOM with embedded scripts
 ├── events.zig      # Event system integration
 ├── modules.zig     # Module registry for dynamic loading
 ├── test_dom.zig    # DOM integration tests
@@ -21,19 +21,24 @@ src/wren/
 ## Core Components
 
 ### VM Integration (`vm.zig`)
+
 Low-level Wren VM bindings with Zig's compile-time FFI generation. Handles:
+
 - Foreign class/method registration
 - Memory management
 - Type conversions between Zig and Wren
 
 ### Script Runner (`runner.zig`)
+
 High-level runner that sets up a complete scripting environment:
+
 - Initializes VM with DOM context
 - Loads core modules (dom, editor)
 - Manages event handlers and callbacks
 - Provides foreign methods for DOM manipulation
 
 ### DOM Module (`modules/dom.wren`)
+
 Clean object-oriented API for DOM manipulation:
 
 ```wren
@@ -51,7 +56,9 @@ Document.addEventListener("keypress", Fn.new { |event|
 ```
 
 ### Event System
+
 Bidirectional event flow between DOM and Wren:
+
 - DOM events trigger Wren callbacks
 - Wren can dispatch synthetic events
 - Automatic handle management prevents GC issues
@@ -59,6 +66,7 @@ Bidirectional event flow between DOM and Wren:
 ## Usage Examples
 
 ### Standalone Script
+
 ```wren
 import "dom" for Document, Element
 
@@ -77,13 +85,14 @@ button.addEventListener("click", Fn.new { |event|
 ```
 
 ### XML with Embedded Scripts
+
 ```xml
 <root class="flex flex-col">
     <text id="counter">Count: 0</text>
     <script>
         var count = 0
         var counter = Document.getElementById("counter")
-        
+
         Document.addEventListener("keypress", Fn.new { |e|
             count = count + 1
             counter.updateText("Count: %(count)")
@@ -93,6 +102,7 @@ button.addEventListener("click", Fn.new { |event|
 ```
 
 ### Component Creation
+
 ```wren
 import "editor" for Editor
 
@@ -117,11 +127,13 @@ Document.addEventListener("keypress", Fn.new { |event|
 ### Core Modules
 
 **`dom`** - DOM manipulation and event handling
+
 - `Document` class for document-level operations
 - `Element` class for node manipulation
 - Event registration and dispatch
 
 **`editor`** - Text editing component
+
 - Line editor with cursor navigation
 - Keyboard shortcuts (Ctrl+A/E, arrows)
 - Submit on Enter
@@ -138,7 +150,7 @@ class MyComponent {
         _container = container
         setupUI()
     }
-    
+
     setupUI() {
         // Build your component
     }
@@ -146,6 +158,7 @@ class MyComponent {
 ```
 
 3. Load in runner.zig:
+
 ```zig
 try this.vm.interpret("custom", @embedFile("modules/custom.wren"));
 ```
@@ -171,6 +184,7 @@ pub const Modules = struct {
 ### Type Conversions
 
 The VM automatically converts between Wren and Zig types:
+
 - `Num` ↔ `f64`, `u32`, `i32`
 - `String` ↔ `[]const u8`
 - `Bool` ↔ `bool`
@@ -187,17 +201,20 @@ The VM automatically converts between Wren and Zig types:
 ## Testing
 
 Run tests with:
+
 ```bash
 zig build test
 ```
 
 Key test files:
+
 - `test_dom.zig` - DOM manipulation and script execution
 - `../test_events.zig` - Event system integration
 
 ## Integration Points
 
 The Wren engine integrates with:
+
 - **Live Mode** (`../live.zig`) - Hot reload and interactive development
 - **XML Parser** (`../xmlparse.zig`) - `<script>` tag execution
 - **Event System** (`../events.zig`) - Keyboard/mouse input handling

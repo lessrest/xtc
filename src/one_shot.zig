@@ -4,7 +4,7 @@ const renderer = @import("renderer.zig");
 const paint = @import("paint.zig");
 const tty = @import("tty.zig");
 const WrenRunner = @import("wren/runtime.zig");
-const DocumentLoader = @import("document_loader.zig").DocumentLoader;
+const DocumentLoader = @import("pageload.zig");
 const cli = @import("cli.zig");
 const Trace = @import("Trace.zig").Trace;
 

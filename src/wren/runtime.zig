@@ -114,3 +114,20 @@ pub fn deinit(self: *@This()) void {
     self.output.deinit();
     self.allocator.destroy(self);
 }
+
+/// Execute a script with optional module name and auto-imports
+pub fn executeScript(self: *@This(), source: []const u8, module_name: ?[]const u8, add_imports: bool) !void {
+    const script_module = module_name orelse "global-script";
+    
+    if (add_imports) {
+        // For inline scripts, add DOM imports automatically
+        var full_script = std.ArrayList(u8).init(self.allocator);
+        defer full_script.deinit();
+        try full_script.appendSlice("import \"dom\" for Document, Element\n");
+        try full_script.appendSlice(source);
+        
+        try self.vm.interpret(script_module, full_script.items);
+    } else {
+        try self.vm.interpret(script_module, source);
+    }
+}

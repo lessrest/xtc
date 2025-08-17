@@ -10,7 +10,7 @@ pub usingnamespace @import("FormatTrace.zig");
 pub const TreeNest = @import("ansi").nest;
 
 comptime {
-    _ = @import("wren/pageload.zig");
+    _ = @import("pageload.zig");
     _ = @import("events.zig");
     _ = @import("xml.zig");
 }
