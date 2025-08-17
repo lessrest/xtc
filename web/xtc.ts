@@ -3,6 +3,8 @@ import { WebglAddon } from '@xterm/addon-webgl';
 import { WASI } from './wasi.ts';
 import wasmUrl from '../zig-out/web-dist/xtc.wasm';
 
+import wavesScript from '../demos/waves.wren';
+
 class XTCModule {
     private wasiInstance: any = null;
     private terminal: Terminal | null = null;
@@ -11,6 +13,9 @@ class XTCModule {
     // Fixed terminal dimensions
     private readonly TERMINAL_COLS = 80;
     private readonly TERMINAL_ROWS = 24;
+    // Live session state
+    private isLiveSession = false;
+    private animationFrameId: number | null = null;
 
     async init(): Promise<boolean> {
         try {
@@ -45,7 +50,6 @@ class XTCModule {
             const wasi = new WASI({
                 stdout: (bytes: Uint8Array) => {
                     if (this.terminal) {
-                        console.log(`stdout bytes: ${bytes.constructor.name}, length: ${bytes.length}, first 10 bytes: [${Array.from(bytes.slice(0, 10)).join(', ')}]`);
                         this.terminal.write(new TextDecoder().decode(bytes));
                     }
                 },
@@ -56,8 +60,18 @@ class XTCModule {
                 }
             });
 
+            // Add JS imports for WASM including performance.now()
             const wasiImports = wasi.getImports();
-            const wasmModule = await WebAssembly.instantiate(wasmBytes, wasiImports);
+            const jsImports = {
+                env: {
+                    js_performance_now: () => performance.now()
+                }
+            };
+
+            const wasmModule = await WebAssembly.instantiate(wasmBytes, {
+                ...wasiImports,
+                ...jsImports
+            });
 
             // Set memory for WASI
             wasi.setMemory(wasmModule.instance.exports.memory);
@@ -97,7 +111,142 @@ class XTCModule {
         (this.wasiInstance.instance.exports as any).wasm_free(ptr, length);
     }
 
-    // Render XML to terminal using WASI
+    // Initialize a live session with XML
+    initLiveSession(xmlString: string): boolean {
+        try {
+            this.terminal!.clear();
+
+            if (!this.wasiInstance) {
+                this.terminal!.writeln('WASI not available - cannot start live session');
+                return false;
+            }
+
+            // Call the live session init function
+            if (this.wasiInstance.instance.exports.xtc_init_session) {
+                // Allocate memory for XML string
+                const xmlBytes = new TextEncoder().encode(xmlString);
+                const xmlPtr = this.wasiInstance.instance.exports.wasm_alloc(xmlBytes.length);
+
+                if (xmlPtr) {
+                    // Copy XML to WASM memory
+                    const memory = new Uint8Array(this.wasiInstance.instance.exports.memory.buffer);
+                    memory.set(xmlBytes, xmlPtr);
+
+                    // Call init function with terminal dimensions
+                    const result = this.wasiInstance.instance.exports.xtc_init_session(xmlPtr, xmlBytes.length, this.TERMINAL_COLS, this.TERMINAL_ROWS);
+
+                    // Free memory
+                    if (this.wasiInstance.instance.exports.wasm_free) {
+                        this.wasiInstance.instance.exports.wasm_free(xmlPtr, xmlBytes.length);
+                    }
+
+                    if (result === 0) {
+                        this.isLiveSession = true;
+                        this.startAnimationLoop();
+                        this.setupKeyboardInput();
+                        return true;
+                    } else {
+                        this.terminal!.writeln('Failed to initialize live session');
+                        return false;
+                    }
+                } else {
+                    this.terminal!.writeln('Failed to allocate memory for XML');
+                    return false;
+                }
+            } else {
+                this.terminal!.writeln('xtc_init_session function not found');
+                return false;
+            }
+
+        } catch (error) {
+            console.error('Live session init error:', error);
+            this.terminal!.writeln(`\r\nError: ${(error as Error).message}`);
+            return false;
+        }
+    }
+
+    // Start the requestAnimationFrame loop
+    private startAnimationLoop(): void {
+        if (this.animationFrameId !== null) {
+            cancelAnimationFrame(this.animationFrameId);
+        }
+
+        const animate = () => {
+            if (!this.isLiveSession || !this.wasiInstance) {
+                return;
+            }
+
+            // Process one animation frame
+            if (this.wasiInstance.instance.exports.xtc_process_frame) {
+                console.log('process_frame');
+                const needsRender = this.wasiInstance.instance.exports.xtc_process_frame();
+
+                if (needsRender === 1) {
+                    // Re-render if needed
+                    if (this.wasiInstance.instance.exports.xtc_render_frame) {
+                        console.log('render_frame');
+                        this.wasiInstance.instance.exports.xtc_render_frame();
+                    }
+                } else if (needsRender === -1) {
+                    console.error('Frame processing error');
+                    this.stopLiveSession();
+                    return;
+                }
+            }
+
+            // Continue animation loop
+            this.animationFrameId = requestAnimationFrame(animate);
+        };
+
+        this.animationFrameId = requestAnimationFrame(animate);
+    }
+
+    // Setup keyboard input handling
+    private setupKeyboardInput(): void {
+        if (!this.terminal) return;
+
+        // Handle keyboard input from terminal
+        this.terminal.onKey(({ key, domEvent }) => {
+            if (!this.isLiveSession || !this.wasiInstance) return;
+
+            // Convert special keys
+            let keyCode: number;
+            if (domEvent.key === 'Enter') {
+                keyCode = 13;
+            } else if (domEvent.key === 'Backspace') {
+                keyCode = 127;
+            } else if (domEvent.key === 'Tab') {
+                keyCode = 9;
+            } else if (domEvent.key === 'Escape') {
+                keyCode = 27;
+            } else if (key.length === 1) {
+                keyCode = key.charCodeAt(0);
+            } else {
+                return; // Skip other special keys
+            }
+
+            // Send keypress to WASM
+            if (this.wasiInstance.instance.exports.xtc_keypress) {
+                this.wasiInstance.instance.exports.xtc_keypress(keyCode);
+            }
+        });
+    }
+
+    // Stop the live session
+    stopLiveSession(): void {
+        this.isLiveSession = false;
+
+        if (this.animationFrameId !== null) {
+            cancelAnimationFrame(this.animationFrameId);
+            this.animationFrameId = null;
+        }
+
+        if (this.wasiInstance && this.wasiInstance.instance.exports.xtc_cleanup) {
+            this.wasiInstance.instance.exports.xtc_cleanup();
+        }
+    }
+
+    // Legacy one-shot render function
     renderXML(xmlString: string): void {
         try {
             this.terminal!.clear();
@@ -106,8 +255,6 @@ class XTCModule {
                 this.terminal!.writeln('WASI not available - cannot render');
                 return;
             }
-
-            // No need to set stdin - we pass XML directly to the function
 
             // Call the render function with XML data
             if (this.wasiInstance.instance.exports.xtc_render) {
@@ -141,19 +288,30 @@ class XTCModule {
     }
 }
 
+function escapeHtml(unsafe: string): string {
+    return unsafe
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+}
+
 // Initialize everything when the page loads
 async function init(): Promise<void> {
     const xtc = new XTCModule();
     const success = await xtc.init();
 
     if (success) {
-        xtc.renderXML(`
-            <root class="flex bg-slate-900">
-                <box class="grow-1 h-4 bg-red-800 border"></box>
-                <box class="grow-1 h-4 bg-green-800 border"></box>
-                <box class="grow-1 h-4 bg-blue-800 border"></box>
+        // Start with animated wave demo
+        const waveDemo = `
+            <root class="flex flex-row">
+                <script type="text/wren" module="waves" class="flex flex-row grow-1" id="waves">${escapeHtml(wavesScript)}</script>
             </root>
-        `);
+        `;
+
+        const liveSuccess = xtc.initLiveSession(waveDemo);
+        if (!liveSuccess) {
+            console.error('Failed to load live session');
+        }
     } else {
         console.error('Failed to load WASM module');
     }

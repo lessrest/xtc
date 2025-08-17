@@ -38,17 +38,17 @@ pub fn build(b: *std.Build) void {
         .name = "wren",
         .root_module = wren,
     });
-    
+
     libwren.linkLibC();
-    
-    // Create WASM-specific Wren library  
+
+    // Create WASM-specific Wren library
     const libwren_wasm = b.addStaticLibrary(.{
         .name = "wren-wasm",
         .target = b.resolveTargetQuery(.{
             .cpu_arch = .wasm32,
             .os_tag = .wasi,
         }),
-        .optimize = .ReleaseSmall,
+        .optimize = .ReleaseFast,
     });
 
     libwren_wasm.addIncludePath(b.path("deps/wren/src/include"));
@@ -68,7 +68,7 @@ pub fn build(b: *std.Build) void {
         },
         .flags = &.{ "-std=c99", "-Wall", "-Wextra", "-Wno-unused-parameter" },
     });
-    
+
     libwren_wasm.linkLibC();
 
     const xtc = b.addModule("xtc", .{
@@ -118,51 +118,56 @@ pub fn build(b: *std.Build) void {
             .cpu_arch = .wasm32,
             .os_tag = .wasi,
         }),
-        .optimize = .ReleaseSmall,
+        .optimize = .ReleaseFast,
     });
-    
+
     // Disable entry and export specific functions like Wisp
     wasm_exe.entry = .disabled;
     wasm_exe.root_module.export_symbol_names = &[_][]const u8{
         "xtc_hello",
         "xtc_render",
+        "xtc_init_session",
+        "xtc_process_frame",
+        "xtc_render_frame",
+        "xtc_keypress",
+        "xtc_resize",
+        "xtc_cleanup",
         "wasm_alloc",
         "wasm_free",
     };
-    
+
     // Create stub Words module for WASM
     const wasm_words_stub = b.addModule("Words", .{
         .root_source_file = b.path("src/wasm_stubs/Words.zig"),
     });
-    
+    _ = wasm_words_stub; // autofix
+
     // Link dependencies for WASI
     wasm_exe.root_module.addImport("ansi", ansi);
     wasm_exe.root_module.addImport("Graphemes", zg.module("Graphemes"));
     wasm_exe.root_module.addImport("DisplayWidth", zg.module("DisplayWidth"));
-    wasm_exe.root_module.addImport("Words", wasm_words_stub);
-    
+    wasm_exe.root_module.addImport("Words", zg.module("Words"));
+
     // Link WASM-specific Wren library
     wasm_exe.linkLibrary(libwren_wasm);
-    
+
     const wasm_step = b.step("wasm", "Build WASM library");
     wasm_step.dependOn(&b.addInstallArtifact(wasm_exe, .{}).step);
 
     // Web distribution build using Bun
     const web_dist_step = b.step("web-dist", "Build web distribution with Bun");
-    
+
     // Install the WASI WASM binary
     const install_wasm_wasi = b.addInstallArtifact(wasm_exe, .{
         .dest_dir = .{ .override = .{ .custom = "web-dist" } },
     });
-    
+
     // Use Bun build script
-    const bun_build_cmd = b.addSystemCommand(&.{
-        "bun", "run", "./build.js"
-    });
-    
+    const bun_build_cmd = b.addSystemCommand(&.{ "bun", "run", "./build.js" });
+
     // Dependencies: build after WASM is ready
     bun_build_cmd.step.dependOn(&install_wasm_wasi.step);
-    
+
     web_dist_step.dependOn(&bun_build_cmd.step);
 
     // const install_docs = b.addInstallDirectory(.{

@@ -22,6 +22,9 @@ try {
     splitting: false,
     minify: process.env.NODE_ENV === 'production',
     sourcemap: process.env.NODE_ENV !== 'production' ? 'external' : 'none',
+    loader: {
+      ".wren": "text",
+    },
   });
 
   if (result.success) {

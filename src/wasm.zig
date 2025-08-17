@@ -9,10 +9,13 @@ const cli = @import("cli.zig");
 const Trace = @import("Trace.zig").Trace;
 const ansi = @import("ansi");
 
-/// WASM rendering session - uses present() for efficient diff rendering
-pub const WasmSession = struct {
+/// WASM live session - supports interactive fiber-based animations
+pub const WasmLiveSession = struct {
     allocator: std.mem.Allocator,
     config: Config,
+    live_session: ?LiveSession = null,
+    components: ?Components = null,
+    is_initialized: bool = false,
 
     pub const Config = struct {
         output: cli.OutputConfig,
@@ -20,24 +23,33 @@ pub const WasmSession = struct {
         trace: *Trace,
     };
 
-    pub fn init(allocator: std.mem.Allocator, config: Config) WasmSession {
+    pub const LiveSession = @import("live_session.zig").LiveSession;
+
+    pub fn init(allocator: std.mem.Allocator, config: Config) WasmLiveSession {
         return .{
             .allocator = allocator,
             .config = config,
         };
     }
 
-    /// Run WASM render with present() for efficient output
-    pub fn run(self: *WasmSession, input: cli.Input) !void {
+    /// Initialize the live session with content
+    pub fn initSession(self: *WasmLiveSession, input: cli.Input) !void {
+        if (self.is_initialized) return;
+
         // Initialize components
-        var components = try initializeComponents(self.allocator);
-        defer components.deinit();
+        self.components = try initializeComponents(self.allocator);
+
+        // Create scheduler for fiber management
+        const scheduler = try self.allocator.create(@import("scheduler.zig").Scheduler);
+        scheduler.* = @import("scheduler.zig").Scheduler.init(self.allocator, self.config.trace);
+
+        self.components.?.wren_runner.script_context.scheduler = scheduler;
 
         // Load document
         var loader = DocumentLoader.init(
             self.allocator,
-            components.document,
-            components.wren_runner,
+            self.components.?.document,
+            self.components.?.wren_runner,
         );
 
         const load_result = switch (input) {
@@ -49,30 +61,69 @@ pub const WasmSession = struct {
         };
 
         // Print any Wren output to stderr for debugging
-        if (components.wren_runner.output.items.len > 0) {
-            _ = try std.io.getStdErr().write(components.wren_runner.output.items);
+        if (self.components.?.wren_runner.output.items.len > 0) {
+            _ = try std.io.getStdErr().write(self.components.?.wren_runner.output.items);
         }
 
         // Create renderer
-        var render_instance = try renderer.Renderer.init(
+        const render_instance = try renderer.Renderer.init(
             .{
                 .allocator = self.allocator,
-                .unicode = &components.unicode,
-                .glyphs = &components.glyphs,
+                .unicode = &self.components.?.unicode,
+                .glyphs = &self.components.?.glyphs,
             },
             .{
                 .width = self.config.output.width,
                 .height = self.config.output.height,
             },
         );
-        defer render_instance.deinit();
 
-        // Initialize terminal for proper ANSI output
-        var ansi_writer = ansi.stdout();
-        try ansi_writer.initializeTerminal();
+        // Create live session
+        self.live_session = LiveSession.init(
+            self.allocator,
+            self.components.?.document,
+            render_instance,
+            self.components.?.wren_runner,
+            scheduler,
+            load_result.root_id,
+            self.config.trace,
+        );
 
-        try render_instance.render(components.document, load_result.root_id, self.config.trace);
-        try render_instance.present(std.io.getStdOut().writer());
+        self.is_initialized = true;
+    }
+
+    /// Process a single animation frame - returns true if re-render needed
+    pub fn processFrame(self: *WasmLiveSession) !bool {
+        if (!self.is_initialized or self.live_session == null) return false;
+        return try self.live_session.?.processScheduler();
+    }
+
+    /// Render the current state
+    pub fn render(self: *WasmLiveSession) !void {
+        if (!self.is_initialized or self.live_session == null) return;
+        try self.live_session.?.render();
+    }
+
+    /// Handle keyboard input
+    pub fn handleKeypress(self: *WasmLiveSession, key: u8) !void {
+        if (!self.is_initialized or self.live_session == null) return;
+        try self.live_session.?.handleKeypress(key);
+    }
+
+    /// Handle viewport resize
+    pub fn handleResize(self: *WasmLiveSession, width: usize, height: usize) !void {
+        if (!self.is_initialized or self.live_session == null) return;
+        try self.live_session.?.handleResize(width, height);
+    }
+
+    pub fn deinit(self: *WasmLiveSession) void {
+        if (self.components) |*components| {
+            components.deinit();
+        }
+        if (self.live_session) |*session| {
+            session.scheduler.deinit(null);
+            self.allocator.destroy(session.scheduler);
+        }
     }
 };
 
@@ -115,6 +166,9 @@ fn initializeComponents(allocator: std.mem.Allocator) !Components {
 
 // WASM exports
 
+// Global live session instance
+var global_live_session: ?WasmLiveSession = null;
+
 // Stub main function for C runtime compatibility
 export fn main() c_int {
     // Do nothing - we use exported functions instead
@@ -123,20 +177,102 @@ export fn main() c_int {
 
 // Stub clock function for Wren compatibility (must return i64)
 export fn clock() i64 {
-    // Return a simple timestamp for WASM
-    return std.time.timestamp();
+    // Return a simple timestamp for WASM - this should match JavaScript Date.now()
+    return @as(i64, @intFromFloat(@floor(js_performance_now() * 1_000_000)));
 }
+
+// Import JavaScript performance.now() for high-resolution timing
+extern fn js_performance_now() f64;
 
 // Export hello function
 export fn xtc_hello() void {
     const stdout = std.io.getStdOut().writer();
-    stdout.print("XTC WASM Renderer Ready (with present)\n", .{}) catch return;
+    stdout.print("XTC WASM Live Session Ready!\n", .{}) catch return;
 }
 
-// Export render function that uses present() for efficient rendering
+// Initialize a live session
+export fn xtc_init_session(xml_ptr: [*]const u8, xml_len: usize, width: u32, height: u32) c_int {
+    const xml = xml_ptr[0..xml_len];
+
+    // Clean up any existing session
+    if (global_live_session) |*session| {
+        session.deinit();
+    }
+
+    // Create new live session
+    global_live_session = initLiveSessionWasm(xml, width, height) catch |err| {
+        const stderr = std.io.getStdErr().writer();
+        stderr.print("Init session error: {}\n", .{err}) catch {};
+        return -1;
+    };
+
+    return 0; // Success
+}
+
+// Process one animation frame - returns 1 if re-render needed, 0 if not, -1 on error
+export fn xtc_process_frame() c_int {
+    if (global_live_session) |*session| {
+        const needs_render = session.processFrame() catch |err| {
+            const stderr = std.io.getStdErr().writer();
+            stderr.print("Process frame error: {}\n", .{err}) catch {};
+            return -1;
+        };
+        return if (needs_render) 1 else 0;
+    }
+    return -1; // No session
+}
+
+// Render current state
+export fn xtc_render_frame() c_int {
+    if (global_live_session) |*session| {
+        session.render() catch |err| {
+            const stderr = std.io.getStdErr().writer();
+            stderr.print("Render frame error: {}\n", .{err}) catch {};
+            return -1;
+        };
+        return 0; // Success
+    }
+    return -1; // No session
+}
+
+// Handle keypress
+export fn xtc_keypress(key: u8) c_int {
+    if (global_live_session) |*session| {
+        session.handleKeypress(key) catch |err| {
+            const stderr = std.io.getStdErr().writer();
+            stderr.print("Keypress error: {}\n", .{err}) catch {};
+            return -1;
+        };
+        return 0; // Success
+    }
+    return -1; // No session
+}
+
+// Handle viewport resize
+export fn xtc_resize(width: u32, height: u32) c_int {
+    if (global_live_session) |*session| {
+        session.handleResize(width, height) catch |err| {
+            const stderr = std.io.getStdErr().writer();
+            stderr.print("Resize error: {}\n", .{err}) catch {};
+            return -1;
+        };
+        return 0; // Success
+    }
+    return -1; // No session
+}
+
+// Clean up session
+export fn xtc_cleanup() void {
+    if (global_live_session) |*session| {
+        session.deinit();
+        global_live_session = null;
+    }
+}
+
+// Legacy one-shot render function for compatibility
 export fn xtc_render(xml_ptr: [*]const u8, xml_len: usize, width: u32, height: u32) void {
     const xml = xml_ptr[0..xml_len];
-    
+
     // Use the WASM rendering pipeline with present()
     renderXmlWasm(xml, width, height) catch |err| {
         const stdout = std.io.getStdOut().writer();
@@ -144,38 +280,50 @@ export fn xtc_render(xml_ptr: [*]const u8, xml_len: usize, width: u32, height: u
     };
 }
 
-// Real XTC rendering using WASM pipeline with present()
-fn renderXmlWasm(xml: []const u8, width: u32, height: u32) !void {
+// Initialize a live session for interactive WASM use
+fn initLiveSessionWasm(xml: []const u8, width: u32, height: u32) !WasmLiveSession {
     // Create a disabled trace for WASM
     const stderr = std.io.getStdErr();
     var trace = @import("Trace.zig").file(stderr, .{ .enabled = false });
-    
+
     // Create WASM session config
-    const config = WasmSession.Config{
+    const config = WasmLiveSession.Config{
         .output = cli.OutputConfig{
             .width = width,
             .height = height,
         },
         .trace = &trace,
     };
-    
+
     // Create session with global allocator
-    var session = WasmSession.init(gpa.allocator(), config);
-    
-    // Run with XML string input
+    var session = WasmLiveSession.init(global_allocator, config);
+
+    // Initialize with XML string input
     const input = cli.Input{ .xml_string = xml };
-    try session.run(input);
+    try session.initSession(input);
+
+    return session;
+}
+
+// Real XTC rendering using WASM pipeline with present() (legacy compatibility)
+fn renderXmlWasm(xml: []const u8, width: u32, height: u32) !void {
+    // For legacy compatibility, create a temporary live session
+    var session = try initLiveSessionWasm(xml, width, height);
+    defer session.deinit();
+
+    // Just render once
+    try session.render();
 }
 
 // Simple allocator for WASM
-var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+var global_allocator = std.heap.wasm_allocator;
 
 export fn wasm_alloc(size: usize) ?[*]u8 {
-    const slice = gpa.allocator().alloc(u8, size) catch return null;
+    const slice = global_allocator.alloc(u8, size) catch return null;
     return slice.ptr;
 }
 
 export fn wasm_free(ptr: [*]u8, size: usize) void {
     const slice = ptr[0..size];
-    gpa.allocator().free(slice);
+    global_allocator.free(slice);
 }

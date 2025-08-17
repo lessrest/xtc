@@ -44,6 +44,7 @@ pub const LiveSession = struct {
 
         const stdout = std.io.getStdOut().writer();
         try self.renderer.renderAndPresent(self.document, self.root_id, self.trace, stdout);
+        std.debug.print("rendered\n", .{});
     }
 
     /// Handle terminal resize

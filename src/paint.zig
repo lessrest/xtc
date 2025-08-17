@@ -91,7 +91,7 @@ pub const UnicodeData = struct {
         var graphemes = try Graphemes.init(allocator);
         errdefer graphemes.deinit(allocator);
 
-        var display_width = try DisplayWidth.init(allocator);
+        var display_width = try DisplayWidth.initWithGraphemes(allocator, graphemes);
         errdefer display_width.deinit(allocator);
 
         var words = try Words.init(allocator);
@@ -377,6 +377,7 @@ fn buildGlyphRun(
         .truncate_to_fit = truncate_to_fit,
     });
 
+    std.debug.print("text_bytes: '{s}'\n", .{text_bytes});
     var glyph_ids = std.ArrayList(tty.GlyphId).init(ctx.ops.allocator);
     defer glyph_ids.deinit();
 
@@ -386,6 +387,7 @@ fn buildGlyphRun(
 
     // Process each grapheme cluster in the text
     while (grapheme_iter.next()) |grapheme_cluster| {
+        std.debug.print("grapheme_bytes: '{s}'\n", .{grapheme_cluster.bytes(text_bytes)});
         const grapheme_bytes = grapheme_cluster.bytes(text_bytes);
         const grapheme_width = ctx.unicode.monospacedTextWidth(grapheme_bytes);
         grapheme_count += 1;
@@ -433,7 +435,6 @@ fn buildGlyphRun(
 
     return .{ .run = final_run, .width_cols = final_width_cols };
 }
-
 
 fn emitTextGlyphRuns(
     ctx: *PaintContext,
@@ -499,6 +500,7 @@ fn emitTextGlyphRuns(
 
         while (witer.next()) |seg| {
             const bytes = seg.bytes(line);
+            std.debug.print("bytes: '{s}'\n", .{bytes});
             const seg_w = ctx.unicode.monospacedTextWidth(bytes);
 
             if (line_width + seg_w > cb.rect.w and line_width > 0) {

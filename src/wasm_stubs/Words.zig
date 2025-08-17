@@ -5,39 +5,46 @@ const std = @import("std");
 
 pub const WordIterator = struct {
     text: []const u8,
-    pos: usize = 0,
-    
+    codepoint_iter: std.unicode.Utf8Iterator,
+
+    pub fn init(text: []const u8) WordIterator {
+        return WordIterator{
+            .text = text,
+            .codepoint_iter = std.unicode.Utf8View.initUnchecked(text).iterator(),
+        };
+    }
+
     pub fn next(self: *WordIterator) ?WordSegment {
-        if (self.pos >= self.text.len) return null;
-        
-        // Simple word breaking - just split on spaces for WASM
-        while (self.pos < self.text.len and self.text[self.pos] == ' ') {
-            self.pos += 1;
+        // We should yield all parts of the text, including whitespace.
+        // Each run of whitespace should be yielded as a single segment.
+
+        const start = self.codepoint_iter.i;
+        while (true) {
+            const codepoint = self.codepoint_iter.peek(1);
+            if (codepoint.len == 0) {
+                break;
+            } else if (codepoint[0] == ' ') {
+                break;
+            } else if (codepoint[0] == '\n') {
+                break;
+            }
+
+            _ = self.codepoint_iter.nextCodepoint();
         }
-        
-        if (self.pos >= self.text.len) return null;
-        
-        const start = self.pos;
-        while (self.pos < self.text.len and self.text[self.pos] != ' ') {
-            self.pos += 1;
-        }
-        
-        return WordSegment{ 
-            .data = self.text[start..self.pos],
+
+        return WordSegment{
             .offset = start,
-            .len = self.pos - start,
+            .len = self.codepoint_iter.i - start,
         };
     }
 };
 
 pub const WordSegment = struct {
-    data: []const u8,
     offset: usize = 0,
     len: usize = 0,
-    
+
     pub fn bytes(self: WordSegment, line: []const u8) []const u8 {
-        _ = line;
-        return self.data;
+        return line[self.offset .. self.offset + self.len];
     }
 };
 
@@ -54,5 +61,5 @@ pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
 
 pub fn iterator(self: *const @This(), text: []const u8) WordIterator {
     _ = self;
-    return WordIterator{ .text = text };
+    return WordIterator.init(text);
 }
