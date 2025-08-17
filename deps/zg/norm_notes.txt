@@ -1,0 +1,42 @@
+* ASCII (0x0..0x7f) needs no normalization.
+* Latin-1 (0x0..0xff) needs no NFC normalization.
+* Composition exclusions cannot appear in any 
+  normalized string of any normalization form.
+* Singleton decompositions are excluded from the
+  composition algorithm.
+* Non-starter decompositions are excluded from the
+  composition algorithm.
+* There are no Quick Check MAYBE values for NFD and NFKD.
+* Combining Class Code 255 is available as a flag.
+* Sample Java Quick Check code:
+
+public int quickCheck(String source) {
+    short lastCanonicalClass = 0;
+    int result = YES;
+    for (int i = 0; i < source.length(); ++i) {
+        int ch = source.codepointAt(i);
+        if (Character.isSupplementaryCodePoint(ch)) ++i;
+        short canonicalClass = getCanonicalClass(ch);
+        if (lastCanonicalClass > canonicalClass && canonicalClass != 0) {
+            return NO;        }
+        int check = isAllowed(ch);
+        if (check == NO) return NO;
+        if (check == MAYBE) result = MAYBE;
+        lastCanonicalClass = canonicalClass;
+    }
+    return result;
+}
+
+* No string when decomposed with NFC expands to more than 3×
+  in length (measured in code units).
+* When concatenating normalized strings, re-normalize from the 
+  last code point in string A with Quick_Check=YES and 
+  Canonical_Combining_Class=0 to the first code point in string B
+  with Quick_Check=YES and Canonical_Combining_Class=0.
+* If requiring Stream Safe Format strings, a 128 byte buffer is all
+  that's needed to normalize.
+
+* Flags:
+  - Combining Class
+  - Hangul Syllable Type
+  - Full Composition Exclusion
