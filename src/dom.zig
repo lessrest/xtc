@@ -10,12 +10,20 @@ pub const DomNodeId = u32;
 pub const DomNodeKind = enum { element, text, clock };
 
 pub const DomNodeHeader = struct {
-    kind: DomNodeKind,
     parent: DomNodeId,
     prev_sibling: DomNodeId,
     next_sibling: DomNodeId,
-    first_child: DomNodeId,
-    child_count: u32,
+    content: union(DomNodeKind) {
+        element: struct {
+            first_child: DomNodeId,
+            child_count: u32,
+        },
+        text: struct {
+            text_off: u32,
+            text_len: u32,
+        },
+        clock: void, // No payload for now; tick stored separately
+    },
     style_id: u32,
     clock_tick: u64 = 0, // For clock nodes, tracks the current tick count
 };
@@ -48,12 +56,10 @@ pub const Dom = struct {
         const root_idx = dom.headers.addOne(alloc) catch unreachable;
         std.debug.assert(root_idx == 0); // Document root must be at index 0
         dom.headers.set(0, .{
-            .kind = .element,
             .parent = NullId,
             .prev_sibling = NullId,
             .next_sibling = NullId,
-            .first_child = NullId,
-            .child_count = 0,
+            .content = .{ .element = .{ .first_child = NullId, .child_count = 0 } },
             .style_id = 0, // No style for document root
         });
 
@@ -79,12 +85,10 @@ pub const Dom = struct {
         const style_id = try self.styles.intern(self.alloc, style_row);
         const idx = try self.headers.addOne(self.alloc);
         self.headers.set(idx, .{
-            .kind = .element,
             .parent = NullId,
             .prev_sibling = NullId,
             .next_sibling = NullId,
-            .first_child = NullId,
-            .child_count = 0,
+            .content = .{ .element = .{ .first_child = NullId, .child_count = 0 } },
             .style_id = style_id,
         });
         return @as(DomNodeId, @intCast(idx));
@@ -102,12 +106,10 @@ pub const Dom = struct {
         const style_id = try self.styles.intern(self.alloc, style_row);
         const node_id: DomNodeId = @intCast(self.headers.len);
         try self.headers.append(self.alloc, .{
-            .kind = .clock,
             .parent = NullId,
             .prev_sibling = NullId,
             .next_sibling = NullId,
-            .first_child = NullId,
-            .child_count = 0,
+            .content = .{ .clock = {} },
             .style_id = style_id,
         });
         return node_id;
@@ -120,12 +122,10 @@ pub const Dom = struct {
         const len: u32 = @intCast(utf8.len);
         const idx = try self.headers.addOne(self.alloc);
         self.headers.set(idx, .{
-            .kind = .text,
             .parent = NullId,
             .prev_sibling = NullId,
             .next_sibling = NullId,
-            .first_child = @as(DomNodeId, off), // overloaded for text offset
-            .child_count = len, // overloaded for text length
+            .content = .{ .text = .{ .text_off = off, .text_len = len } },
             .style_id = style_id,
         });
         return @as(DomNodeId, @intCast(idx));
@@ -133,9 +133,12 @@ pub const Dom = struct {
 
     pub fn getTextSlice(self: *const Dom, id: DomNodeId) []const u8 {
         const items = self.headers.slice();
-        const off: usize = @intCast(items.items(.first_child)[@intCast(id)]);
-        const len: usize = @intCast(items.items(.child_count)[@intCast(id)]);
-        return self.text_arena.items[off .. off + len];
+        const idx: usize = @intCast(id);
+        const content = items.items(.content)[idx];
+        return switch (content) {
+            .text => |t| self.text_arena.items[@intCast(t.text_off)..@intCast(t.text_off + t.text_len)],
+            else => &[_]u8{},
+        };
     }
 
     pub fn updateText(self: *Dom, id: DomNodeId, new_text: []const u8) !void {
@@ -143,7 +146,10 @@ pub const Dom = struct {
         var items = self.headers.slice();
 
         // Only works on text nodes
-        if (items.items(.kind)[idx] != .text) return;
+        switch (items.items(.content)[idx]) {
+            .text => {},
+            else => return,
+        }
 
         // Append new text to arena
         const off = self.text_arena.items.len;
@@ -151,8 +157,7 @@ pub const Dom = struct {
         const len = new_text.len;
 
         // Update the text node's offset and length
-        items.items(.first_child)[idx] = @intCast(off);
-        items.items(.child_count)[idx] = @intCast(len);
+        items.items(.content)[idx] = .{ .text = .{ .text_off = @intCast(off), .text_len = @intCast(len) } };
     }
 
     pub fn updateClass(self: *Dom, id: DomNodeId, new_class: []const u8) !void {
@@ -160,7 +165,10 @@ pub const Dom = struct {
         var items = self.headers.slice();
 
         // Only works on element nodes
-        if (items.items(.kind)[idx] != .element) return;
+        switch (items.items(.content)[idx]) {
+            .element => {},
+            else => return,
+        }
 
         // Parse utility-class list and intern the new style
         const style_row = parseUtilityClassList(new_class);
@@ -172,8 +180,22 @@ pub const Dom = struct {
         const p: usize = @intCast(parent_id);
         const c: usize = @intCast(child_id);
         var items = self.headers.slice();
-        const p_first = &items.items(.first_child)[p];
-        const p_count = &items.items(.child_count)[p];
+        // Only element nodes can have children
+        switch (items.items(.content)[p]) {
+            .element => {},
+            else => return,
+        }
+        // Access parent's children payload
+        const content_ptr = &items.items(.content)[p];
+        var p_first: *DomNodeId = undefined;
+        var p_count: *u32 = undefined;
+        switch (content_ptr.*) {
+            .element => |*ch| {
+                p_first = &ch.first_child;
+                p_count = &ch.child_count;
+            },
+            else => return,
+        }
         items.items(.parent)[c] = parent_id;
         if (p_first.* == NullId) {
             p_first.* = child_id;
@@ -198,8 +220,22 @@ pub const Dom = struct {
         // Check if child is actually a child of parent
         if (items.items(.parent)[c] != parent_id) return;
 
-        const p_first = &items.items(.first_child)[p];
-        const p_count = &items.items(.child_count)[p];
+        // Only element nodes can have children
+        switch (items.items(.content)[p]) {
+            .element => {},
+            else => return,
+        }
+        // Access parent's children payload
+        const content_ptr = &items.items(.content)[p];
+        var p_first: *DomNodeId = undefined;
+        var p_count: *u32 = undefined;
+        switch (content_ptr.*) {
+            .element => |*ch| {
+                p_first = &ch.first_child;
+                p_count = &ch.child_count;
+            },
+            else => return,
+        }
         const c_prev = items.items(.prev_sibling)[c];
         const c_next = items.items(.next_sibling)[c];
 
@@ -267,7 +303,60 @@ pub const Dom = struct {
     /// Get the kind (element or text) for a node
     pub fn getNodeKind(self: *const Dom, id: DomNodeId) DomNodeKind {
         const items = self.headers.slice();
-        return items.items(.kind)[@as(usize, @intCast(id))];
+        return switch (items.items(.content)[@as(usize, @intCast(id))]) {
+            .element => .element,
+            .text => .text,
+            .clock => .clock,
+        };
+    }
+
+    /// Returns number of children if node is an element, otherwise 0
+    pub fn getChildCount(self: *const Dom, parent_id: DomNodeId) usize {
+        const items = self.headers.slice();
+        const idx: usize = @intCast(parent_id);
+        return switch (items.items(.content)[idx]) {
+            .element => |ch| @intCast(ch.child_count),
+            else => 0,
+        };
+    }
+
+    /// Returns the nth child id if available, otherwise `NullId`. Only valid for element nodes.
+    pub fn getChild(self: *const Dom, parent_id: DomNodeId, index: usize) DomNodeId {
+        const items = self.headers.slice();
+        const idx: usize = @intCast(parent_id);
+        return switch (items.items(.content)[idx]) {
+            .element => |ch| blk: {
+                var i: usize = 0;
+                var c = ch.first_child;
+                while (i < index and c != NullId) : (i += 1) {
+                    c = items.items(.next_sibling)[@as(usize, @intCast(c))];
+                }
+                break :blk c;
+            },
+            else => NullId,
+        };
+    }
+
+    /// Get the first child of an element node, or NullId if not an element or has no children
+    pub fn getFirstChild(self: *const Dom, parent_id: DomNodeId) DomNodeId {
+        const items = self.headers.slice();
+        const idx: usize = @intCast(parent_id);
+        return switch (items.items(.content)[idx]) {
+            .element => |ch| ch.first_child,
+            else => NullId,
+        };
+    }
+
+    /// Get the next sibling of a node
+    pub fn getNextSibling(self: *const Dom, node_id: DomNodeId) DomNodeId {
+        const items = self.headers.slice();
+        return items.items(.next_sibling)[@intCast(node_id)];
+    }
+
+    /// Get the content union for a node
+    pub fn getNodeContent(self: *const Dom, node_id: DomNodeId) @TypeOf(self.headers.slice().items(.content)[0]) {
+        const items = self.headers.slice();
+        return items.items(.content)[@intCast(node_id)];
     }
 };
 
@@ -284,7 +373,11 @@ pub fn buildBoxTree(arena: *std.heap.ArenaAllocator, dom: *const Dom, root: DomN
     node.* = .{ .id = root, .rect = .{ .x = 0, .y = 0, .w = 0, .h = 0 }, .first_child = null, .next_sibling = null };
     // Build children linearly
     const items = dom.headers.slice();
-    var cur_child = items.items(.first_child)[@as(usize, @intCast(root))];
+    var cur_child: DomNodeId = Dom.NullId;
+    switch (items.items(.content)[@as(usize, @intCast(root))]) {
+        .children => |ch| cur_child = ch.first_child,
+        else => cur_child = Dom.NullId,
+    }
     var prev_ptr: ?*BoxNode = null;
     while (cur_child != Dom.NullId) {
         const child_ptr = try buildBoxTree(arena, dom, cur_child);

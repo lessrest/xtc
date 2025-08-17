@@ -66,7 +66,8 @@ pub fn parse(allocator: std.mem.Allocator, args: []const []const u8) !Args {
         if (std.mem.eql(u8, arg, "--live")) {
             result.mode = .live;
         } else if (std.mem.eql(u8, arg, "--log")) {
-            result.log_path = try expectValue(arg, args, &i);
+            const value = try expectValue(arg, args, &i);
+            result.log_path = try allocator.dupe(u8, value);
         } else if (std.mem.eql(u8, arg, "--xml")) {
             const value = try expectValue(arg, args, &i);
             result.input = try parseXmlInput(allocator, value);

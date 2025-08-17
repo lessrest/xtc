@@ -92,12 +92,19 @@ pub fn removeChild(
 
 pub fn getChildCount(_: *VM, ctx: *Ctx, id: DomNodeId) u32 {
     const items = ctx.document.headers.slice();
-    return items.items(.child_count)[@intCast(id)];
+    const content = items.items(.content)[@intCast(id)];
+    return switch (content) {
+        .element => |ch| ch.child_count,
+        else => 0,
+    };
 }
 
 pub fn getFirstChild(_: *VM, ctx: *Ctx, id: DomNodeId) DomNodeId {
     const items = ctx.document.headers.slice();
-    return items.items(.first_child)[@intCast(id)];
+    return switch (items.items(.content)[@intCast(id)]) {
+        .element => |ch| ch.first_child,
+        else => std.math.maxInt(DomNodeId),
+    };
 }
 
 pub fn addEventListener(

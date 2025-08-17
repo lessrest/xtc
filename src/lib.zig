@@ -48,7 +48,10 @@ pub fn allocateBoxTreeFromDOMAutoRoot(alloc: std.mem.Allocator, document: *const
     const items = document.headers.slice();
     var i: usize = 0;
     while (i < document.headers.len) : (i += 1) {
-        if (items.items(.parent)[i] == Dom.NullId and items.items(.kind)[i] == .element) {
+        if (items.items(.parent)[i] == Dom.NullId and switch (items.items(.content)[i]) {
+            .element => true,
+            else => false,
+        }) {
             const root: DomNodeId = @intCast(i);
             return try layout.allocateBoxTreeFromDOM(alloc, document, root);
         }

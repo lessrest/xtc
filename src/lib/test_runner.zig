@@ -2,8 +2,8 @@ const std = @import("std");
 const builtin = @import("builtin");
 const ansi = @import("ansi");
 const stdio = ansi.stdio;
-const treenest = @import("treenest.zig");
-const dank = @import("dank.zig");
+const treenest = ansi.nest;
+const dank = ansi.dank;
 
 const Allocator = std.mem.Allocator;
 

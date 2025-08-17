@@ -45,11 +45,11 @@ pub const Application = struct {
     pub fn run(self: *Application) !void {
         // Setup logging if requested
         if (self.args.log_path) |path| {
-            self.log_file = std.fs.cwd().createFile(path, .{
+            self.log_file = try std.fs.cwd().createFile(path, .{
                 .truncate = true,
                 .read = false,
                 .exclusive = false,
-            }) catch null;
+            });
         }
 
         // Handle deprecated options

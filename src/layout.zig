@@ -52,7 +52,10 @@ pub fn setLayoutTraceEnabled(on: bool) void {
 /// Data stored in each box node (layout information)
 pub const BoxData = struct {
     dom_id: DomNodeId,
+    style: StyleRow,
     rect: Rect,
+    // Cached intrinsic size to avoid recomputation
+    intrinsic_size: ?BoxSize = null,
     // Scroll state for containers with overflow: scroll
     scroll_offset_y: usize = 0,
     content_size: BoxSize = .{ 0, 0 }, // Full content size (may exceed rect size for scroll containers)
@@ -119,7 +122,7 @@ fn computeIntrinsicSizesForFlexItems(
     for (0..flex_item_count) |item_index| {
         const flex_item_box = container_node.getChildNode(box_tree, item_index);
         const item_dom_id = flex_item_box.data.dom_id;
-        const item_style = dom.getNodeStyle(item_dom_id);
+        const item_style = flex_item_box.data.style;
 
         // For scroll containers, give unlimited height constraint to children
         const constraint_h = if (flex_container_style.overflow_y == .scroll)
@@ -127,7 +130,8 @@ fn computeIntrinsicSizesForFlexItems(
         else
             content_rect.h;
 
-        var intrinsic_size = measure.intrinsicSize(dom, item_dom_id, content_rect.w, constraint_h, self.unicode);
+        const child_index = container_node.getChildIndex(item_index);
+        var intrinsic_size = measure.intrinsicSize(dom, box_tree, child_index, content_rect.w, constraint_h, self.unicode);
 
         // Log text sizing details for text nodes
         if (dom.getNodeKind(item_dom_id) == .text) {
@@ -490,29 +494,20 @@ const DOMTreeBuildContext = struct {
 
     /// Returns the count of element children for a DOM node
     pub fn getChildCount(self: *DOMTreeBuildContext, parent_id: DomNodeId) usize {
-        const items = self.dom.headers.slice();
-        const kind = items.items(.kind)[@as(usize, @intCast(parent_id))];
-        if (kind != .element) return 0;
-
-        return items.items(.child_count)[@as(usize, @intCast(parent_id))];
+        return self.dom.getChildCount(parent_id);
     }
 
     /// Returns the nth child of a DOM node (element children only)
     pub fn getChild(self: *DOMTreeBuildContext, parent_id: DomNodeId, index: usize) DomNodeId {
-        const items = self.dom.headers.slice();
-        var i: usize = 0;
-        var c = items.items(.first_child)[@as(usize, @intCast(parent_id))];
-        while (i < index) : (i += 1) {
-            c = items.items(.next_sibling)[@as(usize, @intCast(c))];
-        }
-        return c;
+        return self.dom.getChild(parent_id, index);
     }
 
     /// Creates BoxData from a DOM node ID
     pub fn createData(self: *DOMTreeBuildContext, dom_id: DomNodeId) BoxData {
-        _ = self;
+        const style = self.dom.getNodeStyle(dom_id);
         return .{
             .dom_id = dom_id,
+            .style = style,
             .rect = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
         };
     }
@@ -540,7 +535,7 @@ pub fn computeFlexLayout(
     self.trace.info("Computing flexbox layout for container");
 
     var container_header = container_node;
-    const flex_container_style = dom.getNodeStyle(container_header.data.dom_id);
+    const flex_container_style = container_header.data.style;
 
     // Compute the inner content area after padding and border
     const content_rect = computeInnerContentRect(flex_container_style, container_rect);

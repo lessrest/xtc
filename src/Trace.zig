@@ -250,27 +250,20 @@ pub fn GenericTracer(comptime WriterType: type) type {
 
             pub fn end(self: *const DataScope) void {
                 if (!self.started) return;
-                self.trace.depth -= 1;
                 if (!self.trace.disabled()) {
                     const indent = self.trace.getIndent();
                     self.trace.print("{s}</data>", .{indent});
                 }
+                self.trace.depth -= 1;
             }
         };
 
         pub fn data(self: *Self, comptime label: []const u8) DataScope {
-            if (self.disabled()) {
-                return DataScope{ .trace = self, .started = false };
-            }
-
-            const would_be_disabled = (self.depth + 1) >= self.max_depth;
-            if (would_be_disabled) {
-                return DataScope{ .trace = self, .started = false };
-            }
-
-            const indent = self.getIndent();
-            self.print("{s}<data label=\"{s}\">", .{ indent, label });
             self.depth += 1;
+            if (!self.disabled()) {
+                const indent = self.getIndent();
+                self.print("{s}<data label=\"{s}\">", .{ indent, label });
+            }
 
             return DataScope{
                 .trace = self,
@@ -279,28 +272,20 @@ pub fn GenericTracer(comptime WriterType: type) type {
         }
 
         pub fn enter(self: *Self) void {
-            if (self.disabled()) return;
+            self.depth += 1;
 
-            // Check if the child would be disabled before printing
-            const would_be_disabled = (self.depth + 1) >= self.max_depth;
-
-            if (!would_be_disabled) {
+            if (!self.disabled()) {
                 const indent = self.getIndent();
                 self.print("{s}<span>", .{indent});
             }
-
-            self.depth += 1;
         }
 
         pub fn exit(self: *Self) void {
-            if (self.depth == 0) return;
-
             self.depth -= 1;
-
-            if (self.disabled()) return;
-
-            const indent = self.getIndent();
-            self.print("{s}</span>", .{indent});
+            if (!self.disabled()) {
+                const indent = self.getIndent();
+                self.print("{s}</span>", .{indent});
+            }
         }
     };
 }

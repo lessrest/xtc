@@ -1,169 +1,289 @@
-// Provider TODOs (production):
-// - Text measurement:
-//   - Grapheme-aware width (double-width, combining marks), tabs
-//   - Whitespace handling: normal/pre/nowrap/pre_wrap
-//   - Wrapping: greedy/balanced; ellipsis per overflow rules
-//   - Return border-box: content + padding + border
+// measure.zig - Intrinsic Size Calculation for Terminal UI Elements
 //
-// - Intrinsic sizing:
-//   - Leaves: intrinsic or style overrides (width/height, min/max)
-//   - Containers: pre-measure pass: sum on main axis, max on cross; cache result
-//   - Replaced elements: intrinsic size; fallbacks
+// This module computes the natural size of DOM nodes before layout runs.
+// It answers: "How big would this element like to be if unconstrained?"
 //
-// - Flexbox completeness:
-//   - flex-grow/shrink distribution of free/deficit space with clamping to min/max
-//   - flex-basis:auto vs specified; percent bases
-//   - flex-wrap: multi-line layout and line breaking
-//   - align-content for multi-line cross-axis distribution
-//   - row_reverse/column_reverse direction
-//
-// - Constraints & percentages:
-//   - min-width/height, max-width/height
-//   - percentage resolution against parent inner size (for width/height, padding, margin)
-//   - margin auto (main-axis auto-centering semantics)
-//
-// - Alignment details:
-//   - align-items:baseline (baseline computation for text)
-//   - align-self overrides (already partially supported)
-//   - gap: main and cross (we have main; add cross)
-//
-// - Visual properties influence:
-//   - display:none (skip layout/paint); visibility:hidden (layout yes, paint no)
-//   - overflow:clip (establish clip rect during paint)
-//   - border.style (ascii/unicode mapping), border color, alpha blending
-//
-// - Painting hooks:
-//   - Emit background FillRect from styles (with alpha)
-//   - Emit borders from border spec; corners/joints style
-//   - Emit GlyphRun for text nodes (map DOM text → glyph ids)
-//   - Establish clip for overflow and descendant painting
-//
-// - Ordering/layers:
-//   - order (stable) for layout (done); z-index for paint ordering
-//   - Optional overlay layers (selection/caret) composited after main
-//
-// - Caching & invalidation:
-//   - Cache measure(props) by (node_id, constraints, style_hash, text_epoch)
-//   - Invalidate on style/text change or parent constraints change
-//
-// - Performance ergonomics:
-//   - Reuse arenas, avoid per-node allocations in hot paths
-//   - Small-vec for child temp buffers; pre-size arrays
-//   - Fast style lookup (we have interned rows)
-//
-// - Tests to add:
-//   - Text wrap/ellipsis/whitespace variants
-//   - flex-grow/shrink with min/max constraints
-//   - flex-wrap + align-content distributions
-//   - percentage sizes; margin auto centering
-//   - overflow:clip clipping correctness
-//   - border styles and alpha background blending
+// The intrinsic size is used as input to the flexbox layout algorithm,
+// which then distributes available space among children.
 
 const std = @import("std");
 const DisplayWidth = @import("lib.zig").DisplayWidth;
 const UnicodeData = @import("paint.zig").UnicodeData;
 const Dom = @import("dom.zig").Dom;
 const DomNodeId = @import("dom.zig").DomNodeId;
+const StyleRow = @import("style.zig").StyleRow;
+const BoxTree = @import("layout.zig").BoxTree;
 
-pub fn intrinsicSize(dom_: *const Dom, id: DomNodeId, max_w: usize, max_h: usize, unicode: *const UnicodeData) [2]usize {
-    const items = dom_.headers.slice();
-    const kind = items.items(.kind)[@as(usize, @intCast(id))];
-    const sid = items.items(.style_id)[@as(usize, @intCast(id))];
-    const row = dom_.styles.cols.items[@intCast(sid)];
+// ============================================================================
+// Core Concepts
+// ============================================================================
+//
+// 1. INTRINSIC SIZE: The natural dimensions an element would have based on
+//    its content, before any layout constraints are applied.
+//
+// 2. BOX MODEL: Terminal elements follow the CSS box model:
+//    - Content: The actual text or child elements
+//    - Padding: Space between content and border
+//    - Border: The element's border (if any)
+//    - Total size = content + padding + border (we use border-box sizing)
+//
+// 3. MEASUREMENT FLOW:
+//    - Text nodes: Measure character width and line count
+//    - Element nodes: Recursively measure children, then aggregate
+//    - Special nodes (clock): Use minimal size (just padding+border)
 
-    const border_w: usize = @as(usize, @intCast(row.border.width));
-    // Avoid u4 overflow by widening before addition
-    const pad_x: usize = @as(usize, @intCast(row.padding.l)) + @as(usize, @intCast(row.padding.r)) + border_w * 2;
-    const pad_y: usize = @as(usize, @intCast(row.padding.t)) + @as(usize, @intCast(row.padding.b)) + border_w * 2;
+// ============================================================================
+// Box Model Helpers
+// ============================================================================
 
-    var w: usize = 0;
-    var h: usize = 0;
+const BoxSpacing = struct {
+    // Horizontal spacing: left padding + right padding + 2 * border width
+    horizontal: usize,
+    // Vertical spacing: top padding + bottom padding + 2 * border width
+    vertical: usize,
+};
 
-    // Explicit overrides are border-box and take precedence
-    if (row.width != 0) w = row.width;
-    if (row.height != 0) h = row.height;
+/// Calculate the total spacing (padding + border) for an element.
+/// This is the space between the element's outer edge and its content area.
+fn calculateBoxSpacing(style: StyleRow) BoxSpacing {
+    const border_width = @as(usize, @intCast(style.border.width));
 
-    // Calculate intrinsic size for text nodes and element containers
-    if (w == 0 or h == 0) {
-        if (kind == .text) {
-            // Text nodes: measure based on display width and a naive wrapping model.
-            const slice = dom_.getTextSlice(id);
-            const text_cols: usize = unicode.monospacedTextWidth(slice);
-            // Use the actual text width when max_w is 0 (unconstrained)
-            const clamp_w: usize = if (max_w == 0) text_cols else @min(max_w, text_cols);
+    return .{
+        .horizontal = @as(usize, @intCast(style.padding.l)) +
+            @as(usize, @intCast(style.padding.r)) +
+            border_width * 2,
+        .vertical = @as(usize, @intCast(style.padding.t)) +
+            @as(usize, @intCast(style.padding.b)) +
+            border_width * 2,
+    };
+}
 
-            const old_h = h;
-            _ = old_h; // autofix
+/// Apply maximum constraints to dimensions, handling the special case of 0
+/// meaning "unconstrained" in our system.
+fn applyMaxConstraints(width: usize, height: usize, max_w: usize, max_h: usize) [2]usize {
+    return .{
+        if (max_w == 0) width else @min(max_w, width),
+        if (max_h == 0) height else @min(max_h, height),
+    };
+}
 
-            if (w == 0) {
-                // When unconstrained (max_w == 0), use natural text width
-                w = if (max_w == 0) (pad_x + text_cols) else @min(max_w, pad_x + clamp_w);
-            }
-            if (h == 0) {
-                // Count actual newlines in the text, not just character width-based wrapping
-                var lines: usize = 1;
-                var it = std.unicode.Utf8Iterator{ .bytes = slice, .i = 0 };
-                while (it.nextCodepoint()) |codepoint| {
-                    if (codepoint == '\n') {
-                        lines += 1;
-                    }
-                }
-                // When unconstrained (max_h == 0), use natural line count
-                h = if (max_h == 0) (pad_y + lines) else @min(max_h, pad_y + lines);
-            }
-        } else if (kind == .element) {
-            // Element containers: calculate intrinsic size from children
-            const child_count = items.items(.child_count)[@as(usize, @intCast(id))];
-            if (child_count > 0) {
-                var total_child_w: usize = 0;
-                var max_child_w: usize = 0;
-                var total_child_h: usize = 0;
-                var max_child_h: usize = 0;
+// ============================================================================
+// Text Measurement
+// ============================================================================
 
-                // Measure all children to find container's intrinsic size
-                var cur_child = items.items(.first_child)[@as(usize, @intCast(id))];
-                while (cur_child != Dom.NullId) {
-                    // Give children the available space minus our padding
-                    const child_max_w = if (max_w > pad_x) (max_w - pad_x) else 0;
-                    const child_max_h = if (max_h > pad_y) (max_h - pad_y) else 0;
-                    const child_size = intrinsicSize(dom_, cur_child, child_max_w, child_max_h, unicode);
+/// Measure the intrinsic size of a text node.
+/// Text nodes have natural dimensions based on their character content.
+fn measureTextNode(
+    dom: *const Dom,
+    box_tree: *const BoxTree,
+    node_index: BoxTree.NodeIndex,
+    max_w: usize,
+    max_h: usize,
+    unicode: *const UnicodeData,
+) [2]usize {
+    const node = box_tree.getNode(node_index);
+    const spacing = calculateBoxSpacing(node.data.style);
+    const text = dom.getTextSlice(node.data.dom_id);
 
-                    // Track both sum and max for both dimensions
-                    total_child_w += child_size[0];
-                    max_child_w = @max(max_child_w, child_size[0]);
-                    total_child_h += child_size[1];
-                    max_child_h = @max(max_child_h, child_size[1]);
+    // Calculate text dimensions
+    // Width: Number of display columns (handles double-width chars, etc.)
+    const text_width = unicode.monospacedTextWidth(text);
 
-                    // Move to next sibling
-                    cur_child = items.items(.next_sibling)[@as(usize, @intCast(cur_child))];
-                }
+    // Height: Count newlines to determine number of lines
+    var line_count: usize = 1;
+    var utf8_iter = std.unicode.Utf8Iterator{ .bytes = text, .i = 0 };
+    while (utf8_iter.nextCodepoint()) |codepoint| {
+        if (codepoint == '\n') line_count += 1;
+    }
 
-                // Container size depends on flex direction
-                if (row.flex_dir == .row) {
-                    // Horizontal layout: width is sum, height is max
-                    if (w == 0) {
-                        w = if (max_w == 0) (pad_x + total_child_w) else @min(max_w, pad_x + total_child_w);
-                    }
-                    if (h == 0) {
-                        h = if (max_h == 0) (pad_y + max_child_h) else @min(max_h, pad_y + max_child_h);
-                    }
-                } else {
-                    // Vertical layout (column): width is max, height is sum
-                    if (w == 0) {
-                        w = if (max_w == 0) (pad_x + max_child_w) else @min(max_w, pad_x + max_child_w);
-                    }
-                    if (h == 0) {
-                        h = if (max_h == 0) (pad_y + total_child_h) else @min(max_h, pad_y + total_child_h);
-                    }
-                }
-            }
+    // Apply constraints to content dimensions
+    const content_width = if (max_w == 0) text_width else @min(max_w, text_width);
+
+    // Add spacing to get final dimensions
+    const final_width = spacing.horizontal + content_width;
+    const final_height = spacing.vertical + line_count;
+
+    return applyMaxConstraints(final_width, final_height, max_w, max_h);
+}
+
+// ============================================================================
+// Element Container Measurement
+// ============================================================================
+
+/// Aggregate child dimensions based on flex direction.
+/// This determines how child sizes combine to form the parent's intrinsic size.
+const ChildAggregator = struct {
+    // Running totals for main axis (items placed end-to-end)
+    total_main: usize = 0,
+    // Maximum size on cross axis (items aligned side-by-side)
+    max_cross: usize = 0,
+
+    /// Add a child's dimensions to the aggregation
+    fn addChild(self: *ChildAggregator, width: usize, height: usize, is_row: bool) void {
+        if (is_row) {
+            // Row layout: children placed horizontally
+            self.total_main += width; // Sum widths
+            self.max_cross = @max(self.max_cross, height); // Max height
+        } else {
+            // Column layout: children placed vertically
+            self.total_main += height; // Sum heights
+            self.max_cross = @max(self.max_cross, width); // Max width
         }
     }
 
-    // Minimal border-box when no intrinsic sizing known
-    if (w == 0) w = if (max_w == 0) pad_x else @min(max_w, pad_x);
-    if (h == 0) h = if (max_h == 0) pad_y else @min(max_h, pad_y);
+    /// Get final dimensions based on flex direction
+    fn getDimensions(self: ChildAggregator, is_row: bool) [2]usize {
+        if (is_row) {
+            return .{ self.total_main, self.max_cross };
+        } else {
+            return .{ self.max_cross, self.total_main };
+        }
+    }
+};
 
-    // Replaced elements can extend this path later
-    return [_]usize{ w, h };
+/// Measure the intrinsic size of an element based on its children.
+/// Elements aggregate their children's sizes according to flex direction.
+fn measureElementNode(
+    dom: *const Dom,
+    box_tree: *BoxTree,
+    node_index: BoxTree.NodeIndex,
+    max_w: usize,
+    max_h: usize,
+    unicode: *const UnicodeData,
+) [2]usize {
+    const node = box_tree.getNode(node_index);
+    const spacing = calculateBoxSpacing(node.data.style);
+
+    // Handle empty elements (no children)
+    if (node.child_count == 0) {
+        // Empty element: just padding and border
+        return applyMaxConstraints(spacing.horizontal, spacing.vertical, max_w, max_h);
+    }
+
+    // Measure all children and aggregate their sizes
+    var aggregator = ChildAggregator{};
+    const is_row = (node.data.style.flex_dir == .row);
+
+    // Calculate available space for children (parent max minus spacing)
+    const child_max_w = if (max_w > spacing.horizontal) (max_w - spacing.horizontal) else 0;
+    const child_max_h = if (max_h > spacing.vertical) (max_h - spacing.vertical) else 0;
+
+    // Iterate through children using efficient contiguous access
+    const child_nodes = box_tree.children(node_index);
+    for (child_nodes, 0..) |_, child_idx| {
+        const child_node_index = node.getChildIndex(child_idx);
+        // Recursively measure each child (will use cache if available)
+        const child_size = intrinsicSize(dom, box_tree, child_node_index, child_max_w, child_max_h, unicode);
+        aggregator.addChild(child_size[0], child_size[1], is_row);
+    }
+
+    // Get aggregated dimensions and add spacing
+    const content_dims = aggregator.getDimensions(is_row);
+    const final_width = spacing.horizontal + content_dims[0];
+    const final_height = spacing.vertical + content_dims[1];
+
+    return applyMaxConstraints(final_width, final_height, max_w, max_h);
 }
+
+// ============================================================================
+// Main Entry Point
+// ============================================================================
+
+/// Calculate the intrinsic size of any DOM node.
+/// This is the main entry point called by the layout engine.
+///
+/// The algorithm:
+/// 1. Check for cached intrinsic size (return immediately if valid)
+/// 2. Check for explicit width/height overrides in styles (these win)
+/// 3. Otherwise, calculate based on node type:
+///    - Text: Measure character width and line count
+///    - Element: Recursively measure children and aggregate
+///    - Special (clock): Use minimal size
+/// 4. Cache the result and return
+/// 5. Apply maximum constraints if provided
+pub fn intrinsicSize(
+    dom: *const Dom,
+    box_tree: *BoxTree,
+    node_index: BoxTree.NodeIndex,
+    max_w: usize,
+    max_h: usize,
+    unicode: *const UnicodeData,
+) [2]usize {
+    const node = box_tree.getNodeMut(node_index);
+    
+    // Step 1: Check cache first
+    if (node.data.intrinsic_size) |cached_size| {
+        // Cache hit - return cached value
+        return cached_size;
+    }
+    
+    const node_id = node.data.dom_id;
+    const style = node.data.style;
+    const content = dom.getNodeContent(node_id);
+
+    // Step 2: Check for explicit size overrides
+    // These are treated as border-box dimensions and take precedence
+    var width: usize = 0;
+    var height: usize = 0;
+
+    if (style.width != 0) width = style.width;
+    if (style.height != 0) height = style.height;
+
+    // If both dimensions are explicitly set, we're done
+    if (width != 0 and height != 0) {
+        return applyMaxConstraints(width, height, max_w, max_h);
+    }
+
+    // Step 3: Calculate intrinsic size based on content type
+    const size = switch (content) {
+        .text => measureTextNode(dom, box_tree, node_index, max_w, max_h, unicode),
+        .element => measureElementNode(dom, box_tree, node_index, max_w, max_h, unicode),
+        .clock => blk: {
+            // Special nodes with no intrinsic content size
+            // Use minimal size (just spacing) or explicit overrides
+            const spacing = calculateBoxSpacing(style);
+            if (width == 0) width = spacing.horizontal;
+            if (height == 0) height = spacing.vertical;
+            break :blk applyMaxConstraints(width, height, max_w, max_h);
+        },
+    };
+    
+    // Step 4: Cache the computed size
+    node.data.intrinsic_size = size;
+    
+    return size;
+}
+
+// ============================================================================
+// Future Improvements (TODOs)
+// ============================================================================
+//
+// Text Measurement Enhancements:
+// - [ ] Tab character handling (configurable tab width)
+// - [ ] Whitespace modes (normal, pre, nowrap, pre-wrap)
+// - [ ] Text wrapping with line breaking
+// - [ ] Ellipsis for overflow text
+// - [ ] Baseline calculation for vertical alignment
+//
+// Layout Features:
+// - [ ] flex-grow and flex-shrink distribution
+// - [ ] flex-basis (auto vs specified)
+// - [ ] flex-wrap for multi-line layouts
+// - [ ] align-content for wrapped lines
+// - [ ] Reverse directions (row-reverse, column-reverse)
+//
+// Constraints:
+// - [ ] min-width, min-height enforcement
+// - [ ] max-width, max-height clamping
+// - [ ] Percentage resolution against parent
+// - [ ] margin: auto for centering
+//
+// Performance:
+// - [ ] Cache measurements by (node_id, constraints, style_hash)
+// - [ ] Invalidation tracking for style/text changes
+// - [ ] Pre-allocated buffers for child iteration
+//
+// Visual Properties:
+// - [ ] display: none (skip measurement entirely)
+// - [ ] visibility: hidden (measure but don't paint)
+// - [ ] overflow clipping bounds calculation

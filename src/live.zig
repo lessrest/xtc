@@ -150,11 +150,14 @@ fn loadContent(
 /// Start clock threads for any clock nodes in the DOM
 fn startClockNodes(session: *LiveSession) !void {
     const headers = session.document.headers.slice();
-    const kinds = headers.items(.kind);
+    const contents = headers.items(.content);
     const style_ids = headers.items(.style_id);
 
-    for (kinds, 0..) |kind, i| {
-        if (kind == .clock) {
+    for (contents, 0..) |content, i| {
+        if (switch (content) {
+            .clock => true,
+            else => false,
+        }) {
             const node_id: dom.DomNodeId = @intCast(i);
             const style = session.document.styles.cols.items[style_ids[i]];
 
