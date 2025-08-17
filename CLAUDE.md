@@ -37,21 +37,25 @@ The codebase follows a clean pipeline architecture:
 ### Core Pipeline Components
 
 1. **DOM & Styles** (`src/dom.zig`, `src/style.zig`)
+
    - Lightweight DOM with parent-child relationships
    - Style interning via `StyleTable` for memory efficiency
    - All styles stored in deduplicated `StyleRow` structs
 
 2. **Tailwind Parser** (`src/tailwind.zig`)
+
    - Parses utility classes into `StyleRow` properties
    - Supports flexbox, sizing, spacing, borders, colors
    - OKLCH→sRGB color conversion for Tailwind palette
 
 3. **Layout Engine** (`src/layout.zig`)
+
    - One-pass flexbox algorithm with grow distribution
    - Uses `BoxTree` (breadth-first construction for cache locality)
    - Integrates text measurement via `src/measure.zig`
 
 4. **Paint System** (`src/paint.zig`)
+
    - Generates device-independent display list
    - Commands: `FillRect`, `StrokeRect`, `GlyphRun`
    - RGBA blending with Porter-Duff composition
@@ -71,7 +75,7 @@ The codebase follows a clean pipeline architecture:
 
 ## Testing Strategy
 
-Tests are integrated in `src/lib.zig` using the `expectLayout()` helper that compares expected vs actual ASCII output. Run specific tests with:
+Tests are integrated in `src/lib.zig` using the `expectLayout()` helper that compares expected vs actual ASCII output.
 
 ```bash
 # Run all tests
@@ -84,30 +88,34 @@ zig build test
 ## Important Implementation Notes
 
 ### Memory Management
+
 - Arena allocation for transient data
 - Style and glyph interning for deduplication
 - Single text arena in DOM for all text content
 
 ### Unicode Text Handling
+
 - Uses `zg` library for grapheme clustering
 - Proper display width calculation for CJK/emoji
 - Grapheme-aware editing in live demo
 
 ### Performance Considerations
+
 - Breadth-first BoxTree construction for cache locality
 - Style interning reduces memory footprint
 - Single-pass layout algorithm
 - Minimal ANSI output via diffing
 
 ### Current Limitations
+
 - Flexbox subset only (no shrink, wrap, or multi-line)
-- Basic text rendering (no wrapping or ellipsis)
-- Terminal output only (no GUI backends)
+- Basic text rendering
 - Breaking changes expected (research project)
 
 ## Common Development Tasks
 
 ### Adding New Utility Classes
+
 1. Update parser in `src/tailwind.zig`
 2. Add corresponding fields to `StyleRow` in `src/style.zig`
 3. Implement layout behavior in `src/layout.zig`
@@ -115,34 +123,24 @@ zig build test
 5. Write tests in `src/lib.zig`
 
 ### Debugging Layout Issues
+
 - Use `bg-glyph-[x]` classes to visualize element boundaries
 - Check `xtc.log` for trace output (when using `--log`)
 - Run tests with specific XML to isolate issues
 
 ### Debug Tracing
+
 - Use `--debug` flag to enable automatic trace log formatting on exit
 - Raw XML trace logs are written to the file specified by `--log` (default: `xtc.log`)
-- When `--debug` is used, the `format-trace.sh` script processes the log automatically
 - The formatted output provides structured, hierarchical view of the rendering pipeline
 - Data groups (created via `span.data("label").put().put().end()`) are displayed with 📊 icons
 - Trace spans show the call hierarchy with ▶ markers and decisions with ⚡ markers
 
 ### Wren Scripting Integration
+
 - **Wren VM**: Embedded scripting language for dynamic behavior
 - Wren sources are in `deps/wren/`
 - Zig wrapper in `src/wren.zig` and `src/wren_runner.zig`
 - DOM manipulation via `src/wren_xml.zig`
 - Foreign function bindings in `src/wren_wrappers/`
 - Static build configuration in `build.zig`
-
-## Dependencies
-
-- **Zig 0.14.x** (required, see `.minimum_zig_version`)
-- **zg** (0.14.1): Unicode text processing
-- **pretty**: Test utilities
-- **Wren**: Embedded scripting language (vendored in `deps/wren/`)
-
-## License Notes
-
-- XML parser (`src/xmlparse.zig`): MPL-2.0 licensed (derived from zig-xml)
-- See `LICENSES/` directory for complete licensing information
