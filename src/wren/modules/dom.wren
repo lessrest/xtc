@@ -18,9 +18,6 @@ class Document {
     return Element.new(DOM.createText(text))
   }
 
-  static createClock(style) {
-    return Element.new(DOM.createClock(style))
-  }
 
   static getElementById(id) {
     var nodeId = DOM.getElementById(id)

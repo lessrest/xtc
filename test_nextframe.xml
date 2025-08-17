@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root class="flex flex-col">
+    <!-- NextFrame test script -->
+    <script type="text/wren" src="test_nextframe.wren" />
+</root>

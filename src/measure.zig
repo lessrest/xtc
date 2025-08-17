@@ -238,14 +238,6 @@ pub fn intrinsicSize(
     const size = switch (content) {
         .text => measureTextNode(dom, box_tree, node_index, max_w, max_h, unicode),
         .element => measureElementNode(dom, box_tree, node_index, max_w, max_h, unicode),
-        .clock => blk: {
-            // Special nodes with no intrinsic content size
-            // Use minimal size (just spacing) or explicit overrides
-            const spacing = calculateBoxSpacing(style);
-            if (width == 0) width = spacing.horizontal;
-            if (height == 0) height = spacing.vertical;
-            break :blk applyMaxConstraints(width, height, max_w, max_h);
-        },
     };
     
     // Step 4: Cache the computed size

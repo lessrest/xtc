@@ -1,5 +1,6 @@
-// Matrix-style digital rain with per-column clocks
+// Matrix-style digital rain with fiber-based animation
 import "dom" for Document, Element
+import "tui" for TUI
 
 class MatrixDemo {
   construct new(container) {
@@ -11,6 +12,7 @@ class MatrixDemo {
     _columns = []
 
     setupDOM()
+    startAnimation()
   }
 
   setupDOM() {
@@ -37,7 +39,7 @@ class MatrixDemo {
 
     main.append(grid)
 
-    // Per-column state and clocks
+    // Per-column state
     for (x in 0..._width) {
       _columns.add({
         "head": -((x * 7 + (x * x * 3)) % (_height + 10)), // More varied starting positions
@@ -47,18 +49,38 @@ class MatrixDemo {
         "density": 4 + ((x * 11) % 4),
         // Occasional long bursts
         "burst": (x * 17) % 23 == 0,
+        // Individual column timing
+        "lastUpdate": 0,
+        "fps": 10 + (x % 20),
       })
-
-      // Stagger the clock updates across columns for more organic movement
-      var fps = 10 + (x % 20)
-      var clk = _document.createClock("clock fps-" + fps.toString + " clock-hidden")
-      clk.addEventListener("tick", Fn.new { |tick|
-        updateColumn(x)
-      })
-      main.append(clk)
     }
 
     _container.append(main)
+  }
+
+  startAnimation() {
+    // Start a fiber for the main animation loop
+    animate()
+  }
+
+  animate() {
+    while (true) {
+      var now = System.clock * 1000 // Convert to milliseconds
+
+      // Update each column independently based on its FPS
+      for (x in 0..._width) {
+        var col = _columns[x]
+        var frameInterval = 1000 / col["fps"] // ms per frame
+
+        if (now - col["lastUpdate"] >= frameInterval) {
+          updateColumn(x)
+          col["lastUpdate"] = now
+        }
+      }
+
+      // Wait for next frame
+      TUI.nextFrame()
+    }
   }
 
   updateColumn(x) {
@@ -122,5 +144,4 @@ var container = Document.getElementById("matrix")
 if (container) {
   MatrixDemo.new(container)
 }
-
 

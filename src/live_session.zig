@@ -1,7 +1,6 @@
 const std = @import("std");
 const dom = @import("dom.zig");
 const renderer = @import("renderer.zig");
-const clock = @import("clock.zig");
 const WrenRunner = @import("wren/runtime.zig");
 const Trace = @import("Trace.zig").Trace;
 const event_dispatch = @import("event_dispatch.zig");
@@ -14,7 +13,6 @@ pub const LiveSession = struct {
     renderer: renderer.Renderer,
     wren_runner: *WrenRunner,
     scheduler: *scheduler_mod.Scheduler,
-    clock_registry: *clock.ClockRegistry,
     root_id: dom.DomNodeId,
     trace: *Trace,
 
@@ -23,7 +21,6 @@ pub const LiveSession = struct {
         document: *dom.Dom,
         render_instance: renderer.Renderer,
         wren_runner: *WrenRunner,
-        clock_registry: *clock.ClockRegistry,
         scheduler: *scheduler_mod.Scheduler,
         root_id: dom.DomNodeId,
         trace: *Trace,
@@ -33,7 +30,6 @@ pub const LiveSession = struct {
             .document = document,
             .renderer = render_instance,
             .wren_runner = wren_runner,
-            .clock_registry = clock_registry,
             .root_id = root_id,
             .trace = trace,
             .scheduler = scheduler,
@@ -48,8 +44,6 @@ pub const LiveSession = struct {
 
         const stdout = std.io.getStdOut().writer();
         try self.renderer.renderAndPresent(self.document, self.root_id, self.trace, stdout);
-        // Resume any nextFrame fibers
-        self.scheduler.onFramePresented(self.wren_runner.vm.vm);
     }
 
     /// Handle terminal resize
@@ -60,35 +54,16 @@ pub const LiveSession = struct {
         try self.render();
     }
 
-    /// Process a clock tick - returns true if re-render needed
-    pub fn processClock(self: *LiveSession) !bool {
-        var needs_render = false;
-        
-        // Process old ClockRegistry events first
-        var arena = std.heap.ArenaAllocator.init(self.allocator);
-        defer arena.deinit();
-        const clock_events = try self.clock_registry.processEvents(arena.allocator());
-        
-        // Dispatch clock events through the event system
-        for (clock_events) |event| {
-            // Update the DOM tick count
-            self.document.updateClockTick(event.node_id, event.tick_count);
-            
-            // Dispatch to Wren event listeners
-            try event_dispatch.dispatchTick(
-                self.wren_runner.vm.vm,
-                self.document,
-                event.node_id,
-                event.tick_count
-            );
-            needs_render = true;
-        }
-        
-        // Also pump timers and ready fibers with a small budget
+    /// Process scheduler timers and fibers - returns true if re-render needed
+    pub fn processScheduler(self: *LiveSession) !bool {
+        // Pump timers and ready fibers with a small budget
         const now_ms = std.time.milliTimestamp();
         const resumed = self.scheduler.pump(self.wren_runner.vm.vm, now_ms, 64);
-        
-        return needs_render or resumed > 0;
+
+        // we're running this at animation frame rate, so we can just call it here
+        const resumed_next_frame = self.scheduler.animationFrame(self.wren_runner.vm.vm);
+
+        return resumed > 0 or resumed_next_frame > 0;
     }
 
     /// Handle keyboard input
@@ -110,7 +85,7 @@ pub const LiveSession = struct {
         self.trace.enter();
         defer self.trace.exit();
         self.trace.info("Handling keypress");
-        
+
         self.trace.fields("key", .{
             .char = key,
             .string = key_str,
@@ -203,7 +178,7 @@ pub const InputReader = struct {
 
 /// Event loop configuration
 pub const EventLoopConfig = struct {
-    clock_interval_ms: i32 = 50, // How often to check clocks
+    scheduler_interval_ms: i32 = 16, // How often to check scheduler (~60fps)
     exit_key: u8 = 'q', // Key to exit the loop
 };
 
@@ -234,13 +209,13 @@ pub const EventLoop = struct {
                 last_size = current_size;
             }
 
-            // Process clocks
-            if (try self.session.processClock()) {
+            // Process scheduler
+            if (try self.session.processScheduler()) {
                 try self.session.render();
             }
 
             // Read input with timeout
-            if (try self.input.readByteTimeout(self.config.clock_interval_ms)) |byte| {
+            if (try self.input.readByteTimeout(self.config.scheduler_interval_ms)) |byte| {
                 // Check for exit
                 if (byte == self.config.exit_key or byte == self.config.exit_key & 0x1F) {
                     return;

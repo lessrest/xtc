@@ -3,7 +3,6 @@ const dom = @import("dom.zig");
 const renderer = @import("renderer.zig");
 const paint = @import("paint.zig");
 const tty = @import("tty.zig");
-const clock = @import("clock.zig");
 const WrenRunner = @import("wren/runtime.zig");
 const Trace = @import("Trace.zig").Trace;
 const LiveSession = @import("live_session.zig").LiveSession;
@@ -30,8 +29,10 @@ pub fn run(
     defer terminal.exitLiveMode();
 
     // 3. Initialize core components
-    var components = try initializeComponents(allocator);
+    var components = try initializeComponents(allocator, session_trace);
     defer components.deinit();
+
+    components.wren_runner.script_context.scheduler = &components.scheduler;
 
     // 5. Configure viewport
     const initial_size = terminal.getSize();
@@ -62,7 +63,6 @@ pub fn run(
         components.document,
         render_instance,
         components.wren_runner,
-        &components.clock_registry,
         &components.scheduler,
         load_result.root_id,
         session_trace,
@@ -71,12 +71,9 @@ pub fn run(
     // 8. Initial render
     try session.render();
 
-    // 9. Start clock nodes if document has them
-    try startClockNodes(&session);
-
     // 10. Run event loop
     var event_loop = EventLoop.init(&session, &terminal, .{
-        .clock_interval_ms = 50,
+        .scheduler_interval_ms = 16,
         .exit_key = 'q',
     });
     try event_loop.run();
@@ -86,14 +83,12 @@ pub fn run(
 const Components = struct {
     unicode: paint.UnicodeData,
     document: *dom.Dom,
-    clock_registry: clock.ClockRegistry,
     wren_runner: *WrenRunner,
     glyphs: tty.GlyphTable,
     scheduler: Scheduler,
 
     fn deinit(self: *Components) void {
         self.unicode.deinit(self.document.alloc);
-        self.clock_registry.deinit();
         self.wren_runner.deinit();
         self.glyphs.deinit();
         self.document.deinit();
@@ -103,15 +98,12 @@ const Components = struct {
 };
 
 /// Initialize all core components
-fn initializeComponents(allocator: std.mem.Allocator) !Components {
+fn initializeComponents(allocator: std.mem.Allocator, trace: *Trace) !Components {
     var unicode = try paint.UnicodeData.init(allocator);
     errdefer unicode.deinit(allocator);
 
     var document = try dom.Dom.init(allocator);
     errdefer document.deinit();
-
-    var clock_registry = clock.ClockRegistry.init(allocator);
-    errdefer clock_registry.deinit();
 
     var wren_runner = try WrenRunner.init(allocator, document);
     errdefer wren_runner.deinit();
@@ -119,13 +111,12 @@ fn initializeComponents(allocator: std.mem.Allocator) !Components {
     var glyphs = try tty.GlyphTable.init(allocator);
     errdefer glyphs.deinit();
 
-    var scheduler = Scheduler.init(allocator);
+    var scheduler = Scheduler.init(allocator, trace);
     errdefer scheduler.deinit(wren_runner.vm.vm);
 
     return Components{
         .unicode = unicode,
         .document = document,
-        .clock_registry = clock_registry,
         .wren_runner = wren_runner,
         .glyphs = glyphs,
         .scheduler = scheduler,
@@ -144,31 +135,5 @@ fn loadContent(
         return try loader.loadWrenFile(path);
     } else {
         return try loader.createDefault();
-    }
-}
-
-/// Start clock threads for any clock nodes in the DOM
-fn startClockNodes(session: *LiveSession) !void {
-    const headers = session.document.headers.slice();
-    const contents = headers.items(.content);
-    const style_ids = headers.items(.style_id);
-
-    for (contents, 0..) |content, i| {
-        if (switch (content) {
-            .clock => true,
-            else => false,
-        }) {
-            const node_id: dom.DomNodeId = @intCast(i);
-            const style = session.document.styles.cols.items[style_ids[i]];
-
-            if (style.clock_interval_ms > 0) {
-                const clock_node = try session.clock_registry.createClock(node_id, style.clock_interval_ms);
-                try clock_node.start();
-                session.trace.fields("clock started", .{
-                    .node = node_id,
-                    .interval_ms = style.clock_interval_ms,
-                });
-            }
-        }
     }
 }

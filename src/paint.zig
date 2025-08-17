@@ -434,108 +434,6 @@ fn buildGlyphRun(
     return .{ .run = final_run, .width_cols = final_width_cols };
 }
 
-fn emitClockVisuals(
-    ctx: *PaintContext,
-    document: *const dom.Dom,
-    node_id: dom.DomNodeId,
-    rect: layout.Rect,
-    row: StyleRow,
-    glyphs: *tty.GlyphTable,
-) !void {
-    ctx.trace.enter();
-    defer ctx.trace.exit();
-    ctx.trace.fields("clock-visuals", .{
-        .rect = rect,
-        .visual_style = row.clock_visual,
-    });
-
-    if (!(rect.w > 0 and rect.h > 0)) {
-        ctx.trace.decision("Zero rect dimensions, no clock to emit");
-        return;
-    }
-
-    const cb = computeContentBox(rect, row);
-    if (cb.rect.w == 0 or cb.rect.h == 0) {
-        ctx.trace.decision("Zero content box dimensions, no space for clock");
-        return;
-    }
-
-    const color = computeTextColor(document, node_id, row);
-
-    // Get the tick count directly from the DOM node
-    const tick_count = document.getClockTick(node_id);
-
-    switch (row.clock_visual) {
-        .spinner => {
-            const spinner_chars = [_][]const u8{ "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" };
-            const char = spinner_chars[@as(usize, @intCast(@mod(tick_count, spinner_chars.len)))];
-            const glyph_id = try glyphs.intern(ctx.ops.allocator, char);
-            try ctx.push(PaintOp{ .GlyphRun = .{
-                .x = cb.rect.x,
-                .y = cb.rect.y,
-                .glyphs = try ctx.ops.allocator.dupe(tty.GlyphId, &[_]tty.GlyphId{glyph_id}),
-                .color = color,
-            } });
-        },
-        .progress_bar => {
-            // Draw a progress bar that fills based on tick count
-            const progress = @as(f32, @floatFromInt(@mod(tick_count, 10))) / 10.0;
-            const filled_width = @as(usize, @intFromFloat(@as(f32, @floatFromInt(cb.rect.w)) * progress));
-            if (filled_width > 0) {
-                try ctx.push(PaintOp{ .FillRect = .{
-                    .x = cb.rect.x,
-                    .y = cb.rect.y,
-                    .w = filled_width,
-                    .h = cb.rect.h,
-                    .color = color,
-                } });
-            }
-        },
-        .pulse => {
-            // Alternate between bright and dim
-            const bright = @mod(tick_count, 2) == 0;
-            const alpha: u8 = if (bright) 255 else 127;
-            const pulse_color = (color & 0x00FFFFFF) | (@as(u32, alpha) << 24);
-            try ctx.push(PaintOp{ .FillRect = .{
-                .x = cb.rect.x,
-                .y = cb.rect.y,
-                .w = cb.rect.w,
-                .h = cb.rect.h,
-                .color = pulse_color,
-            } });
-        },
-        .countdown, .text => {
-            // Show tick count as text
-            var buf: [32]u8 = undefined;
-            const text = try std.fmt.bufPrint(&buf, "{}", .{tick_count});
-            // Build glyph run for the text
-            var glyph_ids = std.ArrayList(tty.GlyphId).init(ctx.ops.allocator);
-            defer glyph_ids.deinit();
-
-            var it = ctx.unicode.graphemeClusterIterator(text);
-            while (it.next()) |grapheme| {
-                const grapheme_bytes = grapheme.bytes(text);
-                const glyph_id = try glyphs.intern(ctx.ops.allocator, grapheme_bytes);
-                try glyph_ids.append(glyph_id);
-            }
-
-            if (glyph_ids.items.len > 0) {
-                const final_run = try ctx.ops.allocator.alloc(tty.GlyphId, glyph_ids.items.len);
-                std.mem.copyForwards(tty.GlyphId, final_run, glyph_ids.items);
-
-                try ctx.push(PaintOp{ .GlyphRun = .{
-                    .x = cb.rect.x,
-                    .y = cb.rect.y,
-                    .glyphs = final_run,
-                    .color = color,
-                } });
-            }
-        },
-        .hidden => {
-            // Don't render anything
-        },
-    }
-}
 
 fn emitTextGlyphRuns(
     ctx: *PaintContext,
@@ -780,8 +678,6 @@ pub fn computePaintCommands(
 
         if (node_kind == .text) {
             try emitTextGlyphRuns(ctx, document, h.data.dom_id, paint_rect, row, glyphs);
-        } else if (node_kind == .clock) {
-            try emitClockVisuals(ctx, document, h.data.dom_id, paint_rect, row, glyphs);
         }
 
         const ops_after = ctx.ops.items.len;

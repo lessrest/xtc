@@ -7,7 +7,7 @@ const Rect = @import("layout.zig").Rect;
 const EventRegistry = @import("events.zig").EventRegistry;
 
 pub const DomNodeId = u32;
-pub const DomNodeKind = enum { element, text, clock };
+pub const DomNodeKind = enum { element, text };
 
 pub const DomNodeHeader = struct {
     parent: DomNodeId,
@@ -22,10 +22,8 @@ pub const DomNodeHeader = struct {
             text_off: u32,
             text_len: u32,
         },
-        clock: void, // No payload for now; tick stored separately
     },
     style_id: u32,
-    clock_tick: u64 = 0, // For clock nodes, tracks the current tick count
 };
 
 pub const Dom = struct {
@@ -101,19 +99,6 @@ pub const Dom = struct {
         items.items(.style_id)[@as(usize, @intCast(id))] = sid;
     }
 
-    pub fn addClock(self: *Dom, style_bytes: []const u8) !DomNodeId {
-        const style_row = parseUtilityClassList(style_bytes);
-        const style_id = try self.styles.intern(self.alloc, style_row);
-        const node_id: DomNodeId = @intCast(self.headers.len);
-        try self.headers.append(self.alloc, .{
-            .parent = NullId,
-            .prev_sibling = NullId,
-            .next_sibling = NullId,
-            .content = .{ .clock = {} },
-            .style_id = style_id,
-        });
-        return node_id;
-    }
 
     pub fn addText(self: *Dom, utf8: []const u8) !DomNodeId {
         const style_id = try self.styles.intern(self.alloc, defaultStyleRow());
@@ -284,15 +269,6 @@ pub const Dom = struct {
     }
 
     /// Get the style row for a node
-    pub fn updateClockTick(self: *Dom, id: DomNodeId, tick: u64) void {
-        var items = self.headers.slice();
-        items.items(.clock_tick)[@as(usize, @intCast(id))] = tick;
-    }
-
-    pub fn getClockTick(self: *const Dom, id: DomNodeId) u64 {
-        const items = self.headers.slice();
-        return items.items(.clock_tick)[@as(usize, @intCast(id))];
-    }
 
     pub fn getNodeStyle(self: *const Dom, id: DomNodeId) StyleRow {
         const items = self.headers.slice();
@@ -306,7 +282,6 @@ pub const Dom = struct {
         return switch (items.items(.content)[@as(usize, @intCast(id))]) {
             .element => .element,
             .text => .text,
-            .clock => .clock,
         };
     }
 

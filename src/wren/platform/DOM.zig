@@ -25,10 +25,6 @@ pub fn createText(_: *VM, ctx: *Ctx, text: []const u8) DomNodeId {
     return ctx.document.addText(text) catch @panic("createText");
 }
 
-pub fn createClock(_: *VM, ctx: *Ctx, style: []const u8) DomNodeId {
-    const node_id = ctx.document.addClock(style) catch @panic("createClock");
-    return node_id;
-}
 
 pub fn appendChild(
     _: *VM,

@@ -53,12 +53,6 @@ pub fn dispatchEvent(
             wren.c.wrenSetMapValue(vm, 1, 2, 3);
         }
 
-        // Add tick count if present
-        if (event.tick_count) |tick| {
-            wren.c.wrenSetSlotString(vm, 2, "tick");
-            wren.c.wrenSetSlotDouble(vm, 3, @floatFromInt(tick));
-            wren.c.wrenSetMapValue(vm, 1, 2, 3);
-        }
 
         // Add timestamp
         wren.c.wrenSetSlotString(vm, 2, "timestamp");
@@ -84,22 +78,6 @@ pub fn dispatchEvent(
     }
 }
 
-/// Helper to dispatch a tick event to a clock node
-pub fn dispatchTick(
-    vm: *wren.c.VM,
-    document: *dom.Dom,
-    node_id: dom.DomNodeId,
-    tick_count: u64,
-) !void {
-    const event = events.Event{
-        .type = .tick,
-        .target = node_id,
-        .tick_count = tick_count,
-        .timestamp = std.time.milliTimestamp(),
-    };
-
-    try dispatchEvent(vm, document, event);
-}
 
 /// Helper to dispatch a keypress event to the global document (node 0)
 pub fn dispatchKeypress(

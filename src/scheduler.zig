@@ -3,6 +3,7 @@ const wren = @import("wren/vm.zig");
 const CallBuilder = @import("wren/CallBuilder.zig").CallBuilder;
 const events = @import("events.zig");
 const dom = @import("dom.zig");
+const Trace = @import("Trace.zig").Trace;
 
 pub const FiberHandle = *wren.c.Handle;
 
@@ -15,6 +16,7 @@ fn awaitKey(node: dom.DomNodeId, et: events.EventType) u64 {
 
 pub const Scheduler = struct {
     allocator: std.mem.Allocator,
+    trace: *Trace,
 
     // (node,event) -> list of waiting fibers
     awaiters: std.AutoHashMap(u64, std.ArrayList(FiberHandle)),
@@ -26,9 +28,10 @@ pub const Scheduler = struct {
     ready: std.ArrayList(FiberHandle),
     timers: std.ArrayList(Timer),
 
-    pub fn init(allocator: std.mem.Allocator) Scheduler {
+    pub fn init(allocator: std.mem.Allocator, trace: *Trace) Scheduler {
         return .{
             .allocator = allocator,
+            .trace = trace,
             .awaiters = std.AutoHashMap(u64, std.ArrayList(FiberHandle)).init(allocator),
             .next_frame = std.ArrayList(FiberHandle).init(allocator),
             .ready = std.ArrayList(FiberHandle).init(allocator),
@@ -69,14 +72,36 @@ pub const Scheduler = struct {
 
     // Foreign: register for next frame
     pub fn registerNextFrame(self: *Scheduler, fiber: FiberHandle) !void {
+        self.trace.enter();
+        defer self.trace.exit();
+
+        self.trace.fields("register-next-frame", .{
+            .total_next_frame_waiters = self.next_frame.items.len,
+        });
+
         try self.next_frame.append(fiber);
+
+        self.trace.info("Fiber registered for next frame");
     }
 
     /// Foreign: register a real timer (deadline = now + ms). Call pump() to resume.
     pub fn registerTimer(self: *Scheduler, now_ms: i64, ms: f64, fiber: FiberHandle) !void {
+        self.trace.enter();
+        defer self.trace.exit();
+
         const delta: i64 = @intFromFloat(ms);
         const deadline = now_ms + delta;
+
+        self.trace.fields("register-timer", .{
+            .now_ms = now_ms,
+            .delay_ms = delta,
+            .deadline_ms = deadline,
+            .total_timers = self.timers.items.len,
+        });
+
         try self.timers.append(.{ .deadline_ms = deadline, .fiber = fiber });
+
+        self.trace.info("Timer registered");
     }
 
     // Internal: resume a fiber with a prebuilt map in slot 1
@@ -112,7 +137,6 @@ pub const Scheduler = struct {
             if (ev.key) |kstr| cb.mapPutStr(1, "key", kstr);
             if (ev.mouse_x) |mx| cb.mapPutNum(1, "x", @floatFromInt(mx));
             if (ev.mouse_y) |my| cb.mapPutNum(1, "y", @floatFromInt(my));
-            if (ev.tick_count) |t| cb.mapPutNum(1, "tick", @floatFromInt(t));
             cb.mapPutNum(1, "timestamp", @floatFromInt(ev.timestamp));
 
             // resume
@@ -124,34 +148,66 @@ pub const Scheduler = struct {
         list.deinit();
     }
 
-    // To be called after a frame is presented
-    pub fn onFramePresented(self: *Scheduler, vm: *wren.c.VM) void {
-        if (self.next_frame.items.len == 0) return;
+    pub fn animationFrame(self: *Scheduler, vm: *wren.c.VM) usize {
+        self.trace.enter();
+        defer self.trace.exit();
+
+        if (self.next_frame.items.len == 0) {
+            self.trace.decision("No fibers waiting for next frame");
+            return 0;
+        }
+
+        self.trace.fields("frame-presented", .{
+            .waiting_fibers = self.next_frame.items.len,
+        });
+
         // Swap out the list to avoid realloc/mutation during resume
         var drained = std.ArrayList(FiberHandle).init(self.allocator);
         // Move contents; if OOM, do nothing this frame
         if (drained.appendSlice(self.next_frame.items)) |_| {
             // ok
         } else |_| {
+            self.trace.decision("OOM during fiber drain, skipping frame");
             drained.deinit();
-            return;
+            return 0;
         }
         self.next_frame.clearRetainingCapacity();
 
+        var resumed_count: usize = 0;
         for (drained.items) |fiber| {
             wren.c.wrenEnsureSlots(vm, 2);
             wren.c.wrenSetSlotNewMap(vm, 1);
             resumeWithSlot1Map(vm, fiber);
             wren.c.wrenReleaseHandle(vm, fiber);
+            resumed_count += 1;
         }
         drained.deinit();
+
+        self.trace.fields("frame-resume-complete", .{
+            .resumed_fibers = resumed_count,
+        });
+
+        return resumed_count;
     }
 
     /// Pump due timers and ready queue; returns number of resumed fibers
     pub fn pump(self: *Scheduler, vm: *wren.c.VM, now_ms: i64, max_resumes: usize) usize {
+        self.trace.enter();
+        defer self.trace.exit();
+
         var resumed: usize = 0;
+        const initial_timers = self.timers.items.len;
+        const initial_ready = self.ready.items.len;
+
+        self.trace.fields("pump-start", .{
+            .now_ms = now_ms,
+            .max_resumes = max_resumes,
+            .pending_timers = initial_timers,
+            .ready_fibers = initial_ready,
+        });
 
         // Resume due timers (simple linear scan; optimize to heap later)
+        var timer_resumes: usize = 0;
         var i: usize = 0;
         while (i < self.timers.items.len and resumed < max_resumes) {
             const t = self.timers.items[i];
@@ -163,12 +219,14 @@ pub const Scheduler = struct {
                 resumeWithSlot1Map(vm, t.fiber);
                 wren.c.wrenReleaseHandle(vm, t.fiber);
                 resumed += 1;
+                timer_resumes += 1;
                 continue; // don't i+=1 because we swapped
             }
             i += 1;
         }
 
         // Ready queue support (if used): resume immediately
+        var ready_resumes: usize = 0;
         while (resumed < max_resumes and self.ready.items.len > 0) {
             const fiber = self.ready.pop();
             wren.c.wrenEnsureSlots(vm, 2);
@@ -176,7 +234,16 @@ pub const Scheduler = struct {
             resumeWithSlot1Map(vm, fiber.?);
             wren.c.wrenReleaseHandle(vm, fiber.?);
             resumed += 1;
+            ready_resumes += 1;
         }
+
+        self.trace.fields("pump-complete", .{
+            .timer_resumes = timer_resumes,
+            .ready_resumes = ready_resumes,
+            .total_resumed = resumed,
+            .remaining_timers = self.timers.items.len,
+            .remaining_ready = self.ready.items.len,
+        });
 
         return resumed;
     }
