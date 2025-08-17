@@ -185,7 +185,11 @@ fn emitGlyphTileFill(ctx: *PaintContext, glyphs: *tty.GlyphTable, rect: layout.R
     const str = glyphs.getSlice(gid);
 
     const color = rgba8(row.fg.r, row.fg.g, row.fg.b, 255);
-    ctx.trace.data("glyph-tile-fill").put("rect", rect).put("text", str).put("color", color).end();
+    ctx.trace.fields("glyph-tile-fill", .{
+        .rect = rect,
+        .text = str,
+        .color = color,
+    });
 
     try ctx.push(PaintOp{ .FillGlyphRect = .{ .x = rect.x, .y = rect.y, .w = rect.w, .h = rect.h, .glyph = gid, .color = color } });
 }
@@ -198,7 +202,10 @@ fn emitBackgroundFillIfAny(ctx: *PaintContext, rect: layout.Rect, row: StyleRow)
 
     if (row.bg.use_default == 0 and rect.w > 0 and rect.h > 0) {
         const color = rgba8(row.bg.r, row.bg.g, row.bg.b, 255);
-        ctx.trace.data("fill-rect").put("rect", rect).put("color", color).end();
+        ctx.trace.fields("fill-rect", .{
+            .rect = rect,
+            .color = color,
+        });
         ctx.trace.decision("Background color specified, adding FillRect op");
         try ctx.push(PaintOp{ .FillRect = .{ .x = rect.x, .y = rect.y, .w = rect.w, .h = rect.h, .color = color } });
     } else {
@@ -211,7 +218,11 @@ fn emitBorderBlock(ctx: *PaintContext, rect: layout.Rect, color: Rgba8, thicknes
     ctx.trace.enter();
     defer ctx.trace.exit();
     ctx.trace.info("Emitting block border");
-    ctx.trace.data("border-block").put("rect", rect).put("color", color).put("thickness", thickness).end();
+    ctx.trace.fields("border-block", .{
+        .rect = rect,
+        .color = color,
+        .thickness = thickness,
+    });
 
     if (rect.w == 0 or rect.h == 0 or thickness == 0) {
         ctx.trace.decision("Zero rect or thickness, skipping border");
@@ -254,7 +265,11 @@ fn emitBorderStrokeIfAny(ctx: *PaintContext, rect: layout.Rect, row: StyleRow) !
         ctx.trace.decision("No border needed");
         return;
     }
-    ctx.trace.data("border-stroke").put("rect", rect).put("border width", row.border.width).put("border style", @tagName(row.border.style)).end();
+    ctx.trace.fields("border-stroke", .{
+        .rect = rect,
+        .border_width = row.border.width,
+        .border_style = @tagName(row.border.style),
+    });
 
     const col: Rgba8 = blk: {
         if (row.border_color.use_default == 0) {
@@ -274,7 +289,10 @@ fn emitBorderStrokeIfAny(ctx: *PaintContext, rect: layout.Rect, row: StyleRow) !
     else
         null;
 
-    ctx.trace.data("border-colors").put("border color", col).put("background color", bg_for_border).end();
+    ctx.trace.fields("border-colors", .{
+        .border_color = col,
+        .background_color = bg_for_border,
+    });
 
     switch (row.border.style) {
         .block => {
@@ -353,9 +371,11 @@ fn buildGlyphRun(
     ctx.trace.enter();
     defer ctx.trace.exit();
     ctx.trace.info("Building glyph run from text");
-    _ = ctx.trace.put("text length", text_bytes.len)
-        .put("max width cols", max_width_cols)
-        .put("truncate to fit", truncate_to_fit);
+    ctx.trace.fields("glyph-run-params", .{
+        .text_length = text_bytes.len,
+        .max_width_cols = max_width_cols,
+        .truncate_to_fit = truncate_to_fit,
+    });
 
     var glyph_ids = std.ArrayList(tty.GlyphId).init(ctx.ops.allocator);
     defer glyph_ids.deinit();
@@ -373,8 +393,10 @@ fn buildGlyphRun(
         // Check if adding this grapheme would exceed the available width
         if (truncate_to_fit and accumulated_width + grapheme_width > max_width_cols) {
             ctx.trace.decision("Truncating text to fit available width");
-            _ = ctx.trace.put("stopped at grapheme", grapheme_count)
-                .put("accumulated width", accumulated_width);
+            ctx.trace.fields("truncation-point", .{
+                .stopped_at_grapheme = grapheme_count,
+                .accumulated_width = accumulated_width,
+            });
             break;
         }
 
@@ -383,9 +405,11 @@ fn buildGlyphRun(
         try glyph_ids.append(glyph_id);
     }
 
-    _ = ctx.trace.put("processed graphemes", grapheme_count)
-        .put("final glyph count", glyph_ids.items.len)
-        .put("accumulated width", accumulated_width);
+    ctx.trace.fields("glyph-run-stats", .{
+        .processed_graphemes = grapheme_count,
+        .final_glyph_count = glyph_ids.items.len,
+        .accumulated_width = accumulated_width,
+    });
 
     // Handle empty result
     if (glyph_ids.items.len == 0) {
@@ -403,8 +427,9 @@ fn buildGlyphRun(
     else
         ctx.unicode.monospacedTextWidth(text_bytes);
 
-    _ = ctx.trace.put("final width cols", final_width_cols);
-    ctx.trace.decision("Successfully built glyph run");
+    ctx.trace.fields("glyph-run-final-width", .{
+        .final_width_cols = final_width_cols,
+    });
 
     return .{ .run = final_run, .width_cols = final_width_cols };
 }
@@ -419,9 +444,10 @@ fn emitClockVisuals(
 ) !void {
     ctx.trace.enter();
     defer ctx.trace.exit();
-    ctx.trace.info("Emitting clock visuals");
-    _ = ctx.trace.put("rect", rect)
-        .put("visual style", row.clock_visual);
+    ctx.trace.fields("clock-visuals", .{
+        .rect = rect,
+        .visual_style = row.clock_visual,
+    });
 
     if (!(rect.w > 0 and rect.h > 0)) {
         ctx.trace.decision("Zero rect dimensions, no clock to emit");
@@ -522,7 +548,6 @@ fn emitTextGlyphRuns(
     ctx.trace.enter();
     defer ctx.trace.exit();
     ctx.trace.info("Emitting text glyph runs");
-    _ = ctx.trace.put("rect", rect);
 
     if (!(rect.w > 0 and rect.h > 0)) {
         ctx.trace.decision("Zero rect dimensions, no text to emit");
@@ -530,11 +555,14 @@ fn emitTextGlyphRuns(
     }
 
     const slice = document.getTextSlice(node_id);
-    _ = ctx.trace.put("text length", slice.len);
-
     const cb = computeContentBox(rect, row);
     const color = computeTextColor(document, node_id, row);
-    ctx.trace.data("text-render").put("content box", cb.rect).put("text color", color).end();
+    ctx.trace.fields("text-render", .{
+        .content_box = cb.rect,
+        .text_color = color,
+        .text_length = slice.len,
+        .rect = rect,
+    });
 
     if (cb.rect.w == 0 or cb.rect.h == 0) {
         ctx.trace.decision("Zero content box dimensions, no space for text");
@@ -558,9 +586,11 @@ fn emitTextGlyphRuns(
         ctx.trace.enter();
         defer ctx.trace.exit();
         ctx.trace.info("Processing text line");
-        _ = ctx.trace.put("line number", total_lines_processed)
-            .put("line length", line.len)
-            .put("y offset", y_offset);
+        ctx.trace.fields("text-line", .{
+            .line_number = total_lines_processed,
+            .line_length = line.len,
+            .y_offset = y_offset,
+        });
 
         // For each line, apply word wrapping if needed
         var line_start: usize = 0;
@@ -576,9 +606,10 @@ fn emitTextGlyphRuns(
             if (line_width + seg_w > cb.rect.w and line_width > 0) {
                 // Emit the current wrapped line
                 wrapped_segments += 1;
-                ctx.trace.decision("Line width exceeded, emitting wrapped segment");
-                _ = ctx.trace.put("wrapped segment", wrapped_segments)
-                    .put("current line width", line_width);
+                ctx.trace.fields("wrapped-segment", .{
+                    .wrapped_segment = wrapped_segments,
+                    .current_line_width = line_width,
+                });
 
                 const line_bytes_end = last_break_bytes orelse seg.offset;
                 const line_bytes = line[line_start..line_bytes_end];
@@ -586,7 +617,9 @@ fn emitTextGlyphRuns(
 
                 if (shaped.run.len > 0) {
                     const extra = computeJustifyOffset(cb.rect.w, shaped.width_cols, row.justify);
-                    _ = ctx.trace.put("justify offset", extra);
+                    ctx.trace.fields("justify-offset", .{
+                        .justify_offset = extra,
+                    });
 
                     try ctx.push(PaintOp{ .GlyphRun = .{
                         .x = rect.x + cb.inset_left + extra,
@@ -613,8 +646,9 @@ fn emitTextGlyphRuns(
 
         // Emit the remainder of this line (after wrapping)
         if (line_start < line.len and y_offset < cb.rect.h) {
-            ctx.trace.decision("Emitting final line segment");
-            _ = ctx.trace.put("remaining text length", line.len - line_start);
+            ctx.trace.fields("final-line-segment", .{
+                .remaining_text_length = line.len - line_start,
+            });
 
             const line_bytes = line[line_start..];
             const shaped = try buildGlyphRun(ctx, glyphs, line_bytes, cb.rect.w, true);
@@ -632,12 +666,16 @@ fn emitTextGlyphRuns(
             y_offset += 1;
         }
 
-        _ = ctx.trace.put("wrapped segments", wrapped_segments);
+        ctx.trace.fields("wrapped-segments", .{
+            .wrapped_segments = wrapped_segments,
+        });
     }
 
-    _ = ctx.trace.put("total lines processed", total_lines_processed)
-        .put("total glyph runs emitted", total_glyph_runs_emitted)
-        .put("final y offset", y_offset);
+    ctx.trace.fields("text-emission-stats", .{
+        .total_lines_processed = total_lines_processed,
+        .total_glyph_runs_emitted = total_glyph_runs_emitted,
+        .final_y_offset = y_offset,
+    });
 }
 
 pub fn computePaintCommands(
@@ -649,8 +687,10 @@ pub fn computePaintCommands(
     ctx.trace.enter();
     defer ctx.trace.exit();
     ctx.trace.info("Computing paint commands for display list");
-    _ = ctx.trace.put("node count", tree.nodeCount())
-        .put("initial op count", ctx.ops.items.len);
+    ctx.trace.fields("paint-start", .{
+        .node_count = tree.nodeCount(),
+        .initial_op_count = ctx.ops.items.len,
+    });
 
     // Painting order follows CSS background, borders, then content (text). Stacking contexts are out of scope here.
 
@@ -669,10 +709,12 @@ pub fn computePaintCommands(
         ctx.trace.enter();
         defer ctx.trace.exit();
         ctx.trace.info("Painting node");
-        _ = ctx.trace.put("index", i)
-            .put("id", debug_id)
-            .put("kind", node_kind)
-            .put("original", h.data.rect);
+        ctx.trace.fields("node-info", .{
+            .index = i,
+            .id = debug_id,
+            .kind = node_kind,
+            .original = h.data.rect,
+        });
 
         // Find scroll container parent and apply scroll offset
         var paint_rect = h.data.rect;
@@ -686,12 +728,16 @@ pub fn computePaintCommands(
                 is_scrolled = true;
                 const scroll_offset = parent_node.data.scroll_offset_y;
                 ctx.trace.decision("Node is in scroll container, applying scroll offset");
-                _ = ctx.trace.put("offset", scroll_offset);
+                ctx.trace.fields("scroll-offset", .{
+                    .offset = scroll_offset,
+                });
 
                 // Apply scroll offset: move content up by scroll amount
                 if (paint_rect.y >= scroll_offset) {
                     paint_rect.y -= scroll_offset;
-                    _ = ctx.trace.put("adjusted", paint_rect);
+                    ctx.trace.fields("adjusted", .{
+                        .rect = paint_rect,
+                    });
                 } else {
                     // Content is scrolled out of view at the top
                     ctx.trace.decision("Content scrolled out of view at top, skipping");
@@ -701,7 +747,9 @@ pub fn computePaintCommands(
 
                 // Set up clipping rectangle to viewport
                 const parent_content_rect = layout.computeInnerContentRect(parent_row, parent_node.data.rect);
-                _ = ctx.trace.put("viewport", parent_content_rect);
+                ctx.trace.fields("viewport", .{
+                    .rect = parent_content_rect,
+                });
 
                 // Skip if entirely outside viewport
                 if (paint_rect.y >= parent_content_rect.y + parent_content_rect.h or
@@ -715,7 +763,9 @@ pub fn computePaintCommands(
         }
 
         if (!is_scrolled) {
-            _ = ctx.trace.put("adjusted", paint_rect);
+            ctx.trace.fields("adjusted", .{
+                .rect = paint_rect,
+            });
         }
 
         const ops_before = ctx.ops.items.len;
@@ -736,16 +786,20 @@ pub fn computePaintCommands(
 
         const ops_after = ctx.ops.items.len;
         const ops_added = ops_after - ops_before;
-        _ = ctx.trace.put("ops added", ops_added);
+        ctx.trace.fields("ops-added", .{
+            .ops_added = ops_added,
+        });
 
         if (ops_added > 0) {
             painted_nodes += 1;
         }
     }
 
-    _ = ctx.trace.put("painted nodes", painted_nodes)
-        .put("skipped nodes", skipped_nodes)
-        .put("final op count", ctx.ops.items.len);
+    ctx.trace.fields("paint-end", .{
+        .painted_nodes = painted_nodes,
+        .skipped_nodes = skipped_nodes,
+        .final_op_count = ctx.ops.items.len,
+    });
 }
 
 test "source-over alpha blending mixes foreground and background colors correctly" {

@@ -87,7 +87,11 @@ pub const LiveSession = struct {
         self.trace.enter();
         defer self.trace.exit();
         self.trace.info("Handling keypress");
-        self.trace.data("key").put("char", key).put("string", key_str).end();
+        
+        self.trace.fields("key", .{
+            .char = key,
+            .string = key_str,
+        });
 
         // Post to fiber awaiters first
         self.scheduler.postEvent(self.wren_runner.vm.vm, .{

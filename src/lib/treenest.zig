@@ -150,6 +150,8 @@ pub fn TreeNest(comptime Writer: type) type {
         stack: std.ArrayList(Level),
         allocator: std.mem.Allocator,
         no_color: bool = false,
+        max_depth: ?usize = null,
+        enabled: bool = true,
 
         const Self = @This();
 
@@ -175,6 +177,200 @@ pub fn TreeNest(comptime Writer: type) type {
 
         pub fn setNoColor(self: *Self, no_color: bool) void {
             self.no_color = no_color;
+        }
+
+        pub fn setMaxDepth(self: *Self, max_depth: ?usize) void {
+            self.max_depth = max_depth;
+        }
+        
+        pub fn setEnabled(self: *Self, enabled: bool) void {
+            self.enabled = enabled;
+        }
+
+        pub fn disabled(self: *const Self) bool {
+            return !self.enabled;
+        }
+        
+        pub fn shouldOutput(self: *const Self) bool {
+            if (!self.enabled) return false;
+            if (self.max_depth) |max| {
+                return self.depth <= max;
+            }
+            return true;
+        }
+        
+        // Convenience methods for creating modified copies
+        pub fn silent(self: Self) Self {
+            var copy = self;
+            copy.enabled = false;
+            return copy;
+        }
+        
+        pub fn unlimited(self: Self) Self {
+            var copy = self;
+            copy.enabled = true;
+            copy.max_depth = null;
+            return copy;
+        }
+        
+        pub fn limited(self: Self, max_depth: usize) Self {
+            var copy = self;
+            copy.enabled = true;
+            copy.max_depth = max_depth;
+            return copy;
+        }
+        
+        // Simplified: enter/exit manage depth and stack properly
+        pub fn enter(self: *Self) void {
+            if (!self.enabled) return;
+            
+            // Always push to stack and increment depth
+            self.stack.append(.{ .has_more = true }) catch return;
+            self.depth += 1;
+        }
+
+        pub fn exit(self: *Self) void {
+            if (!self.enabled) return;
+            
+            // Always pop from stack and decrement depth if we have something
+            if (self.stack.items.len > 0) {
+                _ = self.stack.pop();
+                self.depth -= 1;
+            }
+        }
+        
+        // Tracing-specific methods
+        pub fn info(self: *Self, comptime description: []const u8) void {
+            if (!self.shouldOutput()) return;
+            self.styledLine(description, .{ .fg = Color.cyan }) catch {};
+        }
+
+        pub fn decision(self: *Self, comptime description: []const u8) void {
+            if (!self.shouldOutput()) return;
+            const text = std.fmt.allocPrint(self.allocator, "⚡ {s}", .{description}) catch return;
+            defer self.allocator.free(text);
+            self.styledLine(text, .{ .fg = Color.yellow }) catch {};
+        }
+
+        pub fn note(self: *Self, comptime description: []const u8) void {
+            if (!self.shouldOutput()) return;
+            self.styledLine(description, .{ .fg = Color.gray, .italic = true }) catch {};
+        }
+        
+        pub fn put(self: *Self, comptime key: []const u8, value: anytype) *Self {
+            if (!self.shouldOutput()) return self;
+            
+            // Write continuation indent
+            if (self.depth > 0) {
+                self.writeContinuation() catch return self;
+            }
+            
+            // Write key
+            self.writer.writeAll(key) catch return self;
+            self.writer.writeAll(": ") catch return self;
+            
+            // Format and write the value
+            const ValueType = @TypeOf(value);
+            switch (@typeInfo(ValueType)) {
+                .int => self.writer.print("{d}", .{value}) catch return self,
+                .float => self.writer.print("{d:.2}", .{value}) catch return self,
+                .bool => self.writer.print("{}", .{value}) catch return self,
+                .pointer => |ptr_info| {
+                    if (ptr_info.size == .slice and ptr_info.child == u8) {
+                        self.writer.print("\"{s}\"", .{value}) catch return self;
+                    } else {
+                        self.writer.print("{any}", .{value}) catch return self;
+                    }
+                },
+                .array => |arr_info| {
+                    if (arr_info.child == u8) {
+                        self.writer.print("\"{s}\"", .{value}) catch return self;
+                    } else {
+                        self.writer.print("{any}", .{value}) catch return self;
+                    }
+                },
+                .@"enum" => self.writer.print("{s}", .{@tagName(value)}) catch return self,
+                .optional => {
+                    if (value) |v| {
+                        return self.put(key, v);
+                    } else {
+                        self.writer.writeAll("null") catch return self;
+                    }
+                },
+                .@"struct" => {
+                    if (std.meta.hasMethod(ValueType, "format")) {
+                        self.writer.print("{}", .{value}) catch return self;
+                    } else {
+                        self.writer.print("{any}", .{value}) catch return self;
+                    }
+                },
+                else => self.writer.print("{any}", .{value}) catch return self,
+            }
+            
+            self.writer.writeAll("\n") catch return self;
+            return self;
+        }
+        
+        // Output a labeled data section with fields
+        pub fn fields(self: *Self, comptime label: []const u8, data: anytype) void {
+            if (!self.shouldOutput()) return;
+            
+            // Output data group header with icon
+            if (self.depth > 0) {
+                self.writeContinuation() catch return;
+            }
+            self.applyStyle(.{ .fg = Color.magenta, .bold = true }) catch {};
+            self.writer.print("📊 {s}\n", .{label}) catch return;
+            self.resetStyle() catch {};
+            
+            // Enter a new level for the fields
+            self.enter();
+            defer self.exit();
+            
+            // Output each field
+            const type_info = @typeInfo(@TypeOf(data));
+            inline for (type_info.@"struct".fields) |field| {
+                if (self.depth > 0) {
+                    self.writeContinuation() catch return;
+                }
+                
+                self.writer.writeAll(field.name) catch return;
+                self.writer.writeAll(": ") catch return;
+                
+                const value = @field(data, field.name);
+                const ValueType = @TypeOf(value);
+                
+                switch (@typeInfo(ValueType)) {
+                    .int => self.writer.print("{d}", .{value}) catch return,
+                    .float => self.writer.print("{d:.2}", .{value}) catch return,
+                    .bool => self.writer.print("{}", .{value}) catch return,
+                    .pointer => |ptr_info| {
+                        if (ptr_info.size == .slice and ptr_info.child == u8) {
+                            self.writer.print("{s}", .{value}) catch return;
+                        } else {
+                            self.writer.print("{any}", .{value}) catch return;
+                        }
+                    },
+                    .array => |arr_info| {
+                        if (arr_info.child == u8) {
+                            self.writer.print("{s}", .{value}) catch return;
+                        } else {
+                            self.writer.print("{any}", .{value}) catch return;
+                        }
+                    },
+                    .@"enum" => self.writer.print("{s}", .{@tagName(value)}) catch return,
+                    .@"struct" => {
+                        if (std.meta.hasMethod(ValueType, "format")) {
+                            self.writer.print("{}", .{value}) catch return;
+                        } else {
+                            self.writer.print("{any}", .{value}) catch return;
+                        }
+                    },
+                    else => self.writer.print("{any}", .{value}) catch return,
+                }
+                
+                self.writer.writeAll("\n") catch return;
+            }
         }
 
         pub fn applyStyle(self: *Self, style: Style) !void {
@@ -258,17 +454,6 @@ pub fn TreeNest(comptime Writer: type) type {
             }
         }
 
-        pub fn begin(self: *Self) !void {
-            try self.stack.append(.{ .has_more = true });
-            self.depth += 1;
-        }
-
-        pub fn end(self: *Self) void {
-            if (self.stack.items.len > 0) {
-                _ = self.stack.pop();
-                self.depth -= 1;
-            }
-        }
 
         pub fn setLast(self: *Self) void {
             if (self.stack.items.len > 0) {
@@ -277,6 +462,7 @@ pub fn TreeNest(comptime Writer: type) type {
         }
 
         pub fn node(self: *Self, text: []const u8, is_last: bool) !void {
+            if (!self.shouldOutput()) return;
             if (self.depth > 0) {
                 try self.writeIndent(is_last);
             }
@@ -288,6 +474,7 @@ pub fn TreeNest(comptime Writer: type) type {
         }
 
         pub fn styledNode(self: *Self, text: []const u8, style: Style, is_last: bool) !void {
+            if (!self.shouldOutput()) return;
             if (self.depth > 0) {
                 try self.writeIndent(is_last);
             }
@@ -301,6 +488,7 @@ pub fn TreeNest(comptime Writer: type) type {
         }
 
         pub fn line(self: *Self, text: []const u8) !void {
+            if (!self.shouldOutput()) return;
             if (self.depth > 0) {
                 try self.writeContinuation();
             }
@@ -309,12 +497,14 @@ pub fn TreeNest(comptime Writer: type) type {
         }
 
         pub fn beginLine(self: *Self) !void {
+            if (!self.shouldOutput()) return;
             if (self.depth > 0) {
                 try self.writeContinuation();
             }
         }
 
         pub fn styledLine(self: *Self, text: []const u8, style: Style) !void {
+            if (!self.shouldOutput()) return;
             if (self.depth > 0) {
                 try self.writeContinuation();
             }
@@ -397,6 +587,7 @@ pub fn TreeNest(comptime Writer: type) type {
                 try self.inlineJoined(" ");
             }
         };
+        
     };
 }
 

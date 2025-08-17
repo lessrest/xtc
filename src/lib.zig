@@ -99,7 +99,10 @@ pub fn renderXmlAscii(
     // Initialize root tracer for the entire rendering pipeline
     var trace = Trace.file(std.io.getStdErr(), .{});
     trace.info("Rendering XML to ASCII");
-    trace.data("render-params").put("width", width).put("height", height).end();
+    trace.fields("render-params", .{
+        .width = width,
+        .height = height,
+    });
 
     var layout_engine = layout.init(al, &unicode, &trace);
     try layout_engine.computeFlexLayout(
@@ -138,7 +141,10 @@ pub fn renderDocumentToWriter(
     defer unicode.deinit(al);
     var trace = Trace.file(std.io.getStdErr(), .{});
     trace.info("Rendering DOM");
-    trace.data("render-params").put("width", width).put("height", height).end();
+    trace.fields("render-params", .{
+        .width = width,
+        .height = height,
+    });
     var ctx = paint.PaintContext.init(al, &unicode, &trace);
     defer ctx.deinit();
     var tree = try allocateBoxTreeFromDOMAutoRoot(al, document);

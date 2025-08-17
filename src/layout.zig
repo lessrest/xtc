@@ -39,8 +39,19 @@ pub const Rect = struct {
     w: usize,
     h: usize,
 
-    pub fn trace(self: Rect, tracer: *Trace) void {
-        tracer.print("({d} {d} {d}×{d})", .{ self.x, self.y, self.w, self.h });
+    pub fn trace(self: Rect, tracer: anytype) void {
+        _ = tracer.put("rect", self);
+    }
+
+    pub fn format(
+        self: Rect,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        _ = fmt;
+        _ = options;
+        try writer.print("({d} {d} {d}×{d})", .{ self.x, self.y, self.w, self.h });
     }
 };
 
@@ -139,16 +150,15 @@ fn computeIntrinsicSizesForFlexItems(
             const display_width_cols = self.unicode.monospacedTextWidth(text_slice);
             var id_buf: [32]u8 = undefined;
             const debug_id = dom.getDebugIdOrDefault(item_dom_id, &id_buf);
-            self.trace.enter();
-            defer self.trace.exit();
-            self.trace.info("Measuring text dimensions");
-            _ = self.trace.put("id", debug_id)
-                .put("text", text_slice)
-                .put("text length", text_slice.len)
-                .put("display width", display_width_cols)
-                .put("constraint width", content_rect.w)
-                .put("constraint height", constraint_h)
-                .put("measured size", intrinsic_size);
+            self.trace.fields("text-dimensions", .{
+                .id = debug_id,
+                .text = text_slice,
+                .text_length = text_slice.len,
+                .display_width = display_width_cols,
+                .constraint_width = content_rect.w,
+                .constraint_height = constraint_h,
+                .measured_size = intrinsic_size,
+            });
 
             if (display_width_cols > content_rect.w) {
                 self.trace.note("Text exceeds container width, may be clipped");
@@ -195,7 +205,11 @@ fn computeIntrinsicSizesForFlexItems(
             self.trace.decision("Container has overflow:scroll, using unlimited height constraint for child measurement");
         }
 
-        self.trace.data("item-info").put("index", item_index).put("id", debug_id).put("node kind", dom.getNodeKind(item_dom_id)).end();
+        self.trace.fields("item-info", .{
+            .index = item_index,
+            .id = debug_id,
+            .node_kind = dom.getNodeKind(item_dom_id),
+        });
         _ = self.trace.put("natural", Size{ .w = @intCast(natural_width), .h = @intCast(natural_height) });
         _ = self.trace.put("intrinsic", Size{ .w = @intCast(intrinsic_size[0]), .h = @intCast(intrinsic_size[1]) });
         if (item_style.width != 0 or item_style.height != 0) {
@@ -286,8 +300,10 @@ fn distributeFlexGrow(
     self.trace.enter();
     defer self.trace.exit();
     self.trace.info("Distributing flex-grow space to items");
-    _ = self.trace.put("available space", available_space)
-        .put("total grow factor", total_grow_factor);
+    self.trace.fields("flex-grow-params", .{
+        .available_space = available_space,
+        .total_grow_factor = total_grow_factor,
+    });
 
     // If no space to distribute or no growing items, leave all extra sizes at 0
     if (!(available_space > 0 and total_grow_factor > 0)) {
@@ -442,10 +458,12 @@ fn alignFlexItemOnBothAxes(
         item_y = cross_result.cross_position;
         item_height = cross_result.cross_size;
 
-        _ = self.trace.put("main position", item_x)
-            .put("cross alignment", cross_alignment)
-            .put("height", item_height)
-            .put("available height", content_rect.h);
+        self.trace.fields("horizontal-alignment", .{
+            .main_position = item_x,
+            .cross_alignment = cross_alignment,
+            .height = item_height,
+            .available_height = content_rect.h,
+        });
 
         if (cross_alignment == .stretch) {
             self.trace.decision("Item stretches to fill cross axis");
@@ -465,10 +483,12 @@ fn alignFlexItemOnBothAxes(
         item_x = cross_result.cross_position;
         item_width = cross_result.cross_size;
 
-        _ = self.trace.put("main position", item_y)
-            .put("cross alignment", cross_alignment)
-            .put("width", item_width)
-            .put("available width", content_rect.w);
+        self.trace.fields("vertical-alignment", .{
+            .main_position = item_y,
+            .cross_alignment = cross_alignment,
+            .width = item_width,
+            .available_width = content_rect.w,
+        });
 
         if (cross_alignment == .stretch) {
             self.trace.decision("Item stretches to fill cross axis");
@@ -547,10 +567,12 @@ pub fn computeFlexLayout(
 
     var container_id_buf: [32]u8 = undefined;
     const container_debug_id = dom.getDebugIdOrDefault(container_header.data.dom_id, &container_id_buf);
-    _ = self.trace.put("container id", container_debug_id)
-        .put("container rect", container_rect)
-        .put("content rect", content_rect)
-        .put("container style", flex_container_style);
+    self.trace.fields("container-info", .{
+        .container_id = container_debug_id,
+        .container_rect = container_rect,
+        .content_rect = content_rect,
+        .container_style = flex_container_style,
+    });
 
     // Phase 1: Compute intrinsic sizes for all flex items
     const flex_items = try computeIntrinsicSizesForFlexItems(
@@ -570,10 +592,12 @@ pub fn computeFlexLayout(
     // Phase 3: Resolve main axis sizes and compute flex-grow distribution
     const main_size_info = self.resolveFlexItemMainSizes(flex_items, flex_container_style);
     const container_main_size: i32 = @as(i32, @intCast(if (flex_container_style.flex_dir == .row) content_rect.w else content_rect.h));
-    _ = self.trace.put("total content extent", main_size_info.content_extent)
-        .put("container main size", container_main_size)
-        .put("main gap", flex_container_style.gaps.main)
-        .put("cross gap", flex_container_style.gaps.cross);
+    self.trace.fields("main-axis-sizing", .{
+        .total_content_extent = main_size_info.content_extent,
+        .container_main_size = container_main_size,
+        .main_gap = flex_container_style.gaps.main,
+        .cross_gap = flex_container_style.gaps.cross,
+    });
 
     if (main_size_info.content_extent > container_main_size) {
         self.trace.note("Content exceeds container size, items may overflow");
@@ -627,9 +651,11 @@ pub fn computeFlexLayout(
         } else {
             self.trace.note("No space available for justify-content distribution");
         }
-        _ = self.trace.put("spacing", spacing)
-            .put("available space", available_space_for_justify)
-            .put("item count", flex_item_count);
+        self.trace.fields("justify-spacing", .{
+            .spacing = spacing,
+            .available_space = available_space_for_justify,
+            .item_count = flex_item_count,
+        });
     }
 
     self.trace.enter();
@@ -653,11 +679,11 @@ pub fn computeFlexLayout(
             flex_item,
         );
         const item_box_node = container_header.getChildNodeMut(box_tree, flex_item.original_index);
-        self.trace.data("final-item-layout")
-            .put("extra size", @max(0, flex_item.extra_main_size))
-            .put("trailing space", flex_item.trailing_space)
-            .put("item position", item_position)
-            .end();
+        self.trace.fields("final-item-layout", .{
+            .extra_size = @max(0, flex_item.extra_main_size),
+            .trailing_space = flex_item.trailing_space,
+            .item_position = item_position,
+        });
 
         // Phase 5b: Recursively layout the flex item's subtree
         try self.computeFlexLayout(
@@ -696,17 +722,19 @@ pub fn computeFlexLayout(
             container_header.data.scroll_offset_y = 0;
         }
 
-        _ = self.trace.put("id", scroll_debug_id)
-            .put("content width", content_rect.w)
-            .put("content height", content_height)
-            .put("viewport width", content_rect.w)
-            .put("viewport height", viewport_height)
-            .put("vertical scroll offset", container_header.data.scroll_offset_y)
-            .put("content overflows", content_height > viewport_height)
-            .put("scroll percentage", if (content_height > viewport_height)
-            (container_header.data.scroll_offset_y * 100) / (content_height - viewport_height)
-        else
-            0);
+        self.trace.fields("scroll-container-info", .{
+            .id = scroll_debug_id,
+            .content_width = content_rect.w,
+            .content_height = content_height,
+            .viewport_width = content_rect.w,
+            .viewport_height = viewport_height,
+            .vertical_scroll_offset = container_header.data.scroll_offset_y,
+            .content_overflows = content_height > viewport_height,
+            .scroll_percentage = if (content_height > viewport_height)
+                (container_header.data.scroll_offset_y * 100) / (content_height - viewport_height)
+            else
+                0,
+        });
     }
 }
 
@@ -716,11 +744,11 @@ const JustifyContentSpacing = struct {
     remaining_pixels: i32, // Extra pixels to distribute
 
     pub fn trace(self: JustifyContentSpacing, tracer: *Trace) void {
-        tracer.data("justify-content-spacing")
-            .put("start space", self.start_space)
-            .put("between space", self.between_space)
-            .put("remaining pixels", self.remaining_pixels)
-            .end();
+        tracer.fields("justify-content-spacing", .{
+            .start_space = self.start_space,
+            .between_space = self.between_space,
+            .remaining_pixels = self.remaining_pixels,
+        });
     }
 };
 

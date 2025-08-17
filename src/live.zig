@@ -164,7 +164,10 @@ fn startClockNodes(session: *LiveSession) !void {
             if (style.clock_interval_ms > 0) {
                 const clock_node = try session.clock_registry.createClock(node_id, style.clock_interval_ms);
                 try clock_node.start();
-                session.trace.data("clock started").put("node", node_id).put("interval ms", style.clock_interval_ms).end();
+                session.trace.fields("clock started", .{
+                    .node = node_id,
+                    .interval_ms = style.clock_interval_ms,
+                });
             }
         }
     }
