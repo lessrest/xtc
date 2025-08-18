@@ -3,30 +3,50 @@ const VM = wren.c.VM;
 const Ctx = @import("../runtime.zig").ScriptContext;
 const DomNodeId = @import("../../dom.zig").DomNodeId;
 const EventType = @import("../../events.zig").EventType;
+const FiberHandle = @import("../../scheduler.zig").FiberHandle;
 const std = @import("std");
+const Suspend = @import("../ffi_simple.zig").Suspend;
 
-pub fn root(_: *VM, _: *Ctx) DomNodeId {
+pub fn requestAnimationFrame(ctx: *Ctx, fiber: FiberHandle) !void {
+    if (ctx.scheduler) |scheduler| {
+        try scheduler.registerNextFrame(fiber);
+        return Suspend;
+    } else {
+        return error.NoScheduler;
+    }
+}
+
+pub fn root() DomNodeId {
     return 0;
 }
 
-pub fn viewportWidth(_: *VM, ctx: *Ctx) u32 {
+pub fn viewportWidth(
+    ctx: *Ctx,
+) u32 {
     return @intCast(ctx.viewport_width);
 }
 
-pub fn viewportHeight(_: *VM, ctx: *Ctx) u32 {
+pub fn viewportHeight(
+    ctx: *Ctx,
+) u32 {
     return @intCast(ctx.viewport_height);
 }
 
-pub fn createElement(_: *VM, ctx: *Ctx, style: []const u8) DomNodeId {
+pub fn createElement(
+    ctx: *Ctx,
+    style: []const u8,
+) DomNodeId {
     return ctx.document.addElement(style) catch @panic("createElement");
 }
 
-pub fn createText(_: *VM, ctx: *Ctx, text: []const u8) DomNodeId {
+pub fn createText(
+    ctx: *Ctx,
+    text: []const u8,
+) DomNodeId {
     return ctx.document.addText(text) catch @panic("createText");
 }
 
 pub fn appendChild(
-    _: *VM,
     ctx: *Ctx,
     parent: DomNodeId,
     child: DomNodeId,
@@ -35,7 +55,6 @@ pub fn appendChild(
 }
 
 pub fn setDebugId(
-    _: *VM,
     ctx: *Ctx,
     id: DomNodeId,
     label: []const u8,
@@ -44,7 +63,6 @@ pub fn setDebugId(
 }
 
 pub fn updateText(
-    _: *VM,
     ctx: *Ctx,
     id: DomNodeId,
     text: []const u8,
@@ -53,7 +71,6 @@ pub fn updateText(
 }
 
 pub fn updateClass(
-    _: *VM,
     ctx: *Ctx,
     id: DomNodeId,
     class: []const u8,
@@ -62,7 +79,6 @@ pub fn updateClass(
 }
 
 pub fn getElementById(
-    _: *VM,
     ctx: *Ctx,
     idStr: []const u8,
 ) DomNodeId {
@@ -77,7 +93,6 @@ pub fn getElementById(
 }
 
 pub fn removeChild(
-    _: *VM,
     ctx: *Ctx,
     parent: DomNodeId,
     child: DomNodeId,
@@ -85,7 +100,10 @@ pub fn removeChild(
     ctx.document.removeChild(parent, child);
 }
 
-pub fn getChildCount(_: *VM, ctx: *Ctx, id: DomNodeId) u32 {
+pub fn getChildCount(
+    ctx: *Ctx,
+    id: DomNodeId,
+) u32 {
     const items = ctx.document.headers.slice();
     const content = items.items(.content)[@intCast(id)];
     return switch (content) {
@@ -94,53 +112,13 @@ pub fn getChildCount(_: *VM, ctx: *Ctx, id: DomNodeId) u32 {
     };
 }
 
-pub fn getFirstChild(_: *VM, ctx: *Ctx, id: DomNodeId) DomNodeId {
+pub fn getFirstChild(
+    ctx: *Ctx,
+    id: DomNodeId,
+) DomNodeId {
     const items = ctx.document.headers.slice();
     return switch (items.items(.content)[@intCast(id)]) {
         .element => |ch| ch.first_child,
         else => std.math.maxInt(DomNodeId),
     };
-}
-
-pub fn addEventListener(
-    vm: *VM,
-    ctx: *Ctx,
-    node_id: DomNodeId,
-    event_type_str: []const u8,
-    handler: *wren.c.Handle,
-) u32 {
-    const event_type = EventType.fromString(event_type_str) orelse {
-        wren.c.wrenSetSlotString(vm, 0, "Unknown event type");
-        wren.c.wrenAbortFiber(vm, 0);
-        return 0;
-    };
-
-    const handler_id = ctx.document.event_registry.addEventListener(
-        node_id,
-        event_type,
-        handler,
-    ) catch {
-        wren.c.wrenSetSlotString(vm, 0, "Failed to add event listener");
-        wren.c.wrenAbortFiber(vm, 0);
-        return 0;
-    };
-
-    ctx.event_handles.append(handler) catch {
-        wren.c.wrenSetSlotString(vm, 0, "Failed to store event handle");
-        wren.c.wrenAbortFiber(vm, 0);
-        return 0;
-    };
-
-    return handler_id;
-}
-
-pub fn removeEventListener(
-    _: *VM,
-    ctx: *Ctx,
-    node_id: DomNodeId,
-    event_type_str: []const u8,
-    handler_id: u32,
-) bool {
-    const event_type = EventType.fromString(event_type_str) orelse return false;
-    return ctx.document.event_registry.removeEventListener(node_id, event_type, handler_id);
 }

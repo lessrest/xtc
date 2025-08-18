@@ -91,15 +91,7 @@ pub const LiveSession = struct {
             .string = key_str,
         });
 
-        // Post to fiber awaiters first
-        try self.scheduler.postEvent(self.wren_runner.vm.vm, .{
-            .type = .keypress,
-            .target = 0,
-            .key = key_str,
-            .timestamp = std.time.milliTimestamp(),
-        });
-        // Then deliver to callback listeners (optional)
-        try event_dispatch.dispatchKeypress(self.wren_runner.vm.vm, self.document, key_str);
+        std.debug.panic("keypress: {s}", .{key_str});
 
         // Re-render after input
         self.wren_runner.script_context.viewport_width = self.renderer.opts.width;

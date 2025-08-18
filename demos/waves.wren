@@ -1,6 +1,5 @@
 // Beautiful combined wave, star, and particle animation
-import "dom" for Document, Element
-import "tui" for TUI
+import "dom" for Window, Document, Element
 
 class CombinedWaveAnimation {
   construct new(container) {
@@ -249,12 +248,13 @@ class CombinedWaveAnimation {
         }
       }
 
-      TUI.nextFrame()
+      Window.waitForNextFrame()
     }
   }
 }
 
-TUI.enqueue(Fiber.new {
+Window.immediately {
+  System.print("Starting waves animation")
   var container = Document.getElementById("waves")
   if (container == null) {
     System.print("Error: Could not find waves element")
@@ -264,4 +264,4 @@ TUI.enqueue(Fiber.new {
     System.print("✨ Mystical Ocean Waves with shimmering stars and floating particles! ✨")
     combinedWaves.animate()
   }
-})
+}

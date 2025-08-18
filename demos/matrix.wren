@@ -1,6 +1,5 @@
 // Matrix-style digital rain with fiber-based animation
-import "dom" for Document, Element
-import "tui" for TUI
+import "dom" for Window, Document, Element
 
 class MatrixDemo {
   construct new(container) {
@@ -12,7 +11,7 @@ class MatrixDemo {
     _columns = []
 
     setupDOM()
-    startAnimation()
+    animate()
   }
 
   setupDOM() {
@@ -51,25 +50,17 @@ class MatrixDemo {
         // Occasional long bursts
         "burst": (x * 17) % 23 == 0,
         // Individual column timing - stagger initial updates
-        "lastUpdate": startTime - ((x * 0.1) % 1.0),
-        "fps": 8 + ((x * 13) % 25), // More variation in FPS (8-32 fps)
+        "lastUpdate": 0,
+        "fps": 8 + ((x * 13) % 30),
       })
     }
 
     _container.append(main)
   }
 
-  startAnimation() {
-    // Start a fiber for the main animation loop
-    animate()
-  }
-
   animate() {
     var frameCount = 0
     while (true) {
-      // Wait for next frame
-      TUI.nextFrame()
-
       var currentTime = System.clock
 
       for (x in 0..._width) {
@@ -78,6 +69,7 @@ class MatrixDemo {
       }
 
       frameCount = frameCount + 1
+      Window.waitForNextFrame()
     }
   }
 
@@ -106,7 +98,7 @@ class MatrixDemo {
       col["speed"] = 1 + ((currentTime.floor * 13 + x * 17) % 3)
       col["density"] = 4 + ((currentTime.floor * 7 + x * 11) % 4)
       col["burst"] = ((currentTime.floor + x) % 19) == 0
-      col["fps"] = 10 + ((currentTime.floor * 23 + x) % 20) // Randomize FPS too
+      col["fps"] = 20 + ((currentTime.floor * 23 + x) % 20) // Randomize FPS too
     }
 
     // Draw the trail
@@ -153,9 +145,9 @@ class MatrixDemo {
   }
 }
 
-TUI.enqueue(Fiber.new {
+Window.immediately {
   var container = Document.getElementById("waves")
   if (container) {
     MatrixDemo.new(container)
   }
-})
+}

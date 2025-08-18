@@ -28,23 +28,4 @@ pub const CallBuilder = struct {
         wren.c.wrenSetSlotDouble(self.vm, 1, val);
         wren.c.wrenSetMapValue(self.vm, map_slot, 0, 1);
     }
-
-    pub fn callFiber(self: *CallBuilder, fiber: *wren.c.Handle, arg_slot: c_int) !void {
-        _ = arg_slot; // autofix
-        // Put receiver in slot 0
-        wren.c.wrenSetSlotHandle(self.vm, 0, fiber);
-        // arg is already in arg_slot
-        const call = wren.c.wrenMakeCallHandle(self.vm, "call(_)") orelse return;
-        defer wren.c.wrenReleaseHandle(self.vm, call);
-        const result = wren.c.wrenCall(self.vm, call);
-        switch (@as(wren.c.InterpretResult, @enumFromInt(result))) {
-            .success => {},
-            .compile_error => {
-                return error.CompileError;
-            },
-            .runtime_error => {
-                return error.RuntimeError;
-            },
-        }
-    }
 };

@@ -36,6 +36,7 @@ pub fn build(b: *std.Build) void {
             "-Wextra",
             "-Wno-unused-parameter",
             "-g",
+            "-O3",
         },
     });
 
@@ -81,7 +82,7 @@ pub fn build(b: *std.Build) void {
     const xtc = b.addModule("xtc", .{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
-        .optimize = .ReleaseFast,
+        .optimize = optimize,
     });
 
     xtc.addImport("ansi", ansi);
@@ -100,6 +101,17 @@ pub fn build(b: *std.Build) void {
     exe.linkLibrary(libwren);
 
     b.installArtifact(exe);
+
+    const exe_check = b.addExecutable(.{
+        .name = "xtc",
+        .root_module = xtc,
+    });
+
+    exe_check.linkSystemLibrary("m");
+    exe_check.linkLibrary(libwren);
+
+    const check_step = b.step("check", "Check the xtc executable");
+    check_step.dependOn(&exe_check.step);
 
     const unit_tests = b.addTest(.{
         .name = "xtc-test-suite",
@@ -142,12 +154,6 @@ pub fn build(b: *std.Build) void {
         "wasm_alloc",
         "wasm_free",
     };
-
-    // Create stub Words module for WASM
-    const wasm_words_stub = b.addModule("Words", .{
-        .root_source_file = b.path("src/wasm_stubs/Words.zig"),
-    });
-    _ = wasm_words_stub; // autofix
 
     // Link dependencies for WASI
     wasm_exe.root_module.addImport("ansi", ansi);

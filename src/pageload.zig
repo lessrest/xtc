@@ -143,7 +143,7 @@ fn gatherScriptElement(self: *Self, element: xmlparse.Element) !void {
 
     // Execute the gathered scripts
     for (scripts.items) |script| {
-        if (self.wren_runner.executeScript(script.source, script.module_name, false)) |_| {
+        if (self.wren_runner.executeScript(script.source, script.module_name)) |_| {
             // ok
         } else |err| {
             std.debug.print("Error executing script {?s}: {any}\n", .{ script.module_name, err });

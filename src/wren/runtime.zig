@@ -6,10 +6,10 @@ const Dom = dom.Dom;
 const DomNodeId = dom.DomNodeId;
 const events = @import("../events.zig");
 const EventType = events.EventType;
+const writeReturn = @import("ffi_simple.zig").writeReturn;
 
-vm: wren.ScriptEngine(ScriptContext),
+vm: wren.ScriptEngine,
 script_context: ScriptContext,
-event_handles: std.ArrayList(*wren.c.Handle),
 output: std.ArrayList(u8),
 
 allocator: std.mem.Allocator,
@@ -18,20 +18,14 @@ pub const ScriptContext = struct {
     allocator: std.mem.Allocator,
     document: *Dom,
     output: *std.ArrayList(u8),
-    event_handles: *std.ArrayList(*wren.c.Handle),
     viewport_width: usize = 80,
     viewport_height: usize = 24,
-    // Optional fiber scheduler used by Tui module
-    scheduler: ?*scheduler_mod.Scheduler = null,
 
-    pub const Modules = struct {
-        pub const dom = struct {
-            pub const DOM = @import("platform/DOM.zig");
-        };
-        pub const tui = struct {
-            pub const Tui = @import("platform/Tui.zig");
-        };
-    };
+    scheduler: ?*scheduler_mod.Scheduler = null,
+    fiber_call_handle: *wren.c.Handle = undefined,
+    fiber_transfer_error_handle: *wren.c.Handle = undefined,
+
+    pub const Platform = @import("platform/DOM.zig");
 
     pub fn write(self: *@This(), text: []const u8) void {
         if (self.scheduler) |scheduler| {
@@ -41,6 +35,49 @@ pub const ScriptContext = struct {
         }
 
         self.output.appendSlice(text) catch {};
+    }
+
+    pub fn callFiber(self: *@This(), vm: *wren.c.VM, fiber: *wren.c.Handle, arg: anytype) !void {
+        try self.call(vm, fiber, self.fiber_call_handle, arg);
+    }
+
+    pub fn callFiberWithReturnAlreadyInSlot1(self: *@This(), vm: *wren.c.VM, fiber: *wren.c.Handle) !void {
+        wren.c.wrenSetSlotHandle(vm, 0, fiber);
+        switch (@as(wren.c.InterpretResult, @enumFromInt(wren.c.wrenCall(vm, self.fiber_call_handle)))) {
+            .success => {},
+            .compile_error => {
+                return error.CompileError;
+            },
+            .runtime_error => {
+                return error.RuntimeError;
+            },
+        }
+    }
+
+    pub fn call(
+        self: *@This(),
+        vm: *wren.c.VM,
+        receiver: *wren.c.Handle,
+        method: *wren.c.Handle,
+        arg: anytype,
+    ) !void {
+        _ = self; // autofix
+        wren.c.wrenEnsureSlots(vm, 2);
+        wren.c.wrenSetSlotHandle(vm, 0, receiver);
+        writeReturn(vm, 1, arg);
+        switch (@as(wren.c.InterpretResult, @enumFromInt(wren.c.wrenCall(vm, method)))) {
+            .success => {},
+            .compile_error => {
+                return error.CompileError;
+            },
+            .runtime_error => {
+                return error.RuntimeError;
+            },
+        }
+    }
+
+    pub fn rejectFiber(self: *@This(), vm: *wren.c.VM, fiber: *wren.c.Handle, message: []const u8) !void {
+        try self.call(vm, fiber, self.fiber_transfer_error_handle, message);
     }
 
     pub fn onError(
@@ -89,41 +126,30 @@ pub fn init(allocator: std.mem.Allocator, document: *Dom) !*@This() {
         .output = std.ArrayList(u8).init(allocator),
         .vm = undefined,
         .script_context = undefined,
-        .event_handles = std.ArrayList(*wren.c.Handle).init(allocator),
     };
 
     this.script_context = .{
         .allocator = allocator,
         .document = document,
         .output = &this.output,
-        .event_handles = &this.event_handles,
     };
 
-    this.vm = try wren.create(ScriptContext, &this.script_context);
+    this.vm = try wren.create(&this.script_context);
 
     try this.vm.registerForeignModules();
-
     try this.vm.interpret("dom", @embedFile("modules/dom.wren"));
-    try this.vm.interpret("tui", @embedFile("modules/tui.wren"));
-    try this.vm.interpret("main", "import \"dom\" for Document, Element");
 
     return this;
 }
 
 pub fn deinit(self: *@This()) void {
-    for (self.event_handles.items) |handle| {
-        wren.c.wrenReleaseHandle(self.vm.vm, handle);
-    }
-
-    self.event_handles.deinit();
+    wren.c.wrenReleaseHandle(self.vm.vm, self.vm.ctx.fiber_call_handle);
     self.vm.deinit();
     self.output.deinit();
     self.allocator.destroy(self);
 }
 
-/// Execute a script with optional module name and auto-imports
-pub fn executeScript(self: *@This(), source: []const u8, module_name: ?[]const u8, add_imports: bool) !void {
-    _ = add_imports; // autofix
+pub fn executeScript(self: *@This(), source: []const u8, module_name: ?[]const u8) !void {
     const script_module = module_name orelse "global-script";
 
     try self.vm.interpret(script_module, source);
