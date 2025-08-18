@@ -8,8 +8,20 @@ class Window {
     return Kernel.requestAnimationFrame(Fiber.current)
   }
 
+  static waitForEvent(eventType) {
+    return Kernel.waitForEvent(eventType, Fiber.current)
+  }
+
+  static sleep(ms) {
+    return Kernel.setTimeout(ms, Fiber.current)
+  }
+
   static immediately(f) {
     return Kernel.enqueue(Fiber.new(f))
+  }
+
+  static spawn(f) {
+    return Kernel.spawn(Fiber.new(f))
   }
 }
 

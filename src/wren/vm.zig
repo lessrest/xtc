@@ -3,7 +3,7 @@ const std = @import("std");
 pub const c = @import("c.zig");
 
 const TrackedAllocator = @import("../lib/TrackingAllocator.zig");
-const ffi_simple = @import("ffi_simple.zig");
+const ffi_simple = @import("ffi.zig");
 const ScriptContext = @import("runtime.zig").ScriptContext;
 
 pub const ScriptEngine = struct {

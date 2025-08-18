@@ -1,7 +1,7 @@
 // Text Editor component for XTC written in Wren
 // Provides line editing functionality with history and cursor management
 
-import "dom" for Document
+import "dom" for Window, Document
 
 class Editor {
   construct new(container) {

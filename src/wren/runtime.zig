@@ -4,9 +4,7 @@ const dom = @import("../dom.zig");
 const scheduler_mod = @import("../scheduler.zig");
 const Dom = dom.Dom;
 const DomNodeId = dom.DomNodeId;
-const events = @import("../events.zig");
-const EventType = events.EventType;
-const writeReturn = @import("ffi_simple.zig").writeReturn;
+const writeReturn = @import("ffi.zig").writeReturn;
 
 vm: wren.ScriptEngine,
 script_context: ScriptContext,
@@ -25,7 +23,7 @@ pub const ScriptContext = struct {
     fiber_call_handle: *wren.c.Handle = undefined,
     fiber_transfer_error_handle: *wren.c.Handle = undefined,
 
-    pub const Platform = @import("platform/DOM.zig");
+    pub const Platform = @import("platform.zig");
 
     pub fn write(self: *@This(), text: []const u8) void {
         if (self.scheduler) |scheduler| {

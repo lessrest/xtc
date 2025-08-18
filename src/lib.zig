@@ -5,13 +5,11 @@ pub usingnamespace @import("tailwind.zig");
 pub usingnamespace @import("paint.zig");
 pub usingnamespace @import("tty.zig");
 pub usingnamespace @import("xml.zig");
-pub usingnamespace @import("FormatTrace.zig");
 
 pub const TreeNest = @import("ansi").nest;
 
 comptime {
     _ = @import("pageload.zig");
-    _ = @import("events.zig");
     _ = @import("xml.zig");
 }
 
@@ -27,7 +25,6 @@ const tty = @import("tty.zig");
 const xml = @import("xml.zig");
 const xmlparse = @import("xmlparse.zig");
 const Trace = @import("Trace.zig");
-pub const FormatTrace = @import("FormatTrace.zig");
 
 pub const DisplayWidth = @import("DisplayWidth");
 pub const Graphemes = @import("Graphemes");

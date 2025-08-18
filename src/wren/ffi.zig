@@ -1,272 +1,221 @@
 const std = @import("std");
 const c = @import("c.zig");
+const ScriptContext = @import("runtime.zig").ScriptContext;
 
-pub const ModuleSpec = struct {
-    module_name: [:0]const u8,
-    module_info: std.builtin.Type,
-    module_classes: []const ClassSpec,
-};
+pub const Suspend = error.Suspend;
 
-pub const ClassSpec = struct {
-    class_name: [:0]const u8,
-    class_info: std.builtin.Type,
-    class_functions: []const FunctionSpec,
-};
-
-pub const FunctionSpec = struct {
-    // Zig method name, e.g. "say"
-    name: [:0]const u8,
-    // Fully qualified Wren signature, e.g. "say(_)" or "hello()"
-    wren_signature: [:0]const u8,
-    // Pointer to the Zig function
-    func: *const anyopaque,
-    // Full parameter list including the leading VM and context pointers
-    params: []const std.builtin.Type.Fn.Param,
-    // Return payload type (if the function returns an error union, this is the payload)
-    return_type: type,
-    // Whether the Zig function returns an error union
-    is_error_union: bool,
-    // Full return type (may be error union)
-    full_return_type: type,
-    // Unique ID for the function
-    id: usize = 0,
-
-    pub fn arity(this: @This()) usize {
-        // First two parameters are always *c.WrenVM and *T (ScriptContext)
-        if (this.params.len <= 2) return 0;
-        return this.params.len - 2;
-    }
-};
-
-pub const ForeignFunction = struct {
-    module_name: [:0]const u8,
-    class_name: [:0]const u8,
-    wren_signature: [:0]const u8,
-    func: c.ForeignMethodFn,
+/// Function registry entry with comptime-generated wrapper
+pub const FfiFunction = struct {
+    name: [*:0]const u8,
+    func: *const fn (*c.VM, *ScriptContext, c_int) anyerror!void,
     arity: usize,
-    id: usize = 0,
+
+    pub fn writeParamList(self: FfiFunction, w: anytype) !void {
+        const metavars: []const u8 = "abcdefghijklmnopqrstuvwxyz";
+        for (0..self.arity) |i| {
+            try w.print("{s}", .{metavars[i .. i + 1]});
+            if (i < self.arity - 1) {
+                try w.print(", ", .{});
+            }
+        }
+    }
+
+    pub fn writeYieldingMethod(self: FfiFunction, id: usize, w: anytype) !void {
+        try w.print("  static {s}(", .{self.name});
+        try self.writeParamList(w);
+        try w.print(") {{ Fiber.yield([{d}, [", .{id});
+        try self.writeParamList(w);
+        try w.print("]]) }}\n", .{});
+    }
 };
 
-// Generate module specs from a type's Modules struct
-pub fn moduleSpecs(comptime T: type, comptime global_id: *usize) []const ModuleSpec {
-    const decls = std.meta.declarations(T.Modules);
-    var specs: [decls.len]ModuleSpec = undefined;
-    var i = 0;
-    inline for (decls) |decl| {
-        specs[i] = .{
-            .module_name = decl.name,
-            .module_info = @typeInfo(@field(T.Modules, decl.name)),
-            .module_classes = classSpecs(@field(T.Modules, decl.name), global_id),
-        };
-        i += 1;
-    }
-    const specs_final = specs;
-    return &specs_final;
-}
+/// Register a Zig function with automatic wrapper generation
+pub fn registerFunction(
+    comptime func: anytype,
+    comptime fn_info: std.builtin.Type.Fn,
+    comptime name: [*:0]const u8,
+) FfiFunction {
+    const params = fn_info.params;
+    const return_type = fn_info.return_type.?;
+    const ret_info = @typeInfo(return_type);
+    const is_error_union = ret_info == .error_union;
 
-pub fn classSpecs(comptime T: type, comptime global_id: *usize) []const ClassSpec {
-    const decls = std.meta.declarations(T);
-    var specs: [decls.len]ClassSpec = undefined;
-    var i = 0;
-    inline for (decls) |decl| {
-        specs[i] = .{
-            .class_name = decl.name,
-            .class_info = @typeInfo(@field(T, decl.name)),
-            .class_functions = functionSpecs(@field(T, decl.name), global_id),
-        };
-        i += 1;
-    }
-    const specs_final = specs;
-    return &specs_final;
-}
+    const arity = blk: {
+        var i = 0;
+        var actual_arity = 0;
+        while (i < params.len) : (i += 1) {
+            if (params[i].type.? == *c.VM or params[i].type.? == *ScriptContext) {
+                continue;
+            }
+            actual_arity += 1;
+        }
+        break :blk actual_arity;
+    };
 
-pub fn functionSpecs(comptime T: type, comptime global_id: *usize) []const FunctionSpec {
-    const decls = std.meta.declarations(T);
-    var specs: [decls.len]FunctionSpec = undefined;
-    var i = 0;
-    inline for (decls) |decl| {
-        const fn_type = @typeInfo(@TypeOf(@field(T, decl.name))).@"fn";
-        const params = fn_type.params;
-        const full_return_type = fn_type.return_type.?;
-        const ret_info = @typeInfo(full_return_type);
-        var is_error_union = false;
-        var R: type = full_return_type;
-        switch (ret_info) {
-            .error_union => |eu| {
-                is_error_union = true;
-                R = eu.payload;
-            },
-            else => {},
+    const Wrapper = struct {
+        fn wrapper(vm: *c.VM, ctx: *ScriptContext, arglist_slot: c_int) anyerror!void {
+            const paramTupleType = std.meta.ArgsTuple(@TypeOf(func));
+            var args: paramTupleType = undefined;
+            var consumedListArgs: c_int = 0;
+            comptime var i = 0;
+            inline for (params) |param| {
+                args[i] = readParam(vm, ctx, param.type.?, arglist_slot, &consumedListArgs);
+                i += 1;
+            }
+            const result = @call(.auto, func, args);
+
+            // Handle return value
+            if (is_error_union) {
+                if (result) |value| {
+                    writeReturn(vm, 1, value);
+                } else |err| {
+                    return err;
+                }
+            } else {
+                writeReturn(vm, 1, result);
+            }
         }
 
-        const arity = if (params.len <= 2) 0 else params.len - 2;
-        const sig = switch (arity) {
-            0 => decl.name ++ "()",
-            1 => decl.name ++ "(_)",
-            2 => decl.name ++ "(_,_)",
-            3 => decl.name ++ "(_,_,_)",
-            else => @compileError("Unsupported arity (>3) for Wren signature generation"),
-        };
+        fn readParam(
+            vm: *c.VM,
+            ctx: *ScriptContext,
+            comptime P: type,
+            arglist_slot: c_int,
+            list_index: *c_int,
+        ) P {
+            if (P == *c.VM) {
+                return vm;
+            }
+            if (P == *ScriptContext) {
+                return ctx;
+            }
 
-        specs[i] = .{
-            .name = decl.name,
-            .wren_signature = sig,
-            .func = @field(T, decl.name),
-            .params = params,
-            .return_type = R,
-            .is_error_union = is_error_union,
-            .full_return_type = full_return_type,
-            .id = global_id.*,
-        };
-        global_id.* += 1;
-        i += 1;
-    }
-    const specs_final = specs;
-    return &specs_final;
-}
+            c.wrenGetListElement(vm, arglist_slot, list_index.*, 0);
+            list_index.* += 1;
 
-// Generate a foreign function wrapper for a specific function spec
-pub fn generateForeignFunction(
-    comptime T: type,
-    comptime module_name: [:0]const u8,
-    comptime class_name: [:0]const u8,
-    comptime spec: FunctionSpec,
-) ForeignFunction {
-    const container = struct {
-        inline fn readParam(vm: *c.VM, comptime P: type, slot_index: c_int) P {
             if (P == []const u8) {
                 var len: c_int = 0;
-                const ptr = c.wrenGetSlotBytes(vm, slot_index, &len);
+                const ptr = c.wrenGetSlotBytes(vm, 0, &len);
                 return ptr[0..@intCast(len)];
             }
-            if (P == f64) return c.wrenGetSlotDouble(vm, slot_index);
-            if (P == bool) return c.wrenGetSlotBool(vm, slot_index);
+            if (P == f64) return c.wrenGetSlotDouble(vm, 0);
+            if (P == bool) return c.wrenGetSlotBool(vm, 0);
             if (P == *c.Handle) {
-                // Get a handle to a Wren object (function, class, etc)
-                return c.wrenGetSlotHandle(vm, slot_index) orelse @panic("Invalid Wren handle");
+                return c.wrenGetSlotHandle(vm, 0) orelse @panic("Invalid Wren handle");
             }
 
             switch (@typeInfo(P)) {
                 .int => {
-                    const n = c.wrenGetSlotDouble(vm, slot_index);
+                    const n = c.wrenGetSlotDouble(vm, 0);
                     return @as(P, @intFromFloat(n));
                 },
-                else => @compileError("Unsupported parameter type for Wren foreign method"),
-            }
-        }
-
-        inline fn writeReturn(vm: *c.VM, comptime R: type, value: R) void {
-            if (R == void) return;
-            if (R == []const u8) {
-                c.wrenSetSlotBytes(vm, 0, value.ptr, value.len);
-                return;
-            }
-            if (R == f64) {
-                c.wrenSetSlotDouble(vm, 0, value);
-                return;
-            }
-            if (R == bool) {
-                c.wrenSetSlotBool(vm, 0, value);
-                return;
-            }
-            switch (@typeInfo(R)) {
-                .int => {
-                    const d: f64 = @floatFromInt(value);
-                    c.wrenSetSlotDouble(vm, 0, d);
+                .@"enum" => {
+                    const tag: []const u8 = std.mem.span(c.wrenGetSlotString(vm, 0));
+                    return std.meta.stringToEnum(P, tag) orelse @panic("Invalid enum value");
                 },
-                else => @compileError("Unsupported return type for Wren foreign method"),
-            }
-        }
-
-        pub fn invoke(vm: *c.VM) callconv(.C) void {
-            //            std.debug.print("invoke {s}\n", .{spec.name});
-            const data: *T = @ptrCast(@alignCast(c.wrenGetUserData(vm)));
-            // Build the function type from spec
-            const params = spec.params;
-            const R = spec.return_type;
-            // Now we expect functions to have signature: fn(vm: *c.WrenVM, ctx: *T, ...)
-            // So arity is params.len - 2 (excluding vm and ctx)
-            const arity = if (params.len <= 2) 0 else params.len - 2;
-            switch (arity) {
-                0 => {
-                    const Fun = if (spec.is_error_union)
-                        *const fn (*c.VM, *T) R
-                    else
-                        *const fn (*c.VM, *T) R;
-                    const func: Fun = @ptrCast(@alignCast(spec.func));
-                    if (spec.is_error_union) {
-                        const result = func(vm, data);
-                        if (@typeInfo(R) != .void) writeReturn(vm, R, result);
-                    } else {
-                        const result = func(vm, data);
-                        if (@typeInfo(R) != .void) writeReturn(vm, R, result);
-                    }
-                },
-                1 => {
-                    const P1 = params[2].type.?;
-                    const Fun = if (spec.is_error_union)
-                        *const fn (*c.VM, *T, P1) R
-                    else
-                        *const fn (*c.VM, *T, P1) R;
-                    const func: Fun = @ptrCast(@alignCast(spec.func));
-                    const a1 = readParam(vm, P1, 1);
-                    if (spec.is_error_union) {
-                        const result = func(vm, data, a1);
-                        if (@typeInfo(R) != .void) writeReturn(vm, R, result);
-                    } else {
-                        const result = func(vm, data, a1);
-                        if (@typeInfo(R) != .void) writeReturn(vm, R, result);
-                    }
-                },
-                2 => {
-                    const P1 = params[2].type.?;
-                    const P2 = params[3].type.?;
-                    const Fun = if (spec.is_error_union)
-                        *const fn (*c.VM, *T, P1, P2) R
-                    else
-                        *const fn (*c.VM, *T, P1, P2) R;
-                    const func: Fun = @ptrCast(@alignCast(spec.func));
-                    const a1 = readParam(vm, P1, 1);
-                    const a2 = readParam(vm, P2, 2);
-                    if (spec.is_error_union) {
-                        const result = func(vm, data, a1, a2);
-                        if (@typeInfo(R) != .void) writeReturn(vm, R, result);
-                    } else {
-                        const result = func(vm, data, a1, a2);
-                        if (@typeInfo(R) != .void) writeReturn(vm, R, result);
-                    }
-                },
-                3 => {
-                    const P1 = params[2].type.?;
-                    const P2 = params[3].type.?;
-                    const P3 = params[4].type.?;
-                    const Fun = if (spec.is_error_union)
-                        *const fn (*c.VM, *T, P1, P2, P3) R
-                    else
-                        *const fn (*c.VM, *T, P1, P2, P3) R;
-                    const func: Fun = @ptrCast(@alignCast(spec.func));
-                    const a1 = readParam(vm, P1, 1);
-                    const a2 = readParam(vm, P2, 2);
-                    const a3 = readParam(vm, P3, 3);
-                    if (spec.is_error_union) {
-                        const result = func(vm, data, a1, a2, a3);
-                        if (@typeInfo(R) != .void) writeReturn(vm, R, result);
-                    } else {
-                        const result = func(vm, data, a1, a2, a3);
-                        if (@typeInfo(R) != .void) writeReturn(vm, R, result);
-                    }
-                },
-                else => @compileError("Unsupported arity (>3) for Wren foreign method"),
+                else => @compileError("Unsupported parameter type: " ++ @typeName(P)),
             }
         }
     };
 
-    return .{
-        .module_name = module_name,
-        .class_name = class_name,
-        .wren_signature = spec.wren_signature,
-        .func = container.invoke,
-        .id = spec.id,
-        .arity = spec.arity(),
+    return FfiFunction{
+        .name = name,
+        .func = Wrapper.wrapper,
+        .arity = arity,
     };
+}
+
+pub fn writeReturn(vm: *c.VM, slot: c_int, value: anytype) void {
+    const R = @TypeOf(value);
+    if (R == void) return;
+    if (R == []const u8) {
+        c.wrenSetSlotBytes(vm, slot, value.ptr, value.len);
+        return;
+    }
+    if (R == [:0]const u8) {
+        c.wrenSetSlotString(vm, slot, value);
+        return;
+    }
+    if (R == f64) {
+        c.wrenSetSlotDouble(vm, slot, value);
+        return;
+    }
+    if (R == bool) {
+        c.wrenSetSlotBool(vm, slot, value);
+        return;
+    }
+    if (R == @import("../scheduler.zig").Event) {
+        switch (value) {
+            .keypress => |keypress| {
+                c.wrenEnsureSlots(vm, 5);
+                c.wrenSetSlotNewMap(vm, slot);
+                c.wrenSetSlotString(vm, slot + 1, "key");
+                c.wrenSetSlotBytes(vm, slot + 2, keypress.key.ptr, keypress.key.len);
+                c.wrenSetSlotString(vm, slot + 3, "type");
+                c.wrenSetSlotString(vm, slot + 4, "keypress");
+                c.wrenSetMapValue(vm, slot, slot + 1, slot + 2);
+                c.wrenSetMapValue(vm, slot, slot + 3, slot + 4);
+                return;
+            },
+        }
+    }
+    if (R == *c.Handle) {
+        c.wrenSetSlotHandle(vm, slot, value);
+        return;
+    }
+
+    switch (@typeInfo(R)) {
+        .int => {
+            const d: f64 = @floatFromInt(value);
+            c.wrenSetSlotDouble(vm, slot, d);
+        },
+        .@"enum" => {
+            const tag = std.meta.tagName(value);
+            c.wrenSetSlotString(vm, slot, tag);
+        },
+        else => @compileError("Unsupported value type: " ++ @typeName(R)),
+    }
+}
+
+pub const platform_functions = blk: {
+    var funcs: [std.meta.declarations(ScriptContext.Platform).len]FfiFunction = undefined;
+    var i: usize = 0;
+    for (std.meta.declarations(ScriptContext.Platform)) |decl| {
+        const func = @field(ScriptContext.Platform, decl.name);
+        const name = decl.name;
+        const info: std.builtin.Type = @typeInfo(@TypeOf(func));
+        switch (info) {
+            .@"fn" => |fn_info| {
+                funcs[i] = registerFunction(func, fn_info, name);
+                i += 1;
+            },
+            else => {
+                @compileError("bogus function: " ++ @typeName(func));
+            },
+        }
+    }
+    break :blk funcs;
+};
+
+/// Generate Wren wrapper classes with yield-based trampolines
+pub fn generateWrenWrappers(allocator: std.mem.Allocator) ![]u8 {
+    // If no functions registered, return empty source
+    if (platform_functions.len == 0) {
+        return allocator.dupe(u8, "");
+    }
+
+    var src = std.ArrayList(u8).init(allocator);
+    defer src.deinit();
+    var w = src.writer();
+
+    try w.writeAll("class Kernel {\n");
+    try w.writeAll("  foreign static enqueue(fiber)\n");
+
+    for (platform_functions, 0..) |func, i| {
+        try func.writeYieldingMethod(i, w);
+    }
+
+    try w.writeAll("}\n\n");
+
+    return src.toOwnedSlice();
 }

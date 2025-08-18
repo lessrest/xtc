@@ -1,15 +1,20 @@
-import "tui" for TUI
-import "dom" for Document
+import "dom" for Document, Window
 
-TUI.enqueue(Fiber.new {
-  System.print("Stage 1: printing and sleeping")
-  for (i in 0..5) {
-    System.print("round %(i); sleeping 100ms")
-    TUI.sleep(100)
-  }
-
+Window.immediately {
   var row = Document.createElement("flex-row items-stretch grow-1")
   Document.root.append(row)
+
+  var pleasePress = Document.createElement("grow-1 items-center bg-blue-900 text-blue-400 px-1")
+  var pleasePressText = Document.createText("Press any key to continue")
+  pleasePress.append(pleasePressText)
+  row.append(pleasePress)
+
+  Window.spawn {
+    while (true) {
+      var event = Window.waitForEvent("keypress")
+      pleasePressText.updateText("You pressed %(event["key"])")
+    }
+  }
 
   for (i in ["blue", "cyan", "green", "yellow", "amber", "red", "purple"]) {
     var textbox = Document.createElement("grow-1 items-center bg-%(i)-900 text-%(i)-400 px-1")
@@ -18,9 +23,9 @@ TUI.enqueue(Fiber.new {
 
     for (j in 1..9) {
       textbox.updateClass("grow-1 items-center bg-%(i)-%(j)00 text-%(i)-%(10-j)00 px-1")
-      TUI.sleep(250)
+      Window.sleep(250)
     }
 
-    TUI.sleep(250)
+    Window.sleep(250)
   }
-})
+}

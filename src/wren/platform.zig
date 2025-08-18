@@ -1,16 +1,44 @@
-const wren = @import("../vm.zig");
+const wren = @import("vm.zig");
 const VM = wren.c.VM;
-const Ctx = @import("../runtime.zig").ScriptContext;
-const DomNodeId = @import("../../dom.zig").DomNodeId;
-const EventType = @import("../../events.zig").EventType;
-const FiberHandle = @import("../../scheduler.zig").FiberHandle;
+const Ctx = @import("runtime.zig").ScriptContext;
+const DomNodeId = @import("../dom.zig").DomNodeId;
+const FiberHandle = @import("../scheduler.zig").FiberHandle;
 const std = @import("std");
-const Suspend = @import("../ffi_simple.zig").Suspend;
+const Suspend = @import("ffi.zig").Suspend;
+const EventType = @import("../scheduler.zig").EventType;
 
 pub fn requestAnimationFrame(ctx: *Ctx, fiber: FiberHandle) !void {
     if (ctx.scheduler) |scheduler| {
         try scheduler.registerNextFrame(fiber);
         return Suspend;
+    } else {
+        return error.NoScheduler;
+    }
+}
+
+pub fn setTimeout(ctx: *Ctx, ms: f64, fiber: FiberHandle) !void {
+    if (ctx.scheduler) |scheduler| {
+        const now = std.time.milliTimestamp();
+        try scheduler.registerTimer(now, ms, fiber);
+        return Suspend;
+    } else {
+        return error.NoScheduler;
+    }
+}
+
+pub fn waitForEvent(ctx: *Ctx, event: EventType, fiber: FiberHandle) !void {
+    if (ctx.scheduler) |scheduler| {
+        try scheduler.registerListener(event, fiber);
+        return Suspend;
+    } else {
+        return error.NoScheduler;
+    }
+}
+
+pub fn spawn(ctx: *Ctx, fiber: FiberHandle) !FiberHandle {
+    if (ctx.scheduler) |scheduler| {
+        try scheduler.enqueueReady(fiber);
+        return fiber;
     } else {
         return error.NoScheduler;
     }

@@ -1,76 +1,68 @@
 const std = @import("std");
 const wren = @import("wren/vm.zig");
-const CallBuilder = @import("wren/CallBuilder.zig").CallBuilder;
-const events = @import("events.zig");
-const dom = @import("dom.zig");
 const Trace = @import("Trace.zig").Trace;
 const ScriptContext = @import("wren/runtime.zig").ScriptContext;
-const writeReturn = @import("wren/ffi_simple.zig").writeReturn;
-const Suspend = @import("wren/ffi_simple.zig").Suspend;
+const Suspend = @import("wren/ffi.zig").Suspend;
 
 pub const FiberHandle = *wren.c.Handle;
 
 const Timer = struct { deadline_ms: i64, fiber: FiberHandle };
 
-fn awaitKey(node: dom.DomNodeId, et: events.EventType) u64 {
-    // Pack two 32-bit values into a 64-bit key
-    return (@as(u64, @intCast(node)) << 32) | @as(u64, @intCast(@intFromEnum(et)));
-}
+pub const Event = union(enum) {
+    keypress: struct {
+        key: []const u8,
+    },
+};
+
+const FiberPriority = struct {
+    pub fn compare(context: void, a: FiberHandle, b: FiberHandle) std.math.Order {
+        _ = context; // autofix
+        return std.math.order(@intFromPtr(a), @intFromPtr(b));
+    }
+};
+
+pub const FiberQueue = std.PriorityQueue(FiberHandle, void, FiberPriority.compare);
+pub const EventType = std.meta.Tag(Event);
+pub const EventFibers = std.enums.EnumFieldStruct(EventType, FiberQueue, null);
 
 pub const Scheduler = struct {
     allocator: std.mem.Allocator,
     trace: *Trace,
 
-    // (node,event) -> list of waiting fibers
-    awaiters: std.AutoHashMap(u64, std.ArrayList(FiberHandle)),
-
-    // Fibers to resume after next present()
     next_frame: std.ArrayList(FiberHandle),
-
-    // Ready-to-run fibers (resume immediately)
     ready: std.ArrayList(FiberHandle),
     timers: std.ArrayList(Timer),
+    listeners: EventFibers,
+    event_queue: std.ArrayList(Event),
 
     pub fn init(allocator: std.mem.Allocator, trace: *Trace) Scheduler {
         return .{
             .allocator = allocator,
             .trace = trace,
-            .awaiters = std.AutoHashMap(u64, std.ArrayList(FiberHandle)).init(allocator),
             .next_frame = std.ArrayList(FiberHandle).init(allocator),
             .ready = std.ArrayList(FiberHandle).init(allocator),
             .timers = std.ArrayList(Timer).init(allocator),
+            .event_queue = std.ArrayList(Event).init(allocator),
+            .listeners = .{
+                .keypress = FiberQueue.init(allocator, {}),
+            },
         };
     }
 
     pub fn deinit(self: *Scheduler, vm: ?*wren.c.VM) void {
         // Release all stored handles to avoid leaks
         if (vm) |v| {
-            var it = self.awaiters.iterator();
-            while (it.next()) |entry| {
-                for (entry.value_ptr.items) |h| wren.c.wrenReleaseHandle(v, h);
-                entry.value_ptr.deinit();
-            }
             for (self.next_frame.items) |h| wren.c.wrenReleaseHandle(v, h);
             for (self.ready.items) |h| wren.c.wrenReleaseHandle(v, h);
-        } else {
-            var it2 = self.awaiters.iterator();
-            while (it2.next()) |entry| entry.value_ptr.deinit();
         }
-        self.awaiters.deinit();
+        inline for (std.meta.tags(EventType)) |event| {
+            @field(self.listeners, @tagName(event)).deinit();
+        }
         self.next_frame.deinit();
         self.ready.deinit();
         self.timers.deinit();
+        self.event_queue.deinit();
         self.* = undefined;
-    }
-
-    // Foreign: register an awaiter on (node,event)
-    pub fn registerWait(self: *Scheduler, node: dom.DomNodeId, et: events.EventType, fiber: FiberHandle) !void {
-        const k = awaitKey(node, et);
-        const g = try self.awaiters.getOrPut(k);
-        if (!g.found_existing) {
-            g.value_ptr.* = std.ArrayList(FiberHandle).init(self.allocator);
-        }
-        try g.value_ptr.append(fiber);
     }
 
     // Foreign: register for next frame
@@ -112,12 +104,23 @@ pub const Scheduler = struct {
         try self.ready.append(fiber);
     }
 
+    pub fn registerListener(self: *Scheduler, event: EventType, fiber: FiberHandle) !void {
+        self.trace.enter();
+        defer self.trace.exit();
+
+        self.trace.fields("register-listener", .{
+            .event = event,
+            .total_listeners = @field(self.listeners, @tagName(event)).count(),
+        });
+
+        try @field(self.listeners, @tagName(event)).add(fiber);
+    }
+
     /// Check if there are any pending fibers waiting to be processed
     pub fn hasPendingWork(self: *Scheduler) bool {
         return self.ready.items.len > 0 or
             self.next_frame.items.len > 0 or
-            self.timers.items.len > 0 or
-            self.awaiters.count() > 0;
+            self.timers.items.len > 0;
     }
 
     pub fn animationFrame(self: *Scheduler, vm: *wren.c.VM) !usize {
@@ -206,6 +209,45 @@ pub const Scheduler = struct {
             } else {
                 break;
             }
+        }
+
+        return resumed;
+    }
+
+    pub fn enqueueEvent(self: *Scheduler, event: Event) !void {
+        try self.event_queue.append(event);
+    }
+
+    pub fn pumpEvents(self: *Scheduler, vm: *wren.c.VM) !usize {
+        var resumed: usize = 0;
+
+        while (self.event_queue.pop()) |event| {
+            resumed += try self.dispatchEvent(vm, event);
+        }
+
+        return resumed;
+    }
+
+    pub fn dispatchEvent(self: *Scheduler, vm: *wren.c.VM, event: Event) !usize {
+        const ctxptr = wren.c.wrenGetUserData(vm);
+        const ctx: *ScriptContext = @ptrCast(@alignCast(ctxptr));
+
+        var listeners = &@field(self.listeners, @tagName(event));
+
+        // first, move all listeners
+        var drained = std.ArrayList(FiberHandle).init(self.allocator);
+        try drained.appendSlice(listeners.items);
+        listeners.clearRetainingCapacity();
+
+        var resumed: usize = 0;
+        for (drained.items) |fiber| {
+            self.trace.fields("dispatching-event", .{
+                .fiber = fiber,
+                .event = event,
+            });
+            try ctx.callFiber(vm, fiber, event);
+            _ = try self.handleYieldAndSchedule(vm, fiber);
+            resumed += 1;
         }
 
         return resumed;

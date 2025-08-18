@@ -2,7 +2,6 @@ const std = @import("std");
 const cli = @import("cli.zig");
 const live = @import("live.zig");
 const one_shot = @import("one_shot.zig");
-const FormatTrace = @import("FormatTrace.zig");
 const Trace = @import("Trace.zig");
 
 /// Main application coordinator
@@ -56,13 +55,6 @@ pub const Application = struct {
         if (self.args.unicode_boxes != null) {
             std.log.warn("--[no-]unicode-boxes option is deprecated and ignored", .{});
         }
-
-        // Defer debug trace formatting if requested
-        defer if (self.args.debug_mode and self.args.log_path != null) {
-            self.formatDebugTrace() catch |err| {
-                std.log.warn("Failed to format trace: {}", .{err});
-            };
-        };
 
         // Route to appropriate mode
         switch (self.args.mode) {
@@ -125,30 +117,5 @@ pub const Application = struct {
 
         try file.writeAll(content);
         return path;
-    }
-
-    fn formatDebugTrace(self: *Application) !void {
-        const log_path = self.args.log_path.?;
-
-        var file = std.fs.cwd().openFile(log_path, .{ .mode = .read_only }) catch |err| {
-            std.log.warn("Could not open log file {s}: {}", .{ log_path, err });
-            return;
-        };
-        defer file.close();
-
-        const stat = try file.stat();
-        const size: usize = @intCast(stat.size);
-        const bytes = try self.allocator.alloc(u8, size);
-        defer self.allocator.free(bytes);
-        _ = try file.readAll(bytes);
-
-        const formatted = FormatTrace.formatLogXml(self.allocator, bytes) catch |err| {
-            std.log.warn("Trace format failed: {}", .{err});
-            return;
-        };
-        defer self.allocator.free(formatted);
-
-        const stdout = std.io.getStdOut().writer();
-        try stdout.writeAll(formatted);
     }
 };

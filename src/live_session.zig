@@ -3,7 +3,6 @@ const dom = @import("dom.zig");
 const renderer = @import("renderer.zig");
 const WrenRunner = @import("wren/runtime.zig");
 const Trace = @import("Trace.zig").Trace;
-const event_dispatch = @import("event_dispatch.zig");
 const scheduler_mod = @import("scheduler.zig");
 
 /// Core session state - the "model" in our architecture
@@ -15,6 +14,7 @@ pub const LiveSession = struct {
     scheduler: *scheduler_mod.Scheduler,
     root_id: dom.DomNodeId,
     trace: *Trace,
+    key_map: std.AutoHashMap(u8, []const u8),
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -33,6 +33,7 @@ pub const LiveSession = struct {
             .root_id = root_id,
             .trace = trace,
             .scheduler = scheduler,
+            .key_map = std.AutoHashMap(u8, []const u8).init(allocator),
         };
     }
 
@@ -59,28 +60,33 @@ pub const LiveSession = struct {
         // Pump timers and ready fibers with a small budget
         const now_ms = std.time.milliTimestamp();
         const resumed = try self.scheduler.pump(self.wren_runner.vm.vm, now_ms, 64);
-
-        // we're running this at animation frame rate, so we can just call it here
+        const resumed_events = try self.scheduler.pumpEvents(self.wren_runner.vm.vm);
         const resumed_next_frame = try self.scheduler.animationFrame(self.wren_runner.vm.vm);
 
-        return resumed > 0 or resumed_next_frame > 0;
+        return resumed > 0 or resumed_events > 0 or resumed_next_frame > 0;
     }
 
-    /// Handle keyboard input
-    pub fn handleKeypress(self: *LiveSession, key: u8) !void {
-        // Build key string for event dispatch
-        var key_buf: [16]u8 = undefined;
-        const key_str = switch (key) {
+    fn getKeyString(self: *LiveSession, key: u8) ![]const u8 {
+        return switch (key) {
             '\r', '\n' => "Enter",
             127 => "Backspace",
             '\t' => "Tab",
             27 => "Escape",
             ' ' => "Space",
             else => blk: {
-                key_buf[0] = key;
-                break :blk key_buf[0..1];
+                const str = self.key_map.get(key) orelse {
+                    const str = try self.allocator.dupe(u8, &[_]u8{key});
+                    try self.key_map.put(key, str);
+                    break :blk str;
+                };
+                break :blk str;
             },
         };
+    }
+
+    /// Handle keyboard input
+    pub fn handleKeypress(self: *LiveSession, key: u8) !void {
+        const key_str = try self.getKeyString(key);
 
         self.trace.enter();
         defer self.trace.exit();
@@ -91,12 +97,7 @@ pub const LiveSession = struct {
             .string = key_str,
         });
 
-        std.debug.panic("keypress: {s}", .{key_str});
-
-        // Re-render after input
-        self.wren_runner.script_context.viewport_width = self.renderer.opts.width;
-        self.wren_runner.script_context.viewport_height = self.renderer.opts.height;
-        try self.render();
+        try self.scheduler.enqueueEvent(.{ .keypress = .{ .key = key_str } });
     }
 };
 
