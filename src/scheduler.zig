@@ -104,11 +104,24 @@ pub const Scheduler = struct {
         self.trace.info("Timer registered");
     }
 
+    /// Enqueue a fiber to be resumed as soon as possible
+    pub fn enqueueReady(self: *Scheduler, fiber: FiberHandle) !void {
+        try self.ready.append(fiber);
+    }
+
+    /// Check if there are any pending fibers waiting to be processed
+    pub fn hasPendingWork(self: *Scheduler) bool {
+        return self.ready.items.len > 0 or
+            self.next_frame.items.len > 0 or
+            self.timers.items.len > 0 or
+            self.awaiters.count() > 0;
+    }
+
     // Internal: resume a fiber with a prebuilt map in slot 1
-    fn resumeWithSlot1Map(vm: *wren.c.VM, fiber: FiberHandle) void {
+    fn resumeWithSlot1Map(vm: *wren.c.VM, fiber: FiberHandle) !void {
         var cb = CallBuilder.init(vm);
         cb.ensureSlots(2);
-        cb.callFiber(fiber, 1);
+        try cb.callFiber(fiber, 1);
     }
 
     // Helper: set simple key->value string in map at slot 1
@@ -118,7 +131,7 @@ pub const Scheduler = struct {
     }
 
     // Post a general event to awaiters
-    pub fn postEvent(self: *Scheduler, vm: *wren.c.VM, ev: events.Event) void {
+    pub fn postEvent(self: *Scheduler, vm: *wren.c.VM, ev: events.Event) !void {
         const k = awaitKey(ev.target, ev.type);
         const g = self.awaiters.getPtr(k) orelse return;
 
@@ -140,15 +153,15 @@ pub const Scheduler = struct {
             cb.mapPutNum(1, "timestamp", @floatFromInt(ev.timestamp));
 
             // resume
-            resumeWithSlot1Map(vm, fiber);
-            // release handle after resumption
-            wren.c.wrenReleaseHandle(vm, fiber);
+            try resumeWithSlot1Map(vm, fiber);
+            // process yielded request or completion
+            _ = try self.handleYieldAndSchedule(vm, fiber);
         }
 
         list.deinit();
     }
 
-    pub fn animationFrame(self: *Scheduler, vm: *wren.c.VM) usize {
+    pub fn animationFrame(self: *Scheduler, vm: *wren.c.VM) !usize {
         self.trace.enter();
         defer self.trace.exit();
 
@@ -164,21 +177,15 @@ pub const Scheduler = struct {
         // Swap out the list to avoid realloc/mutation during resume
         var drained = std.ArrayList(FiberHandle).init(self.allocator);
         // Move contents; if OOM, do nothing this frame
-        if (drained.appendSlice(self.next_frame.items)) |_| {
-            // ok
-        } else |_| {
-            self.trace.decision("OOM during fiber drain, skipping frame");
-            drained.deinit();
-            return 0;
-        }
+        try drained.appendSlice(self.next_frame.items);
         self.next_frame.clearRetainingCapacity();
 
         var resumed_count: usize = 0;
         for (drained.items) |fiber| {
             wren.c.wrenEnsureSlots(vm, 2);
             wren.c.wrenSetSlotNewMap(vm, 1);
-            resumeWithSlot1Map(vm, fiber);
-            wren.c.wrenReleaseHandle(vm, fiber);
+            try resumeWithSlot1Map(vm, fiber);
+            _ = try self.handleYieldAndSchedule(vm, fiber);
             resumed_count += 1;
         }
         drained.deinit();
@@ -191,20 +198,11 @@ pub const Scheduler = struct {
     }
 
     /// Pump due timers and ready queue; returns number of resumed fibers
-    pub fn pump(self: *Scheduler, vm: *wren.c.VM, now_ms: i64, max_resumes: usize) usize {
+    pub fn pump(self: *Scheduler, vm: *wren.c.VM, now_ms: i64, max_resumes: usize) !usize {
         self.trace.enter();
         defer self.trace.exit();
 
         var resumed: usize = 0;
-        const initial_timers = self.timers.items.len;
-        const initial_ready = self.ready.items.len;
-
-        self.trace.fields("pump-start", .{
-            .now_ms = now_ms,
-            .max_resumes = max_resumes,
-            .pending_timers = initial_timers,
-            .ready_fibers = initial_ready,
-        });
 
         // Resume due timers (simple linear scan; optimize to heap later)
         var timer_resumes: usize = 0;
@@ -212,12 +210,16 @@ pub const Scheduler = struct {
         while (i < self.timers.items.len and resumed < max_resumes) {
             const t = self.timers.items[i];
             if (t.deadline_ms <= now_ms) {
-                // Remove by swap
+                self.trace.fields("timer-resume", .{
+                    .fiber = t.fiber,
+                    .now_ms = now_ms,
+                    .deadline_ms = t.deadline_ms,
+                });
                 _ = self.timers.swapRemove(i);
                 wren.c.wrenEnsureSlots(vm, 2);
                 wren.c.wrenSetSlotNewMap(vm, 1);
-                resumeWithSlot1Map(vm, t.fiber);
-                wren.c.wrenReleaseHandle(vm, t.fiber);
+                try resumeWithSlot1Map(vm, t.fiber);
+                _ = try self.handleYieldAndSchedule(vm, t.fiber);
                 resumed += 1;
                 timer_resumes += 1;
                 continue; // don't i+=1 because we swapped
@@ -229,22 +231,192 @@ pub const Scheduler = struct {
         var ready_resumes: usize = 0;
         while (resumed < max_resumes and self.ready.items.len > 0) {
             const fiber = self.ready.pop();
+            self.trace.fields("ready-resume", .{
+                .fiber = fiber,
+                .now_ms = now_ms,
+            });
             wren.c.wrenEnsureSlots(vm, 2);
             wren.c.wrenSetSlotNewMap(vm, 1);
-            resumeWithSlot1Map(vm, fiber.?);
-            wren.c.wrenReleaseHandle(vm, fiber.?);
+            try resumeWithSlot1Map(vm, fiber.?);
+            _ = try self.handleYieldAndSchedule(vm, fiber.?);
             resumed += 1;
             ready_resumes += 1;
         }
 
-        self.trace.fields("pump-complete", .{
-            .timer_resumes = timer_resumes,
-            .ready_resumes = ready_resumes,
-            .total_resumed = resumed,
-            .remaining_timers = self.timers.items.len,
-            .remaining_ready = self.ready.items.len,
-        });
-
         return resumed;
+    }
+
+    /// Inspect the value in slot 0 after resuming a fiber and schedule based on
+    /// yielded request tuples. Returns true if the fiber handle is retained for
+    /// future resumption, false if released (i.e., fiber completed).
+    fn handleYieldAndSchedule(self: *Scheduler, vm: *wren.c.VM, fiber: FiberHandle) !bool {
+        var steps: usize = 0;
+        while (steps < 1024 * 256) : (steps += 1) {
+            // Ensure we have at least one slot available
+            wren.c.wrenEnsureSlots(vm, 1);
+            self.trace.fields("handleYieldAndSchedule", .{
+                .steps = steps,
+            });
+            // Check if slot 0 has a valid value
+            if (wren.c.wrenGetSlotCount(vm) < 1) {
+                self.trace.decision("No slots available -> treat as completion");
+                wren.c.wrenReleaseHandle(vm, fiber);
+                return false;
+            }
+
+            const ty: wren.c.Type = @enumFromInt(wren.c.wrenGetSlotType(vm, 0));
+
+            if (ty != .list) {
+                self.trace.decision("Not a request list -> treat as completion");
+                // Not a request list -> treat as completion
+                wren.c.wrenReleaseHandle(vm, fiber);
+                return false;
+            }
+
+            wren.c.wrenEnsureSlots(vm, 4);
+            // key at index 0
+            wren.c.wrenGetListElement(vm, 0, 0, 1);
+
+            const key_type = @as(wren.c.Type, @enumFromInt(wren.c.wrenGetSlotType(vm, 1)));
+            if (key_type == .string) {
+                var key_len: c_int = 0;
+                const key_ptr = wren.c.wrenGetSlotBytes(vm, 1, &key_len);
+                const key = key_ptr[0..@intCast(key_len)];
+                self.trace.fields("key", .{ .key = key });
+
+                // Scheduling requests
+                if (std.mem.eql(u8, key, "wait")) {
+                    // ["wait", nodeId, type]
+                    wren.c.wrenGetListElement(vm, 0, 1, 2);
+                    const node_d = wren.c.wrenGetSlotDouble(vm, 2);
+                    wren.c.wrenGetListElement(vm, 0, 2, 2);
+                    var et_len: c_int = 0;
+                    const et_ptr = wren.c.wrenGetSlotBytes(vm, 2, &et_len);
+                    const et_slice = et_ptr[0..@intCast(et_len)];
+                    const et = events.EventType.fromString(et_slice) orelse {
+                        wren.c.wrenReleaseHandle(vm, fiber);
+                        return false;
+                    };
+                    self.registerWait(@intFromFloat(node_d), et, fiber) catch {};
+                    return true;
+                }
+                if (std.mem.eql(u8, key, "frame")) {
+                    self.registerNextFrame(fiber) catch {};
+                    return true;
+                }
+                if (std.mem.eql(u8, key, "sleep")) {
+                    wren.c.wrenGetListElement(vm, 0, 1, 2);
+                    const ms = wren.c.wrenGetSlotDouble(vm, 2);
+                    const now = std.time.milliTimestamp();
+                    self.registerTimer(now, ms, fiber) catch {};
+                    return true;
+                } else {
+                    self.trace.decision("Unknown syscall key");
+                    self.trace.fields("unknown-syscall-key", .{
+                        .key = key,
+                    });
+                    wren.c.wrenReleaseHandle(vm, fiber);
+                    return false;
+                }
+            } else if (key_type == .num) {
+
+                // Index-based ffi: key == 1 (num) -> [1, flat_function_id, ...args]
+                if (wren.c.wrenGetSlotDouble(vm, 1) == 1) {
+                    // Read id
+                    wren.c.wrenGetListElement(vm, 0, 1, 1);
+                    const fid = @as(usize, @intFromFloat(wren.c.wrenGetSlotDouble(vm, 1)));
+
+                    // Lookup in function registry by flat index
+                    const Ctx = @import("wren/runtime.zig").ScriptContext;
+                    const functions = wren.ScriptEngine(Ctx).foreign_functions;
+                    if (fid >= functions.len) {
+                        wren.c.wrenReleaseHandle(vm, fiber);
+                        return false;
+                    }
+                    const target_fn = functions[fid];
+
+                    const arg_count_total: usize = @intCast(wren.c.wrenGetListCount(vm, 0));
+                    if (arg_count_total < 2) {
+                        wren.c.wrenReleaseHandle(vm, fiber);
+                        return false;
+                    }
+                    const arity: usize = arg_count_total - 2;
+                    if (arity != target_fn.arity) {
+                        wren.c.wrenReleaseHandle(vm, fiber);
+                        return false;
+                    }
+
+                    // Place args into slots
+                    wren.c.wrenEnsureSlots(vm, @intCast(arity + 1));
+                    var ai: usize = 0;
+                    while (ai < arity) : (ai += 1) {
+                        wren.c.wrenGetListElement(vm, 0, @intCast(ai + 2), @intCast(ai + 1));
+                    }
+
+                    // Call the function directly
+                    self.trace.fields("ffi-function", .{
+                        .function_id = fid,
+                        .arity = arity,
+                        .name = target_fn.name,
+                    });
+                    target_fn.func(vm);
+                    self.trace.info("ffi-function-called");
+
+                    // Resume fiber with return in slot 0
+                    const ret_ty: wren.c.Type = @enumFromInt(wren.c.wrenGetSlotType(vm, 0));
+                    wren.c.wrenEnsureSlots(vm, 3);
+                    switch (ret_ty) {
+                        .num => wren.c.wrenSetSlotDouble(vm, 2, wren.c.wrenGetSlotDouble(vm, 0)),
+                        .bool => wren.c.wrenSetSlotBool(vm, 2, wren.c.wrenGetSlotBool(vm, 0)),
+                        .string => {
+                            var rlen: c_int = 0;
+                            const rptr = wren.c.wrenGetSlotBytes(vm, 0, &rlen);
+                            wren.c.wrenSetSlotBytes(vm, 2, rptr, @intCast(rlen));
+                        },
+                        .null => wren.c.wrenSetSlotNull(vm, 2),
+                        else => wren.c.wrenSetSlotNull(vm, 2),
+                    }
+                    wren.c.wrenSetSlotHandle(vm, 0, fiber);
+                    switch (ret_ty) {
+                        .num => wren.c.wrenSetSlotDouble(vm, 1, wren.c.wrenGetSlotDouble(vm, 2)),
+                        .bool => wren.c.wrenSetSlotBool(vm, 1, wren.c.wrenGetSlotBool(vm, 2)),
+                        .string => {
+                            var tlen: c_int = 0;
+                            const tptr = wren.c.wrenGetSlotBytes(vm, 2, &tlen);
+                            wren.c.wrenSetSlotBytes(vm, 1, tptr, @intCast(tlen));
+                        },
+                        .null => wren.c.wrenSetSlotNull(vm, 1),
+                        else => wren.c.wrenSetSlotNull(vm, 1),
+                    }
+
+                    self.trace.decision("calling fiber again");
+                    const ch = wren.c.wrenMakeCallHandle(vm, "call(_)") orelse {
+                        self.trace.info("failed to make call handle");
+                        wren.c.wrenReleaseHandle(vm, fiber);
+                        return false;
+                    };
+                    defer wren.c.wrenReleaseHandle(vm, ch);
+                    const result = @as(wren.c.InterpretResult, @enumFromInt(wren.c.wrenCall(vm, ch)));
+                    switch (result) {
+                        .success => {
+                            self.trace.info("call succeeded");
+                        },
+                        .compile_error => {
+                            std.debug.panic("compile error in fiber call", .{});
+                        },
+                        .runtime_error => {
+                            self.trace.info("runtime error in fiber call");
+                            return error.RuntimeError;
+                        },
+                    }
+                    continue;
+                }
+            }
+
+            wren.c.wrenReleaseHandle(vm, fiber);
+            return false;
+        }
+
+        std.debug.panic("too many chained syscalls", .{});
     }
 };

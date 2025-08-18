@@ -25,7 +25,6 @@ pub fn createText(_: *VM, ctx: *Ctx, text: []const u8) DomNodeId {
     return ctx.document.addText(text) catch @panic("createText");
 }
 
-
 pub fn appendChild(
     _: *VM,
     ctx: *Ctx,

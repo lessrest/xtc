@@ -118,12 +118,12 @@ pub fn renderXmlAscii(
     defer glyphs.deinit();
     var ctx = paint.PaintContext.init(al, &unicode, &trace);
     defer ctx.deinit();
-    try paint.computePaintCommands(&ctx, document, &tree, &glyphs);
+    try paint.computePaintCommands(&ctx, document, &tree, glyphs);
 
     // Paint commands are now logged via the tracing system
 
-    try tty.rasterizeDisplayList(&r, al, &glyphs, &ctx);
-    return try r.toStringAlloc(al, &glyphs);
+    try tty.rasterizeDisplayList(&r, al, glyphs, &ctx);
+    return try r.toStringAlloc(al, glyphs);
 }
 
 pub fn renderDocumentToWriter(

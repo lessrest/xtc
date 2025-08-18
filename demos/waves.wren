@@ -67,7 +67,6 @@ class CombinedWaveAnimation {
     }
 
     setupDOM()
-    startAnimation()
   }
 
   setupDOM() {
@@ -101,13 +100,6 @@ class CombinedWaveAnimation {
 
 
     _container.append(mainBox)
-  }
-
-  startAnimation() {
-    var animation = Fiber.new {
-      animate()
-    }
-    animation.call()
   }
 
   animate() {
@@ -256,18 +248,19 @@ class CombinedWaveAnimation {
         }
       }
 
-      // Wait for next frame
       TUI.nextFrame()
     }
   }
 }
 
-// Main execution
-var container = Document.getElementById("waves")
-if (container == null) {
-  System.print("Error: Could not find waves element")
-} else {
-  // Create the combined beautiful animation
-  var combinedWaves = CombinedWaveAnimation.new(container)
-  System.print("✨ Mystical Ocean Waves with shimmering stars and floating particles! ✨")
-}
+TUI.enqueue(Fiber.new {
+  var container = Document.getElementById("waves")
+  if (container == null) {
+    System.print("Error: Could not find waves element")
+  } else {
+    // Create the combined beautiful animation
+    var combinedWaves = CombinedWaveAnimation.new(container)
+    System.print("✨ Mystical Ocean Waves with shimmering stars and floating particles! ✨")
+    combinedWaves.animate()
+  }
+})

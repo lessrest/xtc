@@ -182,7 +182,7 @@ pub fn TreeNest(comptime Writer: type) type {
         pub fn setMaxDepth(self: *Self, max_depth: ?usize) void {
             self.max_depth = max_depth;
         }
-        
+
         pub fn setEnabled(self: *Self, enabled: bool) void {
             self.enabled = enabled;
         }
@@ -190,7 +190,7 @@ pub fn TreeNest(comptime Writer: type) type {
         pub fn disabled(self: *const Self) bool {
             return !self.enabled;
         }
-        
+
         pub fn shouldOutput(self: *const Self) bool {
             if (!self.enabled) return false;
             if (self.max_depth) |max| {
@@ -198,32 +198,32 @@ pub fn TreeNest(comptime Writer: type) type {
             }
             return true;
         }
-        
+
         // Convenience methods for creating modified copies
         pub fn silent(self: Self) Self {
             var copy = self;
             copy.enabled = false;
             return copy;
         }
-        
+
         pub fn unlimited(self: Self) Self {
             var copy = self;
             copy.enabled = true;
             copy.max_depth = null;
             return copy;
         }
-        
+
         pub fn limited(self: Self, max_depth: usize) Self {
             var copy = self;
             copy.enabled = true;
             copy.max_depth = max_depth;
             return copy;
         }
-        
+
         // Simplified: enter/exit manage depth and stack properly
         pub fn enter(self: *Self) void {
             if (!self.enabled) return;
-            
+
             // Always push to stack and increment depth
             self.stack.append(.{ .has_more = true }) catch return;
             self.depth += 1;
@@ -231,18 +231,25 @@ pub fn TreeNest(comptime Writer: type) type {
 
         pub fn exit(self: *Self) void {
             if (!self.enabled) return;
-            
+
             // Always pop from stack and decrement depth if we have something
             if (self.stack.items.len > 0) {
                 _ = self.stack.pop();
                 self.depth -= 1;
             }
         }
-        
+
         // Tracing-specific methods
         pub fn info(self: *Self, comptime description: []const u8) void {
             if (!self.shouldOutput()) return;
             self.styledLine(description, .{ .fg = Color.cyan }) catch {};
+        }
+
+        pub fn yell(self: *Self, comptime format: []const u8, args: anytype) void {
+            if (!self.shouldOutput()) return;
+            const text = std.fmt.allocPrint(self.allocator, "🔔 " ++ format, args) catch return;
+            defer self.allocator.free(text);
+            self.styledLine(text, .{ .fg = Color.yellow }) catch {};
         }
 
         pub fn decision(self: *Self, comptime description: []const u8) void {
@@ -256,19 +263,19 @@ pub fn TreeNest(comptime Writer: type) type {
             if (!self.shouldOutput()) return;
             self.styledLine(description, .{ .fg = Color.gray, .italic = true }) catch {};
         }
-        
+
         pub fn put(self: *Self, comptime key: []const u8, value: anytype) *Self {
             if (!self.shouldOutput()) return self;
-            
+
             // Write continuation indent
             if (self.depth > 0) {
                 self.writeContinuation() catch return self;
             }
-            
+
             // Write key
             self.writer.writeAll(key) catch return self;
             self.writer.writeAll(": ") catch return self;
-            
+
             // Format and write the value
             const ValueType = @TypeOf(value);
             switch (@typeInfo(ValueType)) {
@@ -306,15 +313,15 @@ pub fn TreeNest(comptime Writer: type) type {
                 },
                 else => self.writer.print("{any}", .{value}) catch return self,
             }
-            
+
             self.writer.writeAll("\n") catch return self;
             return self;
         }
-        
+
         // Output a labeled data section with fields
         pub fn fields(self: *Self, comptime label: []const u8, data: anytype) void {
             if (!self.shouldOutput()) return;
-            
+
             // Output data group header with icon
             if (self.depth > 0) {
                 self.writeContinuation() catch return;
@@ -322,24 +329,24 @@ pub fn TreeNest(comptime Writer: type) type {
             self.applyStyle(.{ .fg = Color.magenta, .bold = true }) catch {};
             self.writer.print("📊 {s}\n", .{label}) catch return;
             self.resetStyle() catch {};
-            
+
             // Enter a new level for the fields
             self.enter();
             defer self.exit();
-            
+
             // Output each field
             const type_info = @typeInfo(@TypeOf(data));
             inline for (type_info.@"struct".fields) |field| {
                 if (self.depth > 0) {
                     self.writeContinuation() catch return;
                 }
-                
+
                 self.writer.writeAll(field.name) catch return;
                 self.writer.writeAll(": ") catch return;
-                
+
                 const value = @field(data, field.name);
                 const ValueType = @TypeOf(value);
-                
+
                 switch (@typeInfo(ValueType)) {
                     .int => self.writer.print("{d}", .{value}) catch return,
                     .float => self.writer.print("{d:.2}", .{value}) catch return,
@@ -347,8 +354,10 @@ pub fn TreeNest(comptime Writer: type) type {
                     .pointer => |ptr_info| {
                         if (ptr_info.size == .slice and ptr_info.child == u8) {
                             self.writer.print("{s}", .{value}) catch return;
+                        } else if (ptr_info.size == .many and ptr_info.child == u8 and ptr_info.sentinel_ptr != null) {
+                            self.writer.print("{s}", .{std.mem.span(value)}) catch return;
                         } else {
-                            self.writer.print("{any}", .{value}) catch return;
+                            self.writer.print("(pointer)", .{}) catch return;
                         }
                     },
                     .array => |arr_info| {
@@ -368,7 +377,7 @@ pub fn TreeNest(comptime Writer: type) type {
                     },
                     else => self.writer.print("{any}", .{value}) catch return,
                 }
-                
+
                 self.writer.writeAll("\n") catch return;
             }
         }
@@ -453,7 +462,6 @@ pub fn TreeNest(comptime Writer: type) type {
                 }
             }
         }
-
 
         pub fn setLast(self: *Self) void {
             if (self.stack.items.len > 0) {
@@ -587,7 +595,6 @@ pub fn TreeNest(comptime Writer: type) type {
                 try self.inlineJoined(" ");
             }
         };
-        
     };
 }
 

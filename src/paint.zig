@@ -83,42 +83,43 @@ pub const PaintOp = union(PaintOpTag) {
 };
 
 pub const UnicodeData = struct {
-    graphemes: Graphemes,
-    display_width: DisplayWidth,
-    words: Words,
+    graphemes: *Graphemes,
+    display_width: *DisplayWidth,
+    words: *Words,
 
     pub fn init(allocator: std.mem.Allocator) !UnicodeData {
-        var graphemes = try Graphemes.init(allocator);
-        errdefer graphemes.deinit(allocator);
-
-        var display_width = try DisplayWidth.initWithGraphemes(allocator, graphemes);
-        errdefer display_width.deinit(allocator);
-
-        var words = try Words.init(allocator);
-        errdefer words.deinit(allocator);
-
-        return .{
-            .graphemes = graphemes,
-            .display_width = display_width,
-            .words = words,
+        const this = UnicodeData{
+            .graphemes = try allocator.create(Graphemes),
+            .display_width = try allocator.create(DisplayWidth),
+            .words = try allocator.create(Words),
         };
+
+        try Graphemes.setup(this.graphemes, allocator);
+        try DisplayWidth.setupWithGraphemes(this.display_width, allocator, this.graphemes.*);
+        try Words.setup(this.words, allocator);
+
+        return this;
     }
 
     pub fn deinit(self: *UnicodeData, allocator: std.mem.Allocator) void {
         self.graphemes.deinit(allocator);
         self.display_width.deinit(allocator);
         self.words.deinit(allocator);
+        allocator.destroy(self.graphemes);
+        allocator.destroy(self.display_width);
+        allocator.destroy(self.words);
+        self.* = undefined;
     }
 
     pub fn monospacedTextWidth(self: *const UnicodeData, text: []const u8) usize {
         return self.display_width.strWidth(text);
     }
 
-    pub fn graphemeClusterIterator(self: *const UnicodeData, text: []const u8) @TypeOf(self.graphemes.iterator(text)) {
+    pub fn graphemeClusterIterator(self: *const UnicodeData, text: []const u8) Graphemes.Iterator {
         return self.graphemes.iterator(text);
     }
 
-    pub fn wordIterator(self: *const UnicodeData, text: []const u8) @TypeOf(self.words.iterator(text)) {
+    pub fn wordIterator(self: *const UnicodeData, text: []const u8) Words.Iterator {
         return self.words.iterator(text);
     }
 };
@@ -377,7 +378,6 @@ fn buildGlyphRun(
         .truncate_to_fit = truncate_to_fit,
     });
 
-    std.debug.print("text_bytes: '{s}'\n", .{text_bytes});
     var glyph_ids = std.ArrayList(tty.GlyphId).init(ctx.ops.allocator);
     defer glyph_ids.deinit();
 
@@ -387,7 +387,6 @@ fn buildGlyphRun(
 
     // Process each grapheme cluster in the text
     while (grapheme_iter.next()) |grapheme_cluster| {
-        std.debug.print("grapheme_bytes: '{s}'\n", .{grapheme_cluster.bytes(text_bytes)});
         const grapheme_bytes = grapheme_cluster.bytes(text_bytes);
         const grapheme_width = ctx.unicode.monospacedTextWidth(grapheme_bytes);
         grapheme_count += 1;
@@ -500,7 +499,6 @@ fn emitTextGlyphRuns(
 
         while (witer.next()) |seg| {
             const bytes = seg.bytes(line);
-            std.debug.print("bytes: '{s}'\n", .{bytes});
             const seg_w = ctx.unicode.monospacedTextWidth(bytes);
 
             if (line_width + seg_w > cb.rect.w and line_width > 0) {
@@ -725,8 +723,8 @@ test "stroke rect command renders unicode box-drawing characters to the raster" 
     defer ctx.deinit();
     try ctx.push(PaintOp{ .StrokeRect = .{ .x = 2, .y = 1, .w = 6, .h = 4, .color = rgba8(255, 255, 255, 255), .style = .line_light, .bg_color = rgba8(0, 0, 0, 255) } });
     // This test checks Unicode border rendering
-    try tty.rasterizeDisplayList(&r, al, &glyphs, &ctx);
-    const got = try r.toStringAlloc(al, &glyphs);
+    try tty.rasterizeDisplayList(&r, al, glyphs, &ctx);
+    const got = try r.toStringAlloc(al, glyphs);
     defer al.free(got);
     const want =
         "          \n" ++
@@ -770,7 +768,7 @@ test "text nodes inherit foreground color from their parent element's style" {
     defer glyphs.deinit();
     var ctx = PaintContext.init(al, &unicode, &trace);
     defer ctx.deinit();
-    try computePaintCommands(&ctx, d, &tree, &glyphs);
+    try computePaintCommands(&ctx, d, &tree, glyphs);
 
     var found = false;
     var got: Rgba8 = undefined;

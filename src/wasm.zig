@@ -20,7 +20,6 @@ pub const WasmLiveSession = struct {
     pub const Config = struct {
         output: cli.OutputConfig,
         log_file: ?std.fs.File = null,
-        trace: *Trace,
     };
 
     pub const LiveSession = @import("live_session.zig").LiveSession;
@@ -41,7 +40,7 @@ pub const WasmLiveSession = struct {
 
         // Create scheduler for fiber management
         const scheduler = try self.allocator.create(@import("scheduler.zig").Scheduler);
-        scheduler.* = @import("scheduler.zig").Scheduler.init(self.allocator, self.config.trace);
+        scheduler.* = @import("scheduler.zig").Scheduler.init(self.allocator, &self.components.?.trace);
 
         self.components.?.wren_runner.script_context.scheduler = scheduler;
 
@@ -70,7 +69,7 @@ pub const WasmLiveSession = struct {
             .{
                 .allocator = self.allocator,
                 .unicode = &self.components.?.unicode,
-                .glyphs = &self.components.?.glyphs,
+                .glyphs = self.components.?.glyphs,
             },
             .{
                 .width = self.config.output.width,
@@ -86,7 +85,7 @@ pub const WasmLiveSession = struct {
             self.components.?.wren_runner,
             scheduler,
             load_result.root_id,
-            self.config.trace,
+            &self.components.?.trace,
         );
 
         self.is_initialized = true;
@@ -132,7 +131,8 @@ const Components = struct {
     unicode: paint.UnicodeData,
     document: *dom.Dom,
     wren_runner: *WrenRunner,
-    glyphs: tty.GlyphTable,
+    glyphs: *tty.GlyphTable,
+    trace: Trace,
 
     fn deinit(self: *Components) void {
         self.unicode.deinit(self.document.alloc);
@@ -153,7 +153,7 @@ fn initializeComponents(allocator: std.mem.Allocator) !Components {
     var wren_runner = try WrenRunner.init(allocator, document);
     errdefer wren_runner.deinit();
 
-    var glyphs = try tty.GlyphTable.init(allocator);
+    const glyphs = try tty.GlyphTable.init(allocator);
     errdefer glyphs.deinit();
 
     return Components{
@@ -161,6 +161,7 @@ fn initializeComponents(allocator: std.mem.Allocator) !Components {
         .document = document,
         .wren_runner = wren_runner,
         .glyphs = glyphs,
+        .trace = @import("Trace.zig").file(std.io.getStdErr(), .{ .enabled = false }),
     };
 }
 
@@ -282,17 +283,12 @@ export fn xtc_render(xml_ptr: [*]const u8, xml_len: usize, width: u32, height: u
 
 // Initialize a live session for interactive WASM use
 fn initLiveSessionWasm(xml: []const u8, width: u32, height: u32) !WasmLiveSession {
-    // Create a disabled trace for WASM
-    const stderr = std.io.getStdErr();
-    var trace = @import("Trace.zig").file(stderr, .{ .enabled = false });
-
     // Create WASM session config
     const config = WasmLiveSession.Config{
         .output = cli.OutputConfig{
             .width = width,
             .height = height,
         },
-        .trace = &trace,
     };
 
     // Create session with global allocator

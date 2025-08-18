@@ -30,7 +30,13 @@ pub fn build(b: *std.Build) void {
             "deps/wren/src/optional/wren_opt_meta.c",
             "deps/wren/src/optional/wren_opt_random.c",
         },
-        .flags = &.{ "-std=c99", "-Wall", "-Wextra", "-Wno-unused-parameter" },
+        .flags = &.{
+            "-std=c99",
+            "-Wall",
+            "-Wextra",
+            "-Wno-unused-parameter",
+            "-g",
+        },
     });
 
     const libwren = b.addLibrary(.{
@@ -48,7 +54,8 @@ pub fn build(b: *std.Build) void {
             .cpu_arch = .wasm32,
             .os_tag = .wasi,
         }),
-        .optimize = .ReleaseFast,
+        .optimize = optimize,
+        .strip = false,
     });
 
     libwren_wasm.addIncludePath(b.path("deps/wren/src/include"));
@@ -66,7 +73,7 @@ pub fn build(b: *std.Build) void {
             "deps/wren/src/optional/wren_opt_meta.c",
             "deps/wren/src/optional/wren_opt_random.c",
         },
-        .flags = &.{ "-std=c99", "-Wall", "-Wextra", "-Wno-unused-parameter" },
+        .flags = &.{ "-g", "-std=c99", "-Wall", "-Wextra", "-Wno-unused-parameter" },
     });
 
     libwren_wasm.linkLibC();
@@ -118,7 +125,8 @@ pub fn build(b: *std.Build) void {
             .cpu_arch = .wasm32,
             .os_tag = .wasi,
         }),
-        .optimize = .ReleaseFast,
+        .optimize = optimize,
+        .strip = false,
     });
 
     // Disable entry and export specific functions like Wisp

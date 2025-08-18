@@ -2,22 +2,22 @@ const std = @import("std");
 const c = @import("c.zig");
 
 pub const ModuleSpec = struct {
-    module_name: []const u8,
+    module_name: [:0]const u8,
     module_info: std.builtin.Type,
     module_classes: []const ClassSpec,
 };
 
 pub const ClassSpec = struct {
-    class_name: []const u8,
+    class_name: [:0]const u8,
     class_info: std.builtin.Type,
     class_functions: []const FunctionSpec,
 };
 
 pub const FunctionSpec = struct {
     // Zig method name, e.g. "say"
-    name: []const u8,
+    name: [:0]const u8,
     // Fully qualified Wren signature, e.g. "say(_)" or "hello()"
-    wren_signature: []const u8,
+    wren_signature: [:0]const u8,
     // Pointer to the Zig function
     func: *const anyopaque,
     // Full parameter list including the leading VM and context pointers
@@ -28,6 +28,8 @@ pub const FunctionSpec = struct {
     is_error_union: bool,
     // Full return type (may be error union)
     full_return_type: type,
+    // Unique ID for the function
+    id: usize = 0,
 
     pub fn arity(this: @This()) usize {
         // First two parameters are always *c.WrenVM and *T (ScriptContext)
@@ -37,14 +39,16 @@ pub const FunctionSpec = struct {
 };
 
 pub const ForeignFunction = struct {
-    module_name: []const u8,
-    class_name: []const u8,
-    wren_signature: []const u8,
+    module_name: [:0]const u8,
+    class_name: [:0]const u8,
+    wren_signature: [:0]const u8,
     func: c.ForeignMethodFn,
+    arity: usize,
+    id: usize = 0,
 };
 
 // Generate module specs from a type's Modules struct
-pub fn moduleSpecs(comptime T: type) []const ModuleSpec {
+pub fn moduleSpecs(comptime T: type, comptime global_id: *usize) []const ModuleSpec {
     const decls = std.meta.declarations(T.Modules);
     var specs: [decls.len]ModuleSpec = undefined;
     var i = 0;
@@ -52,7 +56,7 @@ pub fn moduleSpecs(comptime T: type) []const ModuleSpec {
         specs[i] = .{
             .module_name = decl.name,
             .module_info = @typeInfo(@field(T.Modules, decl.name)),
-            .module_classes = classSpecs(@field(T.Modules, decl.name)),
+            .module_classes = classSpecs(@field(T.Modules, decl.name), global_id),
         };
         i += 1;
     }
@@ -60,7 +64,7 @@ pub fn moduleSpecs(comptime T: type) []const ModuleSpec {
     return &specs_final;
 }
 
-pub fn classSpecs(comptime T: type) []const ClassSpec {
+pub fn classSpecs(comptime T: type, comptime global_id: *usize) []const ClassSpec {
     const decls = std.meta.declarations(T);
     var specs: [decls.len]ClassSpec = undefined;
     var i = 0;
@@ -68,7 +72,7 @@ pub fn classSpecs(comptime T: type) []const ClassSpec {
         specs[i] = .{
             .class_name = decl.name,
             .class_info = @typeInfo(@field(T, decl.name)),
-            .class_functions = functionSpecs(@field(T, decl.name)),
+            .class_functions = functionSpecs(@field(T, decl.name), global_id),
         };
         i += 1;
     }
@@ -76,7 +80,7 @@ pub fn classSpecs(comptime T: type) []const ClassSpec {
     return &specs_final;
 }
 
-pub fn functionSpecs(comptime T: type) []const FunctionSpec {
+pub fn functionSpecs(comptime T: type, comptime global_id: *usize) []const FunctionSpec {
     const decls = std.meta.declarations(T);
     var specs: [decls.len]FunctionSpec = undefined;
     var i = 0;
@@ -112,7 +116,9 @@ pub fn functionSpecs(comptime T: type) []const FunctionSpec {
             .return_type = R,
             .is_error_union = is_error_union,
             .full_return_type = full_return_type,
+            .id = global_id.*,
         };
+        global_id.* += 1;
         i += 1;
     }
     const specs_final = specs;
@@ -122,8 +128,8 @@ pub fn functionSpecs(comptime T: type) []const FunctionSpec {
 // Generate a foreign function wrapper for a specific function spec
 pub fn generateForeignFunction(
     comptime T: type,
-    comptime module_name: []const u8,
-    comptime class_name: []const u8,
+    comptime module_name: [:0]const u8,
+    comptime class_name: [:0]const u8,
     comptime spec: FunctionSpec,
 ) ForeignFunction {
     const container = struct {
@@ -173,6 +179,7 @@ pub fn generateForeignFunction(
         }
 
         pub fn invoke(vm: *c.VM) callconv(.C) void {
+            //            std.debug.print("invoke {s}\n", .{spec.name});
             const data: *T = @ptrCast(@alignCast(c.wrenGetUserData(vm)));
             // Build the function type from spec
             const params = spec.params;
@@ -259,5 +266,7 @@ pub fn generateForeignFunction(
         .class_name = class_name,
         .wren_signature = spec.wren_signature,
         .func = container.invoke,
+        .id = spec.id,
+        .arity = spec.arity(),
     };
 }

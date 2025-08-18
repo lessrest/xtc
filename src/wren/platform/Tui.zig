@@ -32,3 +32,9 @@ pub fn registerTimer(_: *wren.c.VM, ctx: *Ctx, ms: f64, fiber: *wren.c.Handle) v
         sch.registerTimer(now, ms, fiber) catch {};
     }
 }
+
+pub fn enqueue(_: *wren.c.VM, ctx: *Ctx, fiber: *wren.c.Handle) void {
+    if (ctx.*.scheduler) |sch| {
+        sch.enqueueReady(fiber) catch {};
+    }
+}

@@ -44,7 +44,6 @@ pub const LiveSession = struct {
 
         const stdout = std.io.getStdOut().writer();
         try self.renderer.renderAndPresent(self.document, self.root_id, self.trace, stdout);
-        std.debug.print("rendered\n", .{});
     }
 
     /// Handle terminal resize
@@ -59,10 +58,10 @@ pub const LiveSession = struct {
     pub fn processScheduler(self: *LiveSession) !bool {
         // Pump timers and ready fibers with a small budget
         const now_ms = std.time.milliTimestamp();
-        const resumed = self.scheduler.pump(self.wren_runner.vm.vm, now_ms, 64);
+        const resumed = try self.scheduler.pump(self.wren_runner.vm.vm, now_ms, 64);
 
         // we're running this at animation frame rate, so we can just call it here
-        const resumed_next_frame = self.scheduler.animationFrame(self.wren_runner.vm.vm);
+        const resumed_next_frame = try self.scheduler.animationFrame(self.wren_runner.vm.vm);
 
         return resumed > 0 or resumed_next_frame > 0;
     }
@@ -93,16 +92,14 @@ pub const LiveSession = struct {
         });
 
         // Post to fiber awaiters first
-        self.scheduler.postEvent(self.wren_runner.vm.vm, .{
+        try self.scheduler.postEvent(self.wren_runner.vm.vm, .{
             .type = .keypress,
             .target = 0,
             .key = key_str,
             .timestamp = std.time.milliTimestamp(),
         });
         // Then deliver to callback listeners (optional)
-        event_dispatch.dispatchKeypress(self.wren_runner.vm.vm, self.document, key_str) catch |err| {
-            std.log.warn("Failed to dispatch keypress event: {}", .{err});
-        };
+        try event_dispatch.dispatchKeypress(self.wren_runner.vm.vm, self.document, key_str);
 
         // Re-render after input
         self.wren_runner.script_context.viewport_width = self.renderer.opts.width;

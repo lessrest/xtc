@@ -2,35 +2,36 @@
 // Provides clean interface to manipulate the XTC DOM from Wren
 
 import "meta" for Meta
+import "tui" for Platform
 
 class Document {
-  static root { Element.new(DOM.root()) }
+  static root { Element.new(Platform.root()) }
 
   // Host viewport size
-  static width { DOM.viewportWidth() }
-  static height { DOM.viewportHeight() }
+  static width { Platform.viewportWidth() }
+  static height { Platform.viewportHeight() }
 
   static createElement(style) {
-    return Element.new(DOM.createElement(style))
+    return Element.new(Platform.createElement(style))
   }
 
   static createText(text) {
-    return Element.new(DOM.createText(text))
+    return Element.new(Platform.createText(text))
   }
 
 
   static getElementById(id) {
-    var nodeId = DOM.getElementById(id)
+    var nodeId = Platform.getElementById(id)
     if (nodeId == 4294967295) return null  // maxInt means not found
     return Element.new(nodeId)
   }
 
   static addEventListener(eventType, handler) {
-    return DOM.addEventListener(0, eventType, handler)
+    return Platform.addEventListener(0, eventType, handler)
   }
 
   static removeEventListener(eventType, handlerId) {
-    return DOM.removeEventListener(0, eventType, handlerId)
+    return Platform.removeEventListener(0, eventType, handlerId)
   }
 }
 
@@ -42,40 +43,40 @@ class Element {
   id { _id }
   id=(value) { _id = value }
 
-  childCount { DOM.getChildCount(_id) }
+  childCount { Platform.getChildCount(_id) }
 
   firstChild {
-    var childId = DOM.getFirstChild(_id)
+    var childId = Platform.getFirstChild(_id)
     if (childId == -1) return null
     return Element.new(childId)
   }
 
   append(child) {
-    DOM.appendChild(_id, child.id)
+    Platform.appendChild(_id, child.id)
   }
 
   removeChild(child) {
-    DOM.removeChild(_id, child.id)
+    Platform.removeChild(_id, child.id)
   }
 
   setDebugId(name) {
-    DOM.setDebugId(_id, name)
+    Platform.setDebugId(_id, name)
   }
 
   updateText(text) {
-    DOM.updateText(_id, text)
+    Platform.updateText(_id, text)
   }
 
   updateClass(className) {
-    DOM.updateClass(_id, className)
+    Platform.updateClass(_id, className)
   }
 
   addEventListener(eventType, handler) {
-    return DOM.addEventListener(_id, eventType, handler)
+    return Platform.addEventListener(_id, eventType, handler)
   }
 
   removeEventListener(eventType, handlerId) {
-    return DOM.removeEventListener(_id, eventType, handlerId)
+    return Platform.removeEventListener(_id, eventType, handlerId)
   }
 }
 

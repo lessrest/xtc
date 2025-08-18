@@ -7,6 +7,7 @@ const WrenRunner = @import("wren/runtime.zig");
 const DocumentLoader = @import("pageload.zig");
 const cli = @import("cli.zig");
 const Trace = @import("Trace.zig").Trace;
+const Scheduler = @import("scheduler.zig").Scheduler;
 
 /// One-shot rendering session - render once and exit
 pub const OneShotSession = struct {
@@ -29,8 +30,11 @@ pub const OneShotSession = struct {
     /// Run one-shot render with the given input
     pub fn run(self: *OneShotSession, input: cli.Input) !void {
         // Initialize components
-        var components = try initializeComponents(self.allocator);
+        var components = try initializeComponents(self.allocator, self.config.trace);
         defer components.deinit();
+
+        // Connect scheduler to Wren runtime
+        components.wren_runner.script_context.scheduler = &components.scheduler;
 
         // Load document
         var loader = DocumentLoader.init(
@@ -47,17 +51,12 @@ pub const OneShotSession = struct {
             .default => try loader.createDefault(),
         };
 
-        // Print any Wren output to stderr for debugging
-        if (components.wren_runner.output.items.len > 0) {
-            _ = try std.io.getStdErr().write(components.wren_runner.output.items);
-        }
-
         // Create renderer
         var render_instance = try renderer.Renderer.init(
             .{
                 .allocator = self.allocator,
                 .unicode = &components.unicode,
-                .glyphs = &components.glyphs,
+                .glyphs = components.glyphs,
             },
             .{
                 .width = self.config.output.width,
@@ -66,8 +65,41 @@ pub const OneShotSession = struct {
         );
         defer render_instance.deinit();
 
-        try render_instance.render(components.document, load_result.root_id, self.config.trace);
-        try render_instance.writeFullRaster(std.io.getStdOut().writer());
+        try render_instance.renderAndPresent(
+            components.document,
+            load_result.root_id,
+            self.config.trace,
+            std.io.getStdOut().writer(),
+        );
+
+        // Run scheduler until all fibers complete
+        var iterations: usize = 0;
+        while (components.scheduler.hasPendingWork()) {
+            const now = std.time.milliTimestamp();
+            const resumed = try components.scheduler.pump(components.wren_runner.vm.vm, now, 10);
+            iterations += 1;
+
+            // Print any Wren output to stderr for debugging
+            if (components.wren_runner.output.items.len > 0) {
+                _ = try std.io.getStdErr().write(components.wren_runner.output.items);
+                components.wren_runner.output.clearRetainingCapacity();
+            }
+
+            if (resumed > 0) {
+                try render_instance.renderAndPresent(
+                    components.document,
+                    load_result.root_id,
+                    self.config.trace,
+                    std.io.getStdOut().writer(),
+                );
+            }
+
+            // Small delay to avoid busy waiting and allow timers to expire
+            std.time.sleep(1_000_000); // 1ms
+        }
+
+        var ansi = @import("ansi").stdout();
+        try ansi.restoreTerminal();
     }
 };
 
@@ -76,10 +108,12 @@ const Components = struct {
     unicode: paint.UnicodeData,
     document: *dom.Dom,
     wren_runner: *WrenRunner,
-    glyphs: tty.GlyphTable,
+    glyphs: *tty.GlyphTable,
+    scheduler: Scheduler,
 
     fn deinit(self: *Components) void {
         self.unicode.deinit(self.document.alloc);
+        self.scheduler.deinit(self.wren_runner.vm.vm);
         self.wren_runner.deinit();
         self.document.deinit();
         self.glyphs.deinit();
@@ -87,7 +121,7 @@ const Components = struct {
 };
 
 /// Initialize all required components
-fn initializeComponents(allocator: std.mem.Allocator) !Components {
+fn initializeComponents(allocator: std.mem.Allocator, trace: *Trace) !Components {
     var unicode = try paint.UnicodeData.init(allocator);
     errdefer unicode.deinit(allocator);
 
@@ -100,10 +134,14 @@ fn initializeComponents(allocator: std.mem.Allocator) !Components {
     var glyphs = try tty.GlyphTable.init(allocator);
     errdefer glyphs.deinit();
 
+    var scheduler = Scheduler.init(allocator, trace);
+    errdefer scheduler.deinit(wren_runner.vm.vm);
+
     return Components{
         .unicode = unicode,
         .document = document,
         .wren_runner = wren_runner,
         .glyphs = glyphs,
+        .scheduler = scheduler,
     };
 }

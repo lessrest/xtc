@@ -14,14 +14,18 @@ pub const GlyphTable = struct {
     alloc: std.mem.Allocator,
     map: std.StringArrayHashMap(GlyphId),
     arena: std.ArrayList(u8),
-    spans: std.MultiArrayList(Span) = .{}, // index => (off,len), id == index
+    spans: std.MultiArrayList(Span), // index => (off,len), id == index
 
-    pub fn init(allocator: std.mem.Allocator) !GlyphTable {
-        var gt = GlyphTable{
+    pub fn init(allocator: std.mem.Allocator) !*GlyphTable {
+        var gt = try allocator.create(GlyphTable);
+        gt.* = .{
             .alloc = allocator,
-            .map = std.StringArrayHashMap(GlyphId).init(allocator),
+            .map = std.StringArrayHashMap(GlyphId).initContext(
+                allocator,
+                std.array_hash_map.StringContext{},
+            ),
             .arena = std.ArrayList(u8).init(allocator),
-            .spans = .{},
+            .spans = std.MultiArrayList(Span).empty,
         };
         // Prepopulate ASCII 0x00..0xFF as self-mapped one-byte spans
         try gt.spans.ensureTotalCapacity(allocator, 256);
@@ -42,7 +46,7 @@ pub const GlyphTable = struct {
         self.map.deinit();
         self.arena.deinit();
         self.spans.deinit(self.alloc);
-        self.* = undefined;
+        self.alloc.destroy(self);
     }
 
     pub fn clearRetainingCapacity(self: *GlyphTable) void {

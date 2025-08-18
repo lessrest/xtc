@@ -7,8 +7,8 @@ class MatrixDemo {
     _container = container
     _document = Document
     // Use terminal viewport if available
-    _width = _document.width
-    _height = _document.height
+    _width = Document.width
+    _height = Document.height
     _columns = []
 
     setupDOM()
@@ -65,21 +65,14 @@ class MatrixDemo {
 
   animate() {
     while (true) {
-      var now = System.clock * 1000 // Convert to milliseconds
-
-      // Update each column independently based on its FPS
-      for (x in 0..._width) {
-        var col = _columns[x]
-        var frameInterval = 1000 / col["fps"] // ms per frame
-
-        if (now - col["lastUpdate"] >= frameInterval) {
-          updateColumn(x)
-          col["lastUpdate"] = now
-        }
-      }
-
       // Wait for next frame
       TUI.nextFrame()
+
+      for (x in 0..._width) {
+        var col = _columns[x]
+        updateColumn(x)
+      }
+
     }
   }
 
@@ -140,8 +133,9 @@ class MatrixDemo {
   }
 }
 
-var container = Document.getElementById("matrix")
-if (container) {
-  MatrixDemo.new(container)
-}
-
+TUI.enqueue(Fiber.new {
+  var container = Document.getElementById("matrix")
+  if (container) {
+    MatrixDemo.new(container)
+  }
+})

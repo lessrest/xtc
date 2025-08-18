@@ -35,6 +35,7 @@ pub const Dom = struct {
     text_arena: std.ArrayList(u8),
     debug_ids: std.AutoHashMap(DomNodeId, []const u8),
     event_registry: EventRegistry,
+    dirty: bool = false,
 
     pub fn init(alloc: std.mem.Allocator) !*Dom {
         var dom = try alloc.create(Dom);
@@ -47,6 +48,7 @@ pub const Dom = struct {
             .text_arena = std.ArrayList(u8).init(alloc),
             .debug_ids = std.AutoHashMap(DomNodeId, []const u8).init(alloc),
             .event_registry = EventRegistry.init(alloc),
+            .dirty = false,
         };
 
         // Create the implicit document root node at index 0
@@ -97,8 +99,8 @@ pub const Dom = struct {
         const sid = try self.styles.intern(self.alloc, row);
         const items = self.headers.slice();
         items.items(.style_id)[@as(usize, @intCast(id))] = sid;
+        self.dirty = true;
     }
-
 
     pub fn addText(self: *Dom, utf8: []const u8) !DomNodeId {
         const style_id = try self.styles.intern(self.alloc, defaultStyleRow());
@@ -113,6 +115,7 @@ pub const Dom = struct {
             .content = .{ .text = .{ .text_off = off, .text_len = len } },
             .style_id = style_id,
         });
+        self.dirty = true;
         return @as(DomNodeId, @intCast(idx));
     }
 
@@ -143,6 +146,7 @@ pub const Dom = struct {
 
         // Update the text node's offset and length
         items.items(.content)[idx] = .{ .text = .{ .text_off = @intCast(off), .text_len = @intCast(len) } };
+        self.dirty = true;
     }
 
     pub fn updateClass(self: *Dom, id: DomNodeId, new_class: []const u8) !void {
@@ -159,6 +163,7 @@ pub const Dom = struct {
         const style_row = parseUtilityClassList(new_class);
         const new_style_id = try self.styles.intern(self.alloc, style_row);
         items.items(.style_id)[idx] = new_style_id;
+        self.dirty = true;
     }
 
     pub fn appendChild(self: *Dom, parent_id: DomNodeId, child_id: DomNodeId) void {
@@ -195,6 +200,7 @@ pub const Dom = struct {
             items.items(.prev_sibling)[c] = last_id;
         }
         p_count.* += 1;
+        self.dirty = true;
     }
 
     pub fn removeChild(self: *Dom, parent_id: DomNodeId, child_id: DomNodeId) void {
@@ -246,12 +252,14 @@ pub const Dom = struct {
         if (p_count.* > 0) {
             p_count.* -= 1;
         }
+        self.dirty = true;
     }
 
     /// Set a debug ID for a node - string is copied to DOM's allocator
     pub fn setDebugId(self: *Dom, id: DomNodeId, debug_id: []const u8) !void {
         const owned_id = try self.alloc.dupe(u8, debug_id);
         try self.debug_ids.put(id, owned_id);
+        self.dirty = true;
     }
 
     /// Get debug ID for a node, or null if not set
@@ -269,7 +277,6 @@ pub const Dom = struct {
     }
 
     /// Get the style row for a node
-
     pub fn getNodeStyle(self: *const Dom, id: DomNodeId) StyleRow {
         const items = self.headers.slice();
         const style_id = items.items(.style_id)[@as(usize, @intCast(id))];

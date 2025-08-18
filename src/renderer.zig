@@ -20,6 +20,7 @@ pub const Deps = struct {
 pub const State = struct {
     front: tty.Raster,
     back: tty.Raster,
+    needs_clear: bool = true,
 };
 
 pub const Renderer = struct {
@@ -87,15 +88,20 @@ pub const Renderer = struct {
     }
 
     pub fn present(self: *Renderer, writer: anytype) !void {
-        std.debug.print("presenting\n", .{});
         // Write diff from front to back buffer
-        _ = writer; // For now, we'll write directly to stdout
-        var ansi_writer = ansi.stdout();
+        var buffer = std.ArrayList(u8).init(self.deps.allocator);
+        defer buffer.deinit();
+
+        var ansi_writer = ansi.arrayListWriter(&buffer);
         try ansi_writer.resetStyle();
+
+        if (self.state.needs_clear) {
+            try ansi_writer.initializeTerminal();
+            self.state.needs_clear = false;
+        }
 
         var diff_iter = tty.RasterDiff.iterateChanges(&self.state.front, &self.state.back);
         while (diff_iter.next()) |change_run| {
-            std.debug.print("change_run: {any}\n", .{change_run});
             // Move cursor to 1-based row/col
             try ansi_writer.moveCursor(change_run.y + 1, change_run.x + 1);
 
@@ -116,20 +122,19 @@ pub const Renderer = struct {
             try ansi_writer.writeGlyphs(change_run.glyphs, self.deps.glyphs);
         }
 
-        std.debug.print("presenting 2\n", .{});
-
         try ansi_writer.resetStyle();
+        try writer.writeAll(buffer.items);
 
         // Swap buffers
         std.mem.swap(tty.Raster, &self.state.front, &self.state.back);
-
-        std.debug.print("presenting 3\n", .{});
     }
 
     pub fn renderAndPresent(self: *Renderer, document: *dom.Dom, root: dom.DomNodeId, tracer: *Trace, writer: anytype) !void {
-        std.debug.print("rendering\n", .{});
-        try self.render(document, root, tracer);
-        try self.present(writer);
+        if (document.dirty) {
+            try self.render(document, root, tracer);
+            try self.present(writer);
+            document.dirty = false;
+        }
     }
 
     /// Write the full raster to output (for one-shot mode)

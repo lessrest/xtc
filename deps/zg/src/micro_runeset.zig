@@ -47,20 +47,20 @@ pub const RuneSet = struct {
                 const a_mask = toMask(set[LEAD]);
                 if (!a_mask.isIn(a)) return false;
                 const b = codeunit(str[1]);
-                const b_loc = 4 + a_mask.lowerThan(a).?;
+                const b_loc: usize = 4 + @as(usize, @intCast(a_mask.lowerThan(a).?));
                 const b_mask = toMask(set[b_loc]);
                 if (!b_mask.isIn(b)) return false;
                 if (nB == 2) return true;
                 const t3_off = 4 + @popCount(set[LEAD]);
                 const c = codeunit(str[2]);
                 // Slice is safe because we know the T2 span has at least one word.
-                const c_off = b_mask.higherThan(b).? + popCountSlice(set[b_loc + 1 .. t3_off]);
-                const c_loc = t3_off + c_off;
+                const c_off: usize = @as(usize, @intCast(b_mask.higherThan(b).?)) + popCountSlice(set[b_loc + 1 .. t3_off]);
+                const c_loc: usize = t3_off + c_off;
                 const c_mask = toMask(set[c_loc]);
                 if (!c_mask.isIn(c)) return false;
                 if (nB == 3) return true;
-                const d_off = c_mask.lowerThan(c).? + popCountSlice(set[t3_off..c_loc]);
-                const d_loc = set[T4_OFF] + d_off;
+                const d_off: usize = @as(usize, @intCast(c_mask.lowerThan(c).?)) + popCountSlice(set[t3_off..c_loc]);
+                const d_loc: usize = @as(usize, @intCast(set[T4_OFF])) + d_off;
                 const d = codeunit(str[3]);
                 const d_mask = toMask(set[d_loc]);
                 if (d_mask.isIn(d)) return true else return false;

@@ -48,7 +48,7 @@ pub fn run(
         .{
             .allocator = allocator,
             .unicode = &components.unicode,
-            .glyphs = &components.glyphs,
+            .glyphs = components.glyphs,
         },
         .{
             .width = initial_size[0],
@@ -84,7 +84,7 @@ const Components = struct {
     unicode: paint.UnicodeData,
     document: *dom.Dom,
     wren_runner: *WrenRunner,
-    glyphs: tty.GlyphTable,
+    glyphs: *tty.GlyphTable,
     scheduler: Scheduler,
 
     fn deinit(self: *Components) void {
@@ -108,7 +108,7 @@ fn initializeComponents(allocator: std.mem.Allocator, trace: *Trace) !Components
     var wren_runner = try WrenRunner.init(allocator, document);
     errdefer wren_runner.deinit();
 
-    var glyphs = try tty.GlyphTable.init(allocator);
+    const glyphs = try tty.GlyphTable.init(allocator);
     errdefer glyphs.deinit();
 
     var scheduler = Scheduler.init(allocator, trace);

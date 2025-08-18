@@ -3,7 +3,7 @@ const std = @import("std");
 pub const c = @import("c.zig");
 
 const TrackedAllocator = @import("../lib/TrackingAllocator.zig");
-const ffi = @import("ffi.zig");
+const ffi_simple = @import("ffi_simple.zig");
 
 pub fn ScriptEngine(comptime ScriptContext: type) type {
     return struct {
@@ -162,39 +162,19 @@ pub fn ScriptEngine(comptime ScriptContext: type) type {
             return c.wrenGetSlotDouble(self.vm, 0);
         }
 
-        // Auto-generate and register Wren classes for all foreign modules/classes/methods
+        // Auto-generate and register Wren classes with simplified function registry
         pub fn registerForeignModules(self: *Self) !void {
-            const specs = comptime ffi.moduleSpecs(ScriptContext);
-            inline for (specs) |mod_spec| {
-                var src = std.ArrayList(u8).init(self.allocator);
-                defer src.deinit();
+            // Generate wrapper source
+            const wrapper_src = try ffi_simple.generateWrenWrappers(self.allocator, ScriptContext);
+            defer self.allocator.free(wrapper_src);
 
-                var w = src.writer();
-
-                inline for (mod_spec.module_classes) |cls| {
-                    try w.print("class {s} {s}\n", .{ cls.class_name, "{" });
-                    inline for (cls.class_functions) |fn_spec| {
-                        const ar = fn_spec.arity();
-                        switch (ar) {
-                            0 => try w.print("  foreign static {s}()\n", .{fn_spec.name}),
-                            1 => try w.print("  foreign static {s}(a)\n", .{fn_spec.name}),
-                            2 => try w.print("  foreign static {s}(a, b)\n", .{fn_spec.name}),
-                            3 => try w.print("  foreign static {s}(a, b, c)\n", .{fn_spec.name}),
-                            else => @panic("nooo"),
-                        }
-                    }
-                    try w.writeAll("}\n\n");
-                }
-
-                // Interpret generated source in the module namespace
-                if (self.interpret(mod_spec.module_name, src.items)) |_| {
+            if (wrapper_src.len > 0) {
+                // Register in both tui and dom modules
+                if (self.interpret("tui", wrapper_src)) |_| {
                     // ok
                 } else |err| {
-                    std.debug.print("Error interpreting module {s}: {any}\n", .{
-                        mod_spec.module_name,
-                        err,
-                    });
-                    std.debug.print("Source:\n{s}\n", .{src.items});
+                    std.debug.print("Error interpreting tui module: {any}\n", .{err});
+                    std.debug.print("Source:\n{s}\n", .{wrapper_src});
                     return err;
                 }
             }
@@ -247,38 +227,11 @@ pub fn ScriptEngine(comptime ScriptContext: type) type {
             c.wrenAbortFiber(vm, 0);
         }
 
-        const foreign_function_count = blk: {
-            var i = 0;
-            for (ffi.moduleSpecs(ScriptContext)) |module_spec| {
-                for (module_spec.module_classes) |class| {
-                    i += class.class_functions.len;
-                }
-            }
-            break :blk i;
-        };
-
-        const foreign_functions: [foreign_function_count]ffi.ForeignFunction = blk: {
-            var fns: [foreign_function_count]ffi.ForeignFunction = undefined;
-            var i = 0;
-            for (ffi.moduleSpecs(ScriptContext)) |module| {
-                for (module.module_classes) |class| {
-                    for (class.class_functions) |spec| {
-                        fns[i] = ffi.generateForeignFunction(
-                            ScriptContext,
-                            module.module_name,
-                            class.class_name,
-                            spec,
-                        );
-                        i += 1;
-                    }
-                }
-            }
-            break :blk fns;
-        };
+        pub const foreign_functions = ffi_simple.buildFunctionRegistry(ScriptContext);
 
         fn bindForeignMethodFn(
             vm: *c.VM,
-            module: [*:0]const u8,
+            _: [*:0]const u8,
             className: [*:0]const u8,
             isStatic: bool,
             signature: [*:0]const u8,
@@ -286,16 +239,18 @@ pub fn ScriptEngine(comptime ScriptContext: type) type {
             _ = vm; // unused
             if (!isStatic) return null;
 
-            const module_slice = std.mem.span(module);
             const class_slice = std.mem.span(className);
             const sig_slice = std.mem.span(signature);
 
-            inline for (foreign_functions) |f| {
-                if (std.mem.eql(u8, f.module_name, module_slice) and
-                    std.mem.eql(u8, f.class_name, class_slice) and
-                    std.mem.eql(u8, f.wren_signature, sig_slice))
-                {
-                    return f.func;
+            // Only enqueue needs to be a real foreign function for bootstrapping
+            if ((std.mem.eql(u8, class_slice, "TUI") or std.mem.eql(u8, class_slice, "Tui")) and
+                std.mem.eql(u8, sig_slice, "enqueue(_)"))
+            {
+                // Find enqueue function in our registry
+                for (foreign_functions) |f| {
+                    if (std.mem.eql(u8, std.mem.span(f.name), "enqueue")) {
+                        return f.func;
+                    }
                 }
             }
 
@@ -346,8 +301,8 @@ pub fn eval(allocator: std.mem.Allocator, source: []const u8) ![]u8 {
     var vm = try WrenVMType.init(&handlers);
     defer vm.deinit();
 
-    // No foreign modules in this one-shot helper, but call anyway to allow future expansion
-    try vm.registerForeignModules();
+    // No foreign modules in this one-shot helper for basic evaluation
+    // try vm.registerForeignModules();
     try vm.interpret("main", source);
 
     return output.toOwnedSlice();

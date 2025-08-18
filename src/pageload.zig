@@ -190,14 +190,14 @@ pub fn loadWrenFile(self: *Self, path: []const u8) !LoadResult {
 /// Load from Wren script string
 pub fn loadWrenString(self: *Self, script: []const u8, source_name: []const u8) !LoadResult {
     // Create a basic root element
-    const root_id = try self.document.addElement("flex");
-    try self.document.setDebugId(root_id, "root");
+    //    const root_id = try self.document.addElement("flex");
+    //    try self.document.setDebugId(root_id, "root");
 
     // Run the Wren script which will populate the DOM
     const script_id = try ticket.from(source_name);
     try self.wren_runner.vm.interpret(&script_id, script);
 
-    return .{ .root_id = root_id };
+    return .{ .root_id = 0 };
 }
 
 /// Create default demo UI
