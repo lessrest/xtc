@@ -40,18 +40,19 @@ class MatrixDemo {
     main.append(grid)
 
     // Per-column state
+    var startTime = System.clock
     for (x in 0..._width) {
       _columns.add({
         "head": -((x * 7 + (x * x * 3)) % (_height + 10)), // More varied starting positions
         // Randomize speed 1..3 with per-column jitter
-        "speed": 1 + ((x * 931 + System.clock.floor) % 3),
+        "speed": 1 + ((x * 931 + startTime.floor) % 3),
         // Random per-column density (how often blanks appear)
         "density": 4 + ((x * 11) % 4),
         // Occasional long bursts
         "burst": (x * 17) % 23 == 0,
-        // Individual column timing
-        "lastUpdate": 0,
-        "fps": 10 + (x % 20),
+        // Individual column timing - stagger initial updates
+        "lastUpdate": startTime - ((x * 0.1) % 1.0),
+        "fps": 8 + ((x * 13) % 25), // More variation in FPS (8-32 fps)
       })
     }
 
@@ -64,29 +65,48 @@ class MatrixDemo {
   }
 
   animate() {
+    var frameCount = 0
     while (true) {
       // Wait for next frame
       TUI.nextFrame()
 
+      var currentTime = System.clock
+
       for (x in 0..._width) {
         var col = _columns[x]
-        updateColumn(x)
+        updateColumn(x, frameCount, currentTime)
       }
 
+      frameCount = frameCount + 1
     }
   }
 
-  updateColumn(x) {
+  updateColumn(x, frameCount, currentTime) {
     var col = _columns[x]
 
-    // Update position more smoothly
-    col["head"] = col["head"] + 1
+    // Calculate time delta in seconds
+    var deltaTime = currentTime - col["lastUpdate"]
+
+    // Update based on column's individual FPS
+    var updateInterval = 1.0 / col["fps"]
+
+    // Only update if enough time has passed for this column's speed
+    if (deltaTime < updateInterval) {
+      return // Skip this column update
+    }
+
+    // Update timestamp
+    col["lastUpdate"] = currentTime
+
+    // Move based on speed (cells per update)
+    col["head"] = col["head"] + col["speed"]
     if (col["head"] >= _height + 15) {
       col["head"] = -((x * 7) % 10) // Random restart position
       // Randomize parameters on restart
-      col["speed"] = 1 + ((System.clock * 13 + x * 17) % 3)
-      col["density"] = 4 + ((System.clock * 7 + x * 11) % 4)
-      col["burst"] = ((System.clock + x) % 19) == 0
+      col["speed"] = 1 + ((currentTime.floor * 13 + x * 17) % 3)
+      col["density"] = 4 + ((currentTime.floor * 7 + x * 11) % 4)
+      col["burst"] = ((currentTime.floor + x) % 19) == 0
+      col["fps"] = 10 + ((currentTime.floor * 23 + x) % 20) // Randomize FPS too
     }
 
     // Draw the trail
@@ -119,13 +139,13 @@ class MatrixDemo {
         } else if (distance < 2) {
           cls = "w-1 h-1 text-green-200" // Very bright green
         } else if (distance < 4) {
-          cls = "w-1 h-1 text-green-300" // Bright green
+          cls = "w-1 h-1 text-green-400" // Bright green
         } else if (distance < 7) {
-          cls = "w-1 h-1 text-green-400" // Medium green
+          cls = "w-1 h-1 text-green-500" // Medium green
         } else if (distance < 10) {
-          cls = "w-1 h-1 text-green-500" // Darker green
+          cls = "w-1 h-1 text-green-700" // Darker green
         } else {
-          cls = "w-1 h-1 text-green-600" // Darkest green in trail
+          cls = "w-1 h-1 text-green-800" // Darkest green in trail
         }
         _cells[y][x][0].updateClass(cls)
       }
@@ -134,7 +154,7 @@ class MatrixDemo {
 }
 
 TUI.enqueue(Fiber.new {
-  var container = Document.getElementById("matrix")
+  var container = Document.getElementById("waves")
   if (container) {
     MatrixDemo.new(container)
   }

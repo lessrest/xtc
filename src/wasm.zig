@@ -40,7 +40,7 @@ pub const WasmLiveSession = struct {
 
         // Create scheduler for fiber management
         const scheduler = try self.allocator.create(@import("scheduler.zig").Scheduler);
-        scheduler.* = @import("scheduler.zig").Scheduler.init(self.allocator, &self.components.?.trace);
+        scheduler.* = @import("scheduler.zig").Scheduler.init(self.allocator, self.components.?.trace);
 
         self.components.?.wren_runner.script_context.scheduler = scheduler;
 
@@ -50,6 +50,9 @@ pub const WasmLiveSession = struct {
             self.components.?.document,
             self.components.?.wren_runner,
         );
+
+        self.components.?.wren_runner.script_context.viewport_width = self.config.output.width;
+        self.components.?.wren_runner.script_context.viewport_height = self.config.output.height;
 
         const load_result = switch (input) {
             .xml_file => |path| try loader.loadXmlFile(path),
@@ -68,7 +71,7 @@ pub const WasmLiveSession = struct {
         const render_instance = try renderer.Renderer.init(
             .{
                 .allocator = self.allocator,
-                .unicode = &self.components.?.unicode,
+                .unicode = self.components.?.unicode,
                 .glyphs = self.components.?.glyphs,
             },
             .{
@@ -85,7 +88,7 @@ pub const WasmLiveSession = struct {
             self.components.?.wren_runner,
             scheduler,
             load_result.root_id,
-            &self.components.?.trace,
+            self.components.?.trace,
         );
 
         self.is_initialized = true;
@@ -128,23 +131,26 @@ pub const WasmLiveSession = struct {
 
 /// Component bundle for WASM rendering
 const Components = struct {
-    unicode: paint.UnicodeData,
+    unicode: *paint.UnicodeData,
     document: *dom.Dom,
     wren_runner: *WrenRunner,
     glyphs: *tty.GlyphTable,
-    trace: Trace,
+    trace: *Trace,
 
     fn deinit(self: *Components) void {
         self.unicode.deinit(self.document.alloc);
         self.wren_runner.deinit();
         self.document.deinit();
         self.glyphs.deinit();
+        self.trace.deinit();
+        self.trace.allocator.destroy(self.trace);
     }
 };
 
 /// Initialize all required components
 fn initializeComponents(allocator: std.mem.Allocator) !Components {
-    var unicode = try paint.UnicodeData.init(allocator);
+    var unicode = try allocator.create(paint.UnicodeData);
+    unicode.* = try paint.UnicodeData.init(allocator);
     errdefer unicode.deinit(allocator);
 
     var document = try dom.Dom.init(allocator);
@@ -156,12 +162,16 @@ fn initializeComponents(allocator: std.mem.Allocator) !Components {
     const glyphs = try tty.GlyphTable.init(allocator);
     errdefer glyphs.deinit();
 
+    const trace = try allocator.create(Trace);
+    trace.* = @import("ansi").nest.treeNest(allocator, std.io.getStdErr().writer());
+    trace.setEnabled(false);
+
     return Components{
         .unicode = unicode,
         .document = document,
         .wren_runner = wren_runner,
         .glyphs = glyphs,
-        .trace = @import("Trace.zig").file(std.io.getStdErr(), .{ .enabled = false }),
+        .trace = trace,
     };
 }
 

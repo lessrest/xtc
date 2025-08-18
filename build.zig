@@ -73,7 +73,7 @@ pub fn build(b: *std.Build) void {
             "deps/wren/src/optional/wren_opt_meta.c",
             "deps/wren/src/optional/wren_opt_random.c",
         },
-        .flags = &.{ "-g", "-std=c99", "-Wall", "-Wextra", "-Wno-unused-parameter" },
+        .flags = &.{ "-g", "-std=c99", "-Wall", "-Wextra", "-Wno-unused-parameter", "-O3" },
     });
 
     libwren_wasm.linkLibC();
@@ -81,7 +81,7 @@ pub fn build(b: *std.Build) void {
     const xtc = b.addModule("xtc", .{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
-        .optimize = optimize,
+        .optimize = .ReleaseFast,
     });
 
     xtc.addImport("ansi", ansi);
@@ -125,8 +125,7 @@ pub fn build(b: *std.Build) void {
             .cpu_arch = .wasm32,
             .os_tag = .wasi,
         }),
-        .optimize = optimize,
-        .strip = false,
+        .optimize = .ReleaseFast,
     });
 
     // Disable entry and export specific functions like Wisp

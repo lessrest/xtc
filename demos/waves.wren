@@ -112,13 +112,14 @@ class CombinedWaveAnimation {
       if (_frameCount % 10 == 0) {
         var deltaTime = currentTime - _lastFrameTime
         if (deltaTime > 0) {
-          _currentFps = (10 / deltaTime).round
+          _currentFps = ((100 / deltaTime).round) / 10
         }
         _lastFrameTime = currentTime
 
         // Update FPS display
-        _fpsText.updateText("FPS: " + _currentFps.toString)
+        _fpsText.updateText("FPS %(_currentFps)")
       }
+
 
       // Clear all cells first
       for (y in 0..._height) {
