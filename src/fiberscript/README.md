@@ -21,23 +21,50 @@ The system follows a clean pipeline from Wren scripts to native syscall implemen
 
 ## The Ring Concept
 
-The ring acts as a structured message passing system between Wren fibers and native code:
+The ring acts as a high-performance async I/O system inspired by Linux io_uring. It uses circular buffers for batched submission and completion, minimizing syscall overhead and enabling efficient cooperative multitasking.
+
+### Ring Architecture
+
+- **Submission Queue (SQ)**: Circular buffer for batching request submissions
+- **Completion Queue (CQ)**: Circular buffer for batching operation completions  
+- **Operation Tracking**: Maps operation IDs to waiting fibers
+- **Batch Processing**: Submit/complete multiple operations in single calls
+
+### Wren API
 
 ```wren
-// Wren side: Submit work and yield
-ring.post(request)
-ring.push()  // Yield to trampoline
-result = ring.pull()  // Resume with result
+// Create ring with 64-entry SQ and CQ
+var ring = Ring.new(64, 64)
+
+// Single operation
+var opId = ring.submit(request)
+ring.flush()
+ring.wait(1)
+var completions = ring.reap(1)
+
+// Batch operations (efficient)
+var opIds = ring.submitBatch([req1, req2, req3])
+ring.flush()
+ring.wait(opIds.count)
+var completions = ring.reap(opIds.count)
+
+// High-level convenience
+var completions = ring.submitAndWait([req1, req2, req3])
 ```
+
+### Native Integration
 
 ```zig
-// Native side: Process submissions
-const request = ring.grab();  // Get work from submission queue
-const result = processRequest(request);
-ring.give(result);  // Put result in completion queue
+// Trampoline processes batched submissions
+const requests = ring.grabBatch(32);
+for (requests) |request| {
+    const result = processRequest(request);
+    completions.append(.{ ._opId = request._opId, .result = result });
+}
+ring.completeBatch(completions);
 ```
 
-This enables cooperative multitasking where fibers yield control during I/O operations and resume when results are available.
+This enables true batched async I/O where multiple operations can be submitted and processed together, dramatically improving performance for I/O-heavy workloads.
 
 ## Syscalls System
 

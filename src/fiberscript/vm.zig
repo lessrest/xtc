@@ -16,12 +16,14 @@ pub const ErrorReport = ErrorHandler.ErrorReport;
 pub const StackTraceLine = ErrorHandler.StackTraceLine;
 
 pub const Request = union(enum) {
-    @"Ring.push": struct {
+    @"Ring.flush": struct {
         ring: *c.Handle,
+        count: u32,
     },
 
-    @"Ring.pull": struct {
+    @"Ring.wait": struct {
         ring: *c.Handle,
+        minComplete: u32,
     },
 
     @"Core.print": struct {
@@ -227,6 +229,7 @@ test "we can call Core.spawn" {
 
     try engine.context.trampoline(engine.vm);
 }
+
 
 test "Core.print operation" {
     const allocator = std.testing.allocator;

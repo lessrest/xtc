@@ -64,6 +64,7 @@ pub const SlotBuilder = struct {
         return switch (T) {
             bool => c.wrenGetSlotBool(self.vm, slot),
             f64 => c.wrenGetSlotDouble(self.vm, slot),
+            u32 => @intFromFloat(c.wrenGetSlotDouble(self.vm, slot)),
             usize => @intFromFloat(c.wrenGetSlotDouble(self.vm, slot)),
             []const u8 => std.mem.span(c.wrenGetSlotString(self.vm, slot)),
             *c.Handle => c.wrenGetSlotHandle(self.vm, slot) orelse error.NullHandle,
@@ -71,20 +72,24 @@ pub const SlotBuilder = struct {
                 try self.expect(slot, c.Type.map);
                 const operation = try self.lookup(slot, "operation", []const u8);
                 
-                if (std.mem.eql(u8, operation, "Ring.push")) {
+                if (std.mem.eql(u8, operation, "Ring.flush")) {
                     const ring = try self.lookup(slot, "ring", *c.Handle);
+                    const count = try self.lookup(slot, "count", u32);
                     return Request{
-                        .@"Ring.push" = .{
+                        .@"Ring.flush" = .{
                             .ring = ring,
+                            .count = count,
                         },
                     };
                 }
 
-                if (std.mem.eql(u8, operation, "Ring.pull")) {
+                if (std.mem.eql(u8, operation, "Ring.wait")) {
                     const ring = try self.lookup(slot, "ring", *c.Handle);
+                    const minComplete = try self.lookup(slot, "minComplete", u32);
                     return Request{
-                        .@"Ring.pull" = .{
+                        .@"Ring.wait" = .{
                             .ring = ring,
+                            .minComplete = minComplete,
                         },
                     };
                 }
@@ -151,6 +156,7 @@ pub const SlotBuilder = struct {
             bool => c.wrenSetSlotBool(self.vm, slot, value),
             f64 => c.wrenSetSlotDouble(self.vm, slot, value),
             comptime_int => c.wrenSetSlotDouble(self.vm, slot, @floatFromInt(value)),
+            u32 => c.wrenSetSlotDouble(self.vm, slot, @floatFromInt(value)),
             []const u8 => {
                 const cstr = try self.allocator.dupeZ(u8, value);
                 defer self.allocator.free(cstr);
@@ -218,6 +224,7 @@ pub const CallResult = struct {
         return switch (T) {
             bool => c.wrenGetSlotBool(self.vm, 0),
             f64 => c.wrenGetSlotDouble(self.vm, 0),
+            u32 => @intFromFloat(c.wrenGetSlotDouble(self.vm, 0)),
             usize => @intFromFloat(c.wrenGetSlotDouble(self.vm, 0)),
             []const u8 => std.mem.span(c.wrenGetSlotString(self.vm, 0)),
             *c.Handle => c.wrenGetSlotHandle(self.vm, 0) orelse error.NullHandle,

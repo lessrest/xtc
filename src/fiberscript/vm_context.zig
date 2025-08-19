@@ -127,37 +127,23 @@ pub const VMContext = struct {
             std.debug.print("trampoline: {any} {any}\n", .{ fiber, request });
 
             switch (request) {
-                .@"Ring.push" => |push| {
-                    // Get the work item from the ring and parse it as a Request
-                    _ = work.set(0, push.ring).call("grab()");
-                    const grabbed = try work.get(0, Request);
-
-                    std.debug.print("grabbed: {any}\n", .{grabbed});
+                .@"Ring.flush" => |flush| {
+                    // For now, simplified - just grab one batch and process it
+                    std.debug.print("flushing ring (count: {})\n", .{flush.count});
                     
-                    // Process the grabbed request
-                    switch (grabbed) {
-                        .@"Core.print" => |print| {
-                            std.debug.print("Fiberscript print: {s}\n", .{print.message});
-                            // Put response in completion queue and resume fiber
-                            _ = work.set(0, push.ring).set(1, "printed").call("give(_)");
-                        },
-                        else => {
-                            std.debug.print("Unhandled ring request: {any}\n", .{grabbed});
-                        }
-                    }
-                    
-                    _ = work.set(0, fiber).set(1, void{}).call("call(_)");
+                    // TODO: Implement proper batched request processing
+                    // For now, just resume the fiber
+                    _ = work.set(0, fiber).set(1, flush.count).call("call(_)");
                 },
 
-                .@"Ring.pull" => |pull| {
-                    // Get response from completion queue
-                    const response = try work.set(0, pull.ring).call("take()").as([]const u8);
-                    std.debug.print("pulled response: {s}\n", .{response});
-                    _ = work.set(0, fiber).set(1, response).call("call(_)");
+                .@"Ring.wait" => |wait| {
+                    // For now, just immediately resume - real impl would check completion queue
+                    std.debug.print("ring wait for {} completions\n", .{wait.minComplete});
+                    _ = work.set(0, fiber).set(1, wait.minComplete).call("call(_)");
                 },
 
                 .@"Core.print" => |print| {
-                    std.debug.print("Fiberscript print: {s}\n", .{print.message});
+                    std.debug.print("Direct print: {s}\n", .{print.message});
                     _ = work.set(0, fiber).set(1, void{}).call("call(_)");
                 },
             }
