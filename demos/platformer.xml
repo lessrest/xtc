@@ -1,0 +1,3 @@
+<root class="flex">
+    <script type="text/wren" module="platformer" class="grow-1" id="platformer-game" src="platformer.wren"/>
+</root>

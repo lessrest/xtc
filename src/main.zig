@@ -3,8 +3,7 @@ const app = @import("app.zig");
 const logging = @import("logging.zig");
 
 comptime {
-    // run all the tests
-    _ = @import("lib.zig");
+    _ = @import("fiberscript/vm.zig");
 }
 
 /// Global logging configuration

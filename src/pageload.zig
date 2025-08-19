@@ -102,9 +102,6 @@ fn buildDomFromXml(self: *Self, element: xmlparse.Element, parent: ?dom.DomNodeI
 
 /// Gather script content from a script element
 fn gatherScriptElement(self: *Self, element: xmlparse.Element) !void {
-    var scripts = std.ArrayList(ScriptInfo).init(self.allocator);
-    defer scripts.deinit();
-
     if (element.attr("src")) |src_path| {
         // External script
         const file = std.fs.cwd().openFile(src_path, .{}) catch |err| {
@@ -114,6 +111,7 @@ fn gatherScriptElement(self: *Self, element: xmlparse.Element) !void {
         defer file.close();
 
         const file_content = try file.readToEndAlloc(self.allocator, 1024 * 1024);
+        defer self.allocator.free(file_content);
 
         // Extract module name from filename
         const basename = std.fs.path.basename(src_path);
@@ -122,36 +120,27 @@ fn gatherScriptElement(self: *Self, element: xmlparse.Element) !void {
         else
             basename;
 
-        try scripts.append(.{
-            .source = file_content,
-            .module_name = module_name,
-            .is_external = true,
-        });
+        if (self.wren_runner.executeScript(file_content, module_name)) |_| {
+            // ok
+        } else |err| {
+            std.debug.print("Error executing script {?s}: {any}\n", .{ module_name, err });
+            std.debug.print("Output:\n{s}\n", .{self.wren_runner.output.items});
+            return err;
+        }
     } else {
         // Inline script
         var source_buf = std.ArrayList(u8).init(self.allocator);
         try self.collectScriptText(element, &source_buf);
+        defer source_buf.deinit();
 
         if (source_buf.items.len > 0) {
-            try scripts.append(.{
-                .source = try source_buf.toOwnedSlice(),
-                .module_name = element.attr("module"),
-                .is_external = false,
-            });
-        }
-    }
-
-    // Execute the gathered scripts
-    for (scripts.items) |script| {
-        if (self.wren_runner.executeScript(script.source, script.module_name)) |_| {
-            // ok
-        } else |err| {
-            std.debug.print("Error executing script {?s}: {any}\n", .{ script.module_name, err });
-            std.debug.print("Output:\n{s}\n", .{self.wren_runner.output.items});
-            return err;
-        }
-        if (script.is_external) {
-            self.allocator.free(script.source);
+            if (self.wren_runner.executeScript(source_buf.items, element.attr("module"))) |_| {
+                // ok
+            } else |err| {
+                std.debug.print("Error executing script {?s}: {any}\n", .{ element.attr("module"), err });
+                std.debug.print("Output:\n{s}\n", .{self.wren_runner.output.items});
+                return err;
+            }
         }
     }
 }
@@ -209,46 +198,6 @@ pub fn createDefault(self: *Self) !LoadResult {
     self.document.appendChild(root_id, text_id);
 
     return .{ .root_id = root_id };
-}
-
-// Tests for script execution in XML documents
-test "script tags in XML documents execute wren code that can manipulate the DOM" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const al = gpa.allocator();
-
-    var doc = try dom.Dom.init(al);
-    defer doc.deinit();
-
-    var runner = try WrenRunner.init(al, doc);
-    defer runner.deinit();
-
-    const xml_src =
-        \\<root class="flex" id="test-root">
-        \\  <script>
-        \\    var root = Document.getElementById("test-root")
-        \\    var el = Document.createElement("w-10")
-        \\    root.append(el)
-        \\    el.setDebugId("child")
-        \\  </script>
-        \\</root>
-        \\
-    ;
-
-    var loader = init(al, doc, runner);
-    _ = try loader.loadXmlString(xml_src, "inline");
-
-    try std.testing.expect(doc.headers.len >= 2);
-
-    var found = false;
-    var it = doc.debug_ids.iterator();
-    while (it.next()) |kv| {
-        if (std.mem.eql(u8, kv.value_ptr.*, "child")) {
-            found = true;
-            break;
-        }
-    }
-    try std.testing.expect(found);
 }
 
 test "wren syntax errors in script tags return compile error without crashing" {

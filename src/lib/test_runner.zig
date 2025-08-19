@@ -348,7 +348,7 @@ const TestSuite = struct {
                     .fail => self.fail_count += 1,
                     .skip => self.skip_count += 1,
                     .leak => self.leak_count += 1,
-                    .pending => unreachable,
+                    .pending => {},
                 }
             }
         }

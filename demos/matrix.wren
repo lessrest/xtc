@@ -146,7 +146,7 @@ class MatrixDemo {
 }
 
 Window.immediately {
-  var container = Document.getElementById("waves")
+  var container = Document.getElementById("matrix")
   if (container) {
     MatrixDemo.new(container)
   }

@@ -39,6 +39,7 @@ pub const ScriptEngine = struct {
 
     pub fn deinit(self: *Self) void {
         c.wrenReleaseHandle(self.vm, self.ctx.fiber_call_handle);
+        c.wrenReleaseHandle(self.vm, self.ctx.fiber_transfer_error_handle);
         c.wrenFreeVM(self.vm);
     }
 
@@ -92,7 +93,6 @@ pub const ScriptEngine = struct {
 
     pub fn registerForeignModules(self: *Self) !void {
         const wrapper_src = try ffi_simple.generateWrenWrappers(self.allocator);
-        std.debug.print("Wrapper source:\n{s}\n", .{wrapper_src});
         defer self.allocator.free(wrapper_src);
 
         if (wrapper_src.len > 0) {
@@ -109,7 +109,7 @@ pub const ScriptEngine = struct {
     fn reallocateFn(memory: ?*anyopaque, new_size: usize, ctxptr: *anyopaque) callconv(.C) ?*anyopaque {
         const ctx: *ScriptContext = @ptrCast(@alignCast(ctxptr));
         const allocator = ctx.allocator;
-        const tracked = TrackedAllocator{ .allocator = allocator };
+        var tracked = TrackedAllocator.create(allocator);
 
         if (new_size == 0) {
             if (memory) |mem| {

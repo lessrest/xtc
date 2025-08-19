@@ -141,7 +141,6 @@ pub fn init(allocator: std.mem.Allocator, document: *Dom) !*@This() {
 }
 
 pub fn deinit(self: *@This()) void {
-    wren.c.wrenReleaseHandle(self.vm.vm, self.vm.ctx.fiber_call_handle);
     self.vm.deinit();
     self.output.deinit();
     self.allocator.destroy(self);

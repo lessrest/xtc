@@ -36,7 +36,7 @@ pub fn build(b: *std.Build) void {
             "-Wextra",
             "-Wno-unused-parameter",
             "-g",
-            "-O3",
+            "-DDEBUG",
         },
     });
 
@@ -74,7 +74,14 @@ pub fn build(b: *std.Build) void {
             "deps/wren/src/optional/wren_opt_meta.c",
             "deps/wren/src/optional/wren_opt_random.c",
         },
-        .flags = &.{ "-g", "-std=c99", "-Wall", "-Wextra", "-Wno-unused-parameter", "-O3" },
+        .flags = &.{
+            "-g",
+            "-std=c99",
+            "-Wall",
+            "-Wextra",
+            "-Wno-unused-parameter",
+            "-O3",
+        },
     });
 
     libwren_wasm.linkLibC();
@@ -116,10 +123,10 @@ pub fn build(b: *std.Build) void {
     const unit_tests = b.addTest(.{
         .name = "xtc-test-suite",
         .root_module = xtc,
-        .test_runner = .{
-            .path = b.path("src/lib/test_runner.zig"),
-            .mode = .simple,
-        },
+        // .test_runner = .{
+        //     .path = b.path("src/lib/test_runner.zig"),
+        //     .mode = .simple,
+        // },
     });
 
     unit_tests.linkLibrary(libwren);
