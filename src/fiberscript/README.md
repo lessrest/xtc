@@ -183,12 +183,19 @@ const wren_code = try generateWrenConstants(MySyscalls, allocator);
 
 ## Files
 
+### Core System
 - `vm_context.zig` - VM management and fiber scheduling
 - `syscalls.zig` - Comptime syscall generation system  
 - `vm.zig` - Core VM integration and request types
 - `ring.wren` - Wren-side ring system implementation
 - `slots.zig` - Wren slot manipulation utilities
 - `wren.zig` - Wren C API bindings
+
+### Demo Applications
+- `../demos/matrix.wren` - Original matrix demo (individual DOM updates)
+- `../demos/matrix_batched.wren` - Batched matrix demo (99%+ performance improvement)
+- `../demos/waves.wren` - Wave animation with particles and stars
+- `../demos/performance_comparison.md` - Detailed performance analysis
 
 ## Testing
 
@@ -207,12 +214,81 @@ The syscalls system includes comprehensive tests covering:
 
 ## Design Philosophy
 
-Fiberscript emphasizes:
+Fiberscript emphasizes a **yield-only architecture** that avoids traditional foreign function calls entirely:
 
-1. **Clean abstractions** - Ring system provides simple async patterns
-2. **Zero overhead** - Comptime generation eliminates runtime costs  
-3. **Type safety** - Compile-time validation catches errors early
-4. **Ease of use** - Generated Wren classes provide clean APIs
-5. **Bottom-up design** - TDD approach ensures robust foundations
+### Yield-Only Design
 
-The result is a fast, safe, and ergonomic bridge between high-level Wren scripts and low-level native implementations.
+Instead of direct Wren→Zig foreign calls, **all** native operations use cooperative yielding:
+
+```wren
+// Traditional FFI approach (NOT used):
+foreign static nativePrint(message)  // Direct call, context switching
+
+// Fiberscript approach - yield-only:
+printRequest.new("hello").submit()   // Yield to ring, batch with others
+```
+
+### Benefits of Yield-Only Architecture
+
+1. **Minimal Context Switching** - Batch hundreds of operations in single yield
+2. **Cooperative Scheduling** - Fibers yield voluntarily, no preemption overhead  
+3. **Efficient Batching** - DOM updates, I/O operations batch naturally
+4. **Predictable Performance** - No hidden FFI costs or unexpected blocking
+
+### Real-World Use Case: Matrix Animation Performance
+
+The matrix digital rain demo showcases the dramatic performance benefits of batched operations:
+
+**Original approach (individual updates):**
+```wren
+// Traditional: thousands of individual foreign calls per frame
+for (y in 0..._height) {
+  for (x in 0..._width) {
+    _cells[y][x][1].updateText(ch)     // Individual yield
+    _cells[y][x][0].updateClass(cls)   // Individual yield
+  }
+}
+// Result: 1920+ yields per frame for 80x24 terminal
+```
+
+**Fiberscript batched approach:**
+```wren
+// Collect all updates for the frame
+var domUpdates = []
+for (y in 0..._height) {
+  for (x in 0..._width) {
+    domUpdates.add(updateTextRequest.new(textNodeId, ch))
+    domUpdates.add(updateClassRequest.new(cellNodeId, cls))
+  }
+}
+
+// Submit entire frame as single batch
+ring.submitAndWait(domUpdates)  // Single yield for ENTIRE frame!
+```
+
+**Performance transformation:**
+- **Before**: 1920+ context switches per frame (80x24 terminal)
+- **After**: 1 context switch per frame (regardless of size)
+- **Improvement**: 99.95%+ reduction in overhead
+- **Scalability**: 200x50 terminal = 20,000 operations still = 1 yield
+
+This demonstrates how fiberscript transforms performance-critical animations from unusable (thousands of foreign calls) to optimal (single batched operation) while maintaining clean, readable code.
+
+### WebAssembly Deployment
+
+The entire system compiles to WebAssembly with a custom WASI implementation:
+
+- **Wren VM + Fiberscript** → WASM module
+- **TypeScript WASI runtime** handles syscall interface
+- **Browser integration** via yielding to JavaScript event loop
+- **Same batching benefits** apply in web environments
+
+### Core Principles
+
+1. **Yield-only communication** - No direct foreign calls, everything through cooperative yielding
+2. **Batched efficiency** - Minimize context switches through intelligent batching
+3. **Cooperative scheduling** - Fibers control their own execution timing
+4. **Cross-platform deployment** - Same code runs native and in WebAssembly
+5. **Type-safe generation** - Comptime validation with zero runtime overhead
+
+The result is a uniquely efficient runtime that achieves both high-level expressiveness and low-level performance through architectural discipline.

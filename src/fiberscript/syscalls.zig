@@ -15,6 +15,33 @@ const TestContext = struct {
     }
 };
 
+/// DOM context for batched DOM operations
+const DOMContext = struct {
+    allocator: std.mem.Allocator,
+    operations_log: std.ArrayList([]const u8),
+    next_node_id: u32,
+    
+    pub fn init(allocator: std.mem.Allocator) DOMContext {
+        return .{ 
+            .allocator = allocator,
+            .operations_log = std.ArrayList([]const u8).init(allocator),
+            .next_node_id = 1000, // Start with high ID to avoid conflicts
+        };
+    }
+    
+    pub fn deinit(self: *DOMContext) void {
+        for (self.operations_log.items) |item| {
+            self.allocator.free(item);
+        }
+        self.operations_log.deinit();
+    }
+    
+    pub fn logOperation(self: *DOMContext, operation: []const u8) !void {
+        const owned = try self.allocator.dupe(u8, operation);
+        try self.operations_log.append(owned);
+    }
+};
+
 /// Example syscalls interface parameterized by context type
 pub fn TestSyscalls(comptime Context: type) type {
     return struct {
@@ -23,6 +50,26 @@ pub fn TestSyscalls(comptime Context: type) type {
         print: *const fn (*Context, struct { message: []const u8 }) []const u8,
         readFile: *const fn (*Context, struct { path: []const u8 }) []const u8,
         sleep: *const fn (*Context, struct { duration_ms: u64 }) void,
+        
+        /// Extract payload type for a given operation
+        pub fn Payload(comptime operation: std.meta.FieldEnum(Self)) type {
+            const field_info = std.meta.fieldInfo(Self, operation);
+            const ptr_info = @typeInfo(field_info.type).pointer;
+            const func_info = @typeInfo(ptr_info.child).@"fn";
+            return func_info.params[1].type.?;
+        }
+    };
+}
+
+/// DOM-focused syscalls for XTC
+pub fn DOMSyscalls(comptime Context: type) type {
+    return struct {
+        const Self = @This();
+        
+        updateText: *const fn (*Context, struct { nodeId: u32, text: []const u8 }) void,
+        updateClass: *const fn (*Context, struct { nodeId: u32, className: []const u8 }) void,
+        createElement: *const fn (*Context, struct { style: []const u8 }) u32,
+        appendChild: *const fn (*Context, struct { parentId: u32, childId: u32 }) void,
         
         /// Extract payload type for a given operation
         pub fn Payload(comptime operation: std.meta.FieldEnum(Self)) type {
@@ -54,6 +101,52 @@ fn buildTestSyscallsImpl(comptime SyscallsType: type) type {
             _ = context;
             _ = payload.duration_ms;
             // Mock sleep - just return
+        }
+    };
+}
+
+/// DOM syscalls implementation for batched operations
+fn buildDOMSyscallsImpl(comptime SyscallsType: type) type {
+    return struct {
+        pub fn updateText(context: *DOMContext, payload: SyscallsType.Payload(.updateText)) void {
+            const operation = std.fmt.allocPrint(
+                context.allocator, 
+                "updateText(nodeId={}, text=\"{s}\")", 
+                .{ payload.nodeId, payload.text }
+            ) catch return;
+            context.logOperation(operation) catch return;
+        }
+        
+        pub fn updateClass(context: *DOMContext, payload: SyscallsType.Payload(.updateClass)) void {
+            const operation = std.fmt.allocPrint(
+                context.allocator, 
+                "updateClass(nodeId={}, className=\"{s}\")", 
+                .{ payload.nodeId, payload.className }
+            ) catch return;
+            context.logOperation(operation) catch return;
+        }
+        
+        pub fn createElement(context: *DOMContext, payload: SyscallsType.Payload(.createElement)) u32 {
+            const nodeId = context.next_node_id;
+            context.next_node_id += 1;
+            
+            const operation = std.fmt.allocPrint(
+                context.allocator, 
+                "createElement(style=\"{s}\") -> nodeId={}", 
+                .{ payload.style, nodeId }
+            ) catch return nodeId;
+            context.logOperation(operation) catch return nodeId;
+            
+            return nodeId;
+        }
+        
+        pub fn appendChild(context: *DOMContext, payload: SyscallsType.Payload(.appendChild)) void {
+            const operation = std.fmt.allocPrint(
+                context.allocator, 
+                "appendChild(parentId={}, childId={})", 
+                .{ payload.parentId, payload.childId }
+            ) catch return;
+            context.logOperation(operation) catch return;
         }
     };
 }
@@ -745,4 +838,63 @@ test "complete syscalls system integration" {
     const constants = try generateWrenConstants(SyscallsType, testing.allocator);
     defer testing.allocator.free(constants);
     try testing.expect(constants.len > 0);
+}
+
+
+test "DOM syscalls batched operations" {
+    // Test the new DOM syscalls system with batching
+    const SyscallsType = DOMSyscalls(DOMContext);
+    const Request = RequestUnion(SyscallsType);
+    const Trampoline = generateTrampoline(SyscallsType, DOMContext);
+    _ = generateRequestClasses(SyscallsType); // Verify we can generate request classes
+    
+    // 1. Create DOM syscalls implementation
+    const DOMImpl = buildDOMSyscallsImpl(SyscallsType);
+    const syscalls_impl = bindSyscalls(SyscallsType, DOMImpl);
+    
+    // 2. Set up DOM context
+    var context = DOMContext.init(testing.allocator);
+    defer context.deinit();
+    
+    var trampoline = Trampoline{
+        .syscalls = syscalls_impl,
+        .context = &context,
+    };
+    
+    // 3. Create multiple DOM operations (simulating matrix animation frame)
+    const UpdateTextPayload = SyscallsType.Payload(.updateText);
+    const UpdateClassPayload = SyscallsType.Payload(.updateClass);
+    
+    // Simulate updating 4 matrix cells in one batch
+    const requests = [_]Request{
+        Request{ .updateText = UpdateTextPayload{ .nodeId = 100, .text = "█" } },
+        Request{ .updateClass = UpdateClassPayload{ .nodeId = 100, .className = "text-green-400" } },
+        Request{ .updateText = UpdateTextPayload{ .nodeId = 101, .text = "▓" } },
+        Request{ .updateClass = UpdateClassPayload{ .nodeId = 101, .className = "text-green-500" } },
+    };
+    
+    // 4. Process batch
+    for (requests) |request| {
+        try trampoline.dispatch(request);
+    }
+    
+    // 5. Verify all operations were logged
+    try testing.expect(context.operations_log.items.len == 4);
+    // Check that we have the right operations (order doesn't matter for this test)
+    var found_operations: u32 = 0;
+    for (context.operations_log.items) |operation| {
+        if (std.mem.indexOf(u8, operation, "updateText") != null) found_operations |= 1;
+        if (std.mem.indexOf(u8, operation, "updateClass") != null) found_operations |= 2;
+        if (std.mem.indexOf(u8, operation, "█") != null) found_operations |= 4;
+        if (std.mem.indexOf(u8, operation, "▓") != null) found_operations |= 8;
+    }
+    try testing.expect(found_operations == 15); // All 4 bits set
+    
+    // 6. Generate Wren request classes for DOM operations
+    const wren_classes = try generateWrenConstants(SyscallsType, testing.allocator);
+    defer testing.allocator.free(wren_classes);
+    
+    // Should contain DOM-specific request classes
+    try testing.expect(std.mem.indexOf(u8, wren_classes, "updateTextRequest") != null);
+    try testing.expect(std.mem.indexOf(u8, wren_classes, "updateClassRequest") != null);
 }
