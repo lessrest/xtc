@@ -1,10 +1,77 @@
 # Fiberscript
 
-A Wren-based fiber runtime with cooperative scheduling and efficient syscall dispatch.
+A Wren-based fiber runtime that treats your application like an operating system.
 
-## Overview
+## The Browser as Kernel
 
-Fiberscript is an embedded scripting system that uses the [Wren](https://wren.io/) programming language to provide cooperative multitasking through fibers. It features a ring-based async I/O system inspired by io_uring, with zero-overhead syscall marshalling and comptime-generated boilerplate elimination.
+Consider the parallels: A browser runs JavaScript in userland, with the DOM as its primary syscall interface. WebAssembly modules are like native processes, and `postMessage()` boundaries resemble kernel/user transitions. But traditional approaches suffer from the same problems that plagued early Unix systems - every operation requires expensive context switches.
+
+Fiberscript inverts this relationship. Instead of treating the browser as a foreign runtime, we build a **cooperative kernel** where fibers are first-class citizens and native operations use efficient batched syscalls - much like how modern operating systems evolved to solve the same performance problems.
+
+## Historical Context: The Evolution of Async I/O
+
+### The Syscall Problem
+
+Early Unix systems suffered from the "one syscall, one context switch" bottleneck. Each `read()` or `write()` meant expensive kernel transitions, context switching overhead, and poor cache locality. This pattern persists today in browser environments - every DOM manipulation or WebAssembly boundary crossing pays the same performance tax.
+
+### Async I/O Evolution
+
+**select/poll (1980s)**: Multiplexed I/O, but still required individual syscalls
+```c
+// Still one syscall per operation
+for (fd in ready_fds) {
+    read(fd, buffer, size);  // Expensive transition
+}
+```
+
+**epoll/kqueue (2000s)**: Event-driven I/O with better scalability
+```c
+// Better batching, but limited to network I/O
+epoll_wait(events, maxevents, timeout);
+```
+
+**io_uring (2019)**: True batched async I/O - the breakthrough
+```c
+// Finally: batch submission AND completion
+io_uring_submit_and_wait(ring, 1);
+```
+
+### Language Runtime Evolution
+
+**Goroutines (2009)**: Go pioneered cooperative scheduling at scale
+```go
+// M:N threading with efficient context switching
+go func() { /* cooperative yield on I/O */ }()
+```
+
+**Erlang/OTP (1986)**: Decades ahead with actor model and lightweight processes
+```erlang
+% Millions of lightweight processes, message passing
+spawn(fun() -> receive Msg -> handle(Msg) end).
+```
+
+**Modern JavaScript**: Event loops with async/await, but still syscall-bound
+```js
+// Clean syntax, but each await is still expensive
+await domNode.updateText(text);  // Browser syscall boundary
+```
+
+## Fiberscript's Approach
+
+Fiberscript combines the best of these approaches: **cooperative scheduling** like Go and Erlang, **batched I/O** like io_uring, and **zero-overhead abstraction** like modern systems programming.
+
+Instead of fighting browser/WASM boundaries, we embrace the kernel metaphor:
+
+- **Wren Fibers** = Lightweight userland processes  
+- **Ring System** = Batched syscall interface (like io_uring)
+- **Native Runtime** = Kernel that processes batched operations efficiently
+- **DOM Operations** = System calls that benefit from batching
+
+The result is a runtime where thousands of operations collapse into single context switches, achieving both high-level expressiveness and bare-metal performance.
+
+### Architecture
+
+Fiberscript is an embedded scripting system built on [Wren](https://wren.io/) that provides cooperative multitasking through fibers. It features a ring-based async I/O system inspired by io_uring, with zero-overhead syscall marshalling and comptime-generated boilerplate elimination.
 
 ## Architecture
 
