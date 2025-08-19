@@ -70,8 +70,9 @@ pub const SlotBuilder = struct {
             Request => {
                 try self.expect(slot, c.Type.map);
                 const operation = try self.lookup(slot, "operation", []const u8);
-                const ring = try self.lookup(slot, "ring", *c.Handle);
+                
                 if (std.mem.eql(u8, operation, "Ring.push")) {
+                    const ring = try self.lookup(slot, "ring", *c.Handle);
                     return Request{
                         .@"Ring.push" = .{
                             .ring = ring,
@@ -80,9 +81,19 @@ pub const SlotBuilder = struct {
                 }
 
                 if (std.mem.eql(u8, operation, "Ring.pull")) {
+                    const ring = try self.lookup(slot, "ring", *c.Handle);
                     return Request{
                         .@"Ring.pull" = .{
                             .ring = ring,
+                        },
+                    };
+                }
+
+                if (std.mem.eql(u8, operation, "Core.print")) {
+                    const message = try self.lookup(slot, "message", []const u8);
+                    return Request{
+                        .@"Core.print" = .{
+                            .message = message,
                         },
                     };
                 }

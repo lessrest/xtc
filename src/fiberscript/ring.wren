@@ -4,6 +4,15 @@ class Core {
     static spawn(block) {
         return scheduleImmediately(Fiber.new(block))
     }
+
+    static print(message) {
+        ring.post({
+            "operation": "Core.print", 
+            "message": message
+        })
+        ring.push()
+        return ring.pull()
+    }
 }
 
 class Ring {
@@ -32,6 +41,10 @@ class Ring {
 
   give(response) {
     _completionQueue.add(response)
+  }
+
+  take() {
+    return _completionQueue.removeAt(0)
   }
 
   pull() {

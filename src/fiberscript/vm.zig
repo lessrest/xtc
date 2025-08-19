@@ -23,6 +23,10 @@ pub const Request = union(enum) {
     @"Ring.pull": struct {
         ring: *c.Handle,
     },
+
+    @"Core.print": struct {
+        message: []const u8,
+    },
 };
 
 pub fn Engine(configuration: Configuration) type {
@@ -213,6 +217,37 @@ test "we can call Core.spawn" {
         \\Core.spawn {
         \\  System.print("hello")
         \\}
+        \\
+    ) catch {
+        try engine.croak();
+    };
+
+    const output = try engine.takeOutput(allocator);
+    defer allocator.free(output);
+
+    try engine.context.trampoline(engine.vm);
+}
+
+test "Core.print operation" {
+    const allocator = std.testing.allocator;
+
+    const API = struct {
+        const Self = Engine(.{ .API = @This() });
+    };
+
+    var engine = try Engine(.{
+        .API = API,
+    }).init(allocator);
+    defer engine.deinit();
+
+    engine.runTopLevel("main",
+        \\import "core" for Core
+        \\
+        \\var fiber = Fiber.new {
+        \\  Core.print("Hello from fiber!")
+        \\}
+        \\
+        \\Core.scheduleImmediately(fiber)
         \\
     ) catch {
         try engine.croak();

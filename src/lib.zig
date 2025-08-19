@@ -12,6 +12,7 @@ comptime {
     _ = @import("pageload.zig");
     _ = @import("xml.zig");
     _ = @import("fiberscript/vm.zig");
+    _ = @import("fiberscript/syscalls.zig");
 }
 
 const std = @import("std");

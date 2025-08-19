@@ -128,15 +128,37 @@ pub const VMContext = struct {
 
             switch (request) {
                 .@"Ring.push" => |push| {
-                    const grabbed = try work.set(0, push.ring).call("grab()").as(Request);
+                    // Get the work item from the ring and parse it as a Request
+                    _ = work.set(0, push.ring).call("grab()");
+                    const grabbed = try work.get(0, Request);
 
                     std.debug.print("grabbed: {any}\n", .{grabbed});
-                    _ = work.set(0, fiber).set(1, 1).call("call(_)");
+                    
+                    // Process the grabbed request
+                    switch (grabbed) {
+                        .@"Core.print" => |print| {
+                            std.debug.print("Fiberscript print: {s}\n", .{print.message});
+                            // Put response in completion queue and resume fiber
+                            _ = work.set(0, push.ring).set(1, "printed").call("give(_)");
+                        },
+                        else => {
+                            std.debug.print("Unhandled ring request: {any}\n", .{grabbed});
+                        }
+                    }
+                    
+                    _ = work.set(0, fiber).set(1, void{}).call("call(_)");
                 },
 
                 .@"Ring.pull" => |pull| {
-                    _ = pull; // autofix
-                    std.debug.panic("pull not implemented", .{});
+                    // Get response from completion queue
+                    const response = try work.set(0, pull.ring).call("take()").as([]const u8);
+                    std.debug.print("pulled response: {s}\n", .{response});
+                    _ = work.set(0, fiber).set(1, response).call("call(_)");
+                },
+
+                .@"Core.print" => |print| {
+                    std.debug.print("Fiberscript print: {s}\n", .{print.message});
+                    _ = work.set(0, fiber).set(1, void{}).call("call(_)");
                 },
             }
         }
