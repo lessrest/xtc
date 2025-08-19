@@ -1,7 +1,7 @@
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
-    const target = b.standardTargetOptions(.{});
+    const target = b.standardTargetOptions(.{ .default_target = .{ .abi = .musl } });
     const optimize = b.standardOptimizeOption(.{});
 
     const zg = b.dependency("zg", .{ .cjk = false });
@@ -13,7 +13,10 @@ pub fn build(b: *std.Build) void {
     const wren = b.addModule("wren", .{
         .target = target,
         .optimize = optimize,
+        .root_source_file = b.path("src/fiberscript/vm.zig"),
     });
+
+    wren.addImport("ansi", ansi);
 
     wren.addIncludePath(b.path("deps/wren/src/include"));
     wren.addIncludePath(b.path("deps/wren/src/vm"));
@@ -35,10 +38,12 @@ pub fn build(b: *std.Build) void {
             "-Wall",
             "-Wextra",
             "-Wno-unused-parameter",
+            "-Wno-implicit",
             "-g",
             "-DDEBUG",
         },
     });
+    wren.addCMacro("abort", "zig_abort");
 
     const libwren = b.addLibrary(.{
         .linkage = .static,
@@ -123,10 +128,10 @@ pub fn build(b: *std.Build) void {
     const unit_tests = b.addTest(.{
         .name = "xtc-test-suite",
         .root_module = xtc,
-        // .test_runner = .{
-        //     .path = b.path("src/lib/test_runner.zig"),
-        //     .mode = .simple,
-        // },
+        .test_runner = .{
+            .path = b.path("src/lib/test_runner.zig"),
+            .mode = .simple,
+        },
     });
 
     unit_tests.linkLibrary(libwren);
@@ -134,6 +139,7 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(unit_tests);
 
     const run_unit_tests = b.addRunArtifact(unit_tests);
+    run_unit_tests.setEnvironmentVariable("TEST_VERBOSE", "true");
     b.step("test", "Run unit tests").dependOn(&run_unit_tests.step);
 
     // WASM build target using WASI for stdout access

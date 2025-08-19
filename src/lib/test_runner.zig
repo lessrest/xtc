@@ -56,8 +56,19 @@ const TestCase = struct {
 
         current_test = self;
 
-        const nothing = stdio.captureOutputFromCall(self.func, &lines, allocator);
-        if (nothing) |_| {
+        // const nothing = stdio.captureOutputFromCall(self.func, &lines, allocator);
+        // if (nothing) |_| {
+        //     self.status = .pass;
+        // } else |err| {
+        //     self.status = .fail;
+        //     self.error_value = err;
+        //     if (@errorReturnTrace()) |trace| {
+        //         self.stack_trace = try copyStackTrace(allocator, trace.*);
+        //     }
+        //     try failures.append(self);
+        // }
+
+        if (self.func()) |_| {
             self.status = .pass;
         } else |err| {
             self.status = .fail;
@@ -98,7 +109,7 @@ const TestCase = struct {
                 },
                 .skip => try dk.testSkip(case.friendly_name),
                 .leak => try dk.testFail(case.friendly_name, "memory leak", ms),
-                .pending => unreachable,
+                .pending => try dk.testPending(case.friendly_name),
             }
         } else {
             // Concise mode
@@ -106,6 +117,13 @@ const TestCase = struct {
         }
     }
 };
+
+fn copyStackTrace(allocator: Allocator, trace: std.builtin.StackTrace) !std.builtin.StackTrace {
+    return std.builtin.StackTrace{
+        .index = trace.index,
+        .instruction_addresses = try allocator.dupe(usize, trace.instruction_addresses),
+    };
+}
 
 const Status = enum { pending, pass, fail, skip, leak };
 
@@ -213,7 +231,7 @@ const TestGroup = struct {
         if (verbose) {
             try tree.line(self.path);
         } else {
-            const padding = 24 - path.len;
+            const padding = 24 - @min(24, path.len);
             for (0..padding) |_| {
                 try tree.raw(" ");
             }
@@ -231,6 +249,17 @@ const TestGroup = struct {
         }
     }
 };
+
+fn getFunctionFilePath(
+    dbg_info: *std.debug.SelfInfo,
+    allocator: Allocator,
+    func: std.builtin.TestFn,
+) !?[]const u8 {
+    const module = try dbg_info.getModuleForAddress(@intFromPtr(func.func));
+    const symbol_info = try module.getSymbolAtAddress(allocator, @intFromPtr(func.func));
+
+    return symbol_info.source_location.?.file_name;
+}
 
 const TestSuite = struct {
     allocator: Allocator,
@@ -273,7 +302,7 @@ const TestSuite = struct {
         // First pass: organize tests into groups by source file
         for (builtin.test_functions) |t| {
             const source_path = if (dbg_info) |di|
-                getFunctionFilePath(di, self.allocator, t.func)
+                try getFunctionFilePath(di, self.allocator, t)
             else
                 null;
 
@@ -366,7 +395,7 @@ const TestSuite = struct {
                     try dk.errorMsg(try std.fmt.allocPrint(self.allocator, "{s}: {s}", .{ failure.friendly_name, failure.errorName() }));
 
                     if (failure.stack_trace) |trace| {
-                        try dumpVerboseStackTrace(tree, trace, failure.friendly_name);
+                        try ansi.dumpConciseStackTrace(tree, trace);
                     }
                     if (failure.output.len > 0) {
                         for (failure.output) |line| {
@@ -376,8 +405,8 @@ const TestSuite = struct {
                 } else {
                     if (failure.stack_trace) |trace| {
                         try tree.newline();
-                        try dumpConciseStackTrace(tree, trace, failure.friendly_name);
-                        try emitMatcherFailureLine(tree, failure.friendly_name, failure.errorName(), trace);
+                        try ansi.dumpConciseStackTrace(tree, trace);
+                        //                        try emitMatcherFailureLine(tree, failure.friendly_name, failure.errorName(), trace);
                         if (failure.output.len > 0) {
                             for (failure.output) |line| {
                                 try dk.subprocessOutput(line.text, line.kind == .err);
@@ -463,6 +492,8 @@ pub fn main() !void {
     // Exit with appropriate code
     std.posix.exit(if (ok) 0 else 1);
 }
+
+pub const panic = ansi.panic;
 
 const SlowTracker = struct {
     const SlowestQueue = std.PriorityDequeue(TestInfo, void, compareTiming);
@@ -570,25 +601,6 @@ const Env = struct {
     }
 };
 
-pub const panic = std.debug.FullPanic(struct {
-    pub fn panicFn(msg: []const u8, first_trace_addr: ?usize) noreturn {
-        // const stderr = std.io.getStdErr().writer();
-        // const allocator = std.heap.page_allocator;
-        // var dk = current_tree.dk();
-
-        // if (current_test) |ct| {
-        //     dk.errorMsg(std.fmt.allocPrint(allocator, "panic in test: {s}", .{ct.friendly_name}) catch "panic in test") catch {};
-        //     dk.errorMsg(msg) catch {};
-        //     stderr.writeAll("\n") catch {};
-
-        //     if (@errorReturnTrace()) |trace| {
-        //         dumpVerboseStackTrace(current_tree, trace.*, ct.friendly_name) catch {};
-        //     }
-        // }
-        std.debug.defaultPanic(msg, first_trace_addr);
-    }
-}.panicFn);
-
 const FailureInfo = struct {
     test_name: []const u8,
     error_name: []const u8,
@@ -596,274 +608,3 @@ const FailureInfo = struct {
     file_path: ?[]const u8,
     output: std.ArrayList(stdio.Line),
 };
-
-fn getFunctionFilePath(dbg: *std.debug.SelfInfo, allocator: std.mem.Allocator, func: anytype) ?[]const u8 {
-    const addr: usize = @intFromPtr(func);
-    const module = dbg.getModuleForAddress(addr) catch return null;
-    const si = module.getSymbolAtAddress(dbg.allocator, addr) catch return null;
-    if (si.source_location) |sl| {
-        const dir = std.fs.cwd().realpathAlloc(allocator, ".") catch return null;
-        const relative_path = std.fs.path.relative(allocator, dir, sl.file_name) catch return null;
-        return relative_path;
-    }
-    return null;
-}
-
-fn copyStackTrace(allocator: Allocator, trace: std.builtin.StackTrace) !std.builtin.StackTrace {
-    var copy = trace;
-    const addresses = try allocator.alloc(usize, trace.instruction_addresses.len);
-    @memcpy(addresses, trace.instruction_addresses);
-    copy.instruction_addresses = addresses;
-    return copy;
-}
-
-fn dumpVerboseStackTrace(tree: anytype, stack_trace: std.builtin.StackTrace, test_name: []const u8) !void {
-    _ = test_name;
-    const allocator = tree.allocator;
-    var dk = tree.dk();
-
-    if (std.debug.getSelfDebugInfo() catch null) |dbg| {
-        var frames = std.ArrayList(FrameInfo).init(allocator);
-        defer frames.deinit();
-
-        // Collect frames up to test function
-        var frame_index: usize = 0;
-        var frames_left: usize = @min(stack_trace.index, stack_trace.instruction_addresses.len);
-
-        while (frames_left != 0) : ({
-            frames_left -= 1;
-            frame_index = (frame_index + 1) % stack_trace.instruction_addresses.len;
-        }) {
-            const return_address = stack_trace.instruction_addresses[frame_index];
-            const address = return_address -| 1;
-
-            const module = dbg.getModuleForAddress(address) catch continue;
-            const si = module.getSymbolAtAddress(dbg.allocator, address) catch continue;
-            defer if (si.source_location) |sl| dbg.allocator.free(sl.file_name);
-
-            if (si.source_location) |sl| {
-                const cwd = std.fs.cwd().realpathAlloc(allocator, ".") catch continue;
-                defer allocator.free(cwd);
-
-                // Strip pwd prefix or zig lib path to get relative path
-                const file_path = if (std.mem.indexOf(u8, sl.file_name, "/zig/") != null and
-                    std.mem.indexOf(u8, sl.file_name, "/lib/") != null)
-                blk: {
-                    // This is a zig stdlib path, show as $zig/lib/...
-                    if (std.mem.indexOf(u8, sl.file_name, "/lib/")) |lib_idx| {
-                        const after_lib = sl.file_name[lib_idx + 5 ..];
-                        const formatted = try std.fmt.allocPrint(allocator, "$zig/lib/{s}", .{after_lib});
-                        break :blk formatted;
-                    }
-                    break :blk sl.file_name;
-                } else if (std.mem.startsWith(u8, sl.file_name, cwd)) blk: {
-                    const rel_path = try allocator.dupe(u8, sl.file_name[cwd.len + 1 ..]);
-                    break :blk rel_path;
-                } else sl.file_name;
-
-                try frames.append(.{
-                    .file = file_path,
-                    .line = sl.line,
-                    .column = sl.column,
-                    .func_name = try allocator.dupe(u8, si.name),
-                });
-
-                // Stop after we've collected the test function frame
-                if (std.mem.startsWith(u8, si.name, "test.")) break;
-            }
-        }
-
-        // Reverse to show test frame first
-        std.mem.reverse(FrameInfo, frames.items);
-
-        if (frames.items.len == 0) {
-            return;
-        }
-
-        {
-            const frame = frames.items[0];
-
-            try tree.newline();
-            const func_display = if (std.mem.lastIndexOf(u8, frame.func_name, ".")) |idx|
-                frame.func_name[idx + 1 ..]
-            else
-                frame.func_name;
-
-            try dk.stackFrame(frame.file, frame.line, frame.column, func_display);
-
-            const source = try getSourceLines(allocator, frame.file);
-            try dk.sourceBlock(source, frame.line, frame.column, 2);
-        }
-
-        for (frames.items[1..]) |frame| {
-            const func_display = if (std.mem.lastIndexOf(u8, frame.func_name, ".")) |idx|
-                frame.func_name[idx + 1 ..]
-            else
-                frame.func_name;
-            try dk.stackFrame(frame.file, frame.line, frame.column, func_display);
-        }
-
-        // Cleanup
-        for (frames.items) |frame| {
-            allocator.free(frame.file);
-            allocator.free(frame.func_name);
-        }
-    }
-}
-
-const FrameInfo = struct {
-    file: []const u8,
-    line: u64,
-    column: u64,
-    func_name: []const u8,
-};
-
-fn getSourceLines(allocator: Allocator, file_path: []const u8) ![]const u8 {
-    var f = try std.fs.cwd().openFile(file_path, .{});
-    defer f.close();
-    return try f.readToEndAlloc(allocator, 1024 * 1024);
-}
-
-fn dumpConciseStackTrace(tree: *Tree, stack_trace: std.builtin.StackTrace, test_name: []const u8) !void {
-    _ = test_name;
-    const dbg = std.debug.getSelfDebugInfo() catch return;
-    const allocator = tree.allocator;
-
-    // Get current working directory for path stripping
-    const cwd = std.fs.cwd().realpathAlloc(allocator, ".") catch null;
-    defer if (cwd) |c| allocator.free(c);
-
-    var frame_index: usize = 0;
-    var frames_left: usize = @min(stack_trace.index, stack_trace.instruction_addresses.len);
-    var shown_frames: usize = 0;
-    const max_frames = 50;
-
-    while (frames_left != 0 and shown_frames < max_frames) : ({
-        frames_left -= 1;
-        frame_index = (frame_index + 1) % stack_trace.instruction_addresses.len;
-    }) {
-        const return_address = stack_trace.instruction_addresses[frame_index];
-        const address = return_address -| 1;
-
-        const module = dbg.getModuleForAddress(address) catch continue;
-        const si = module.getSymbolAtAddress(dbg.allocator, address) catch continue;
-        defer if (si.source_location) |sl| dbg.allocator.free(sl.file_name);
-
-        if (!std.mem.startsWith(u8, si.name, "test.")) continue;
-
-        if (si.source_location) |sl| {
-            // Strip pwd prefix or zig lib path to get relative path
-            const file_path = if (std.mem.indexOf(u8, sl.file_name, "/zig/") != null and
-                std.mem.indexOf(u8, sl.file_name, "/lib/") != null)
-            blk: {
-                // This is a zig stdlib path, show as $zig/lib/...
-                if (std.mem.indexOf(u8, sl.file_name, "/lib/")) |lib_idx| {
-                    const after_lib = sl.file_name[lib_idx + 5 ..];
-                    const formatted = std.fmt.allocPrint(allocator, "$zig/lib/{s}", .{after_lib}) catch sl.file_name;
-                    break :blk formatted;
-                }
-                break :blk sl.file_name;
-            } else if (cwd) |c| blk: {
-                if (std.mem.startsWith(u8, sl.file_name, c)) {
-                    break :blk sl.file_name[c.len + 1 ..];
-                }
-                break :blk sl.file_name;
-            } else sl.file_name;
-
-            const func_name = if (std.mem.lastIndexOf(u8, si.name, ".")) |idx|
-                si.name[idx + 1 ..]
-            else
-                si.name;
-
-            try tree.dk().spaces(6);
-            try tree.dk().stackFrame(file_path, sl.line, sl.column, func_name);
-            shown_frames += 1;
-        }
-    }
-}
-
-fn emitMatcherFailureLine(
-    tree: *Tree,
-    test_name: []const u8,
-    error_name: []const u8,
-    stack_trace: std.builtin.StackTrace,
-) !void {
-    _ = test_name; // autofix
-    _ = error_name; // autofix
-    if (std.debug.getSelfDebugInfo() catch null) |dbg| {
-        const allocator = tree.allocator;
-        const cwd = std.fs.cwd().realpathAlloc(allocator, ".") catch null;
-        defer if (cwd) |c| allocator.free(c);
-
-        var frame_index: usize = 0;
-        var frames_left: usize = @min(stack_trace.index, stack_trace.instruction_addresses.len);
-        while (frames_left != 0) : ({
-            frames_left -= 1;
-            frame_index = (frame_index + 1) % stack_trace.instruction_addresses.len;
-        }) {
-            const return_address = stack_trace.instruction_addresses[frame_index];
-            const address = return_address -| 1;
-            const module = dbg.getModuleForAddress(address) catch continue;
-            const si = module.getSymbolAtAddress(dbg.allocator, address) catch continue;
-            defer if (si.source_location) |sl| dbg.allocator.free(sl.file_name);
-            if (!std.mem.startsWith(u8, si.name, "test.")) continue;
-
-            if (si.source_location) |sl| {
-                // Strip pwd prefix or zig lib path to get relative path
-                const file_path = if (std.mem.indexOf(u8, sl.file_name, "/zig/") != null and
-                    std.mem.indexOf(u8, sl.file_name, "/lib/") != null)
-                blk: {
-                    // This is a zig stdlib path, show as $zig/lib/...
-                    if (std.mem.indexOf(u8, sl.file_name, "/lib/")) |lib_idx| {
-                        const after_lib = sl.file_name[lib_idx + 5 ..];
-                        const formatted = std.fmt.allocPrint(allocator, "$zig/lib/{s}", .{after_lib}) catch sl.file_name;
-                        break :blk formatted;
-                    }
-                    break :blk sl.file_name;
-                } else if (cwd) |c| blk: {
-                    if (std.mem.startsWith(u8, sl.file_name, c)) {
-                        break :blk sl.file_name[c.len + 1 ..];
-                    }
-                    break :blk sl.file_name;
-                } else sl.file_name;
-
-                const source = try getSourceLines(allocator, file_path);
-                try tree.dk().sourceBlock(source, sl.line, sl.column, 3);
-            }
-            break;
-        }
-    }
-}
-
-fn getSourceLine(buf: []u8, sl: std.debug.SourceLocation) !?[]const u8 {
-    var f = std.fs.cwd().openFile(sl.file_name, .{}) catch return null;
-    defer f.close();
-    var amt_read = try f.read(buf[0..]);
-    var current_line_start: usize = 0;
-    var next_line: usize = 1;
-    while (next_line != sl.line) {
-        const slice = buf[current_line_start..amt_read];
-        if (std.mem.indexOfScalar(u8, slice, '\n')) |pos| {
-            next_line += 1;
-            if (pos == slice.len - 1) {
-                amt_read = try f.read(buf[0..]);
-                current_line_start = 0;
-            } else current_line_start += pos + 1;
-        } else if (amt_read < buf.len) {
-            return null;
-        } else {
-            amt_read = try f.read(buf[0..]);
-            current_line_start = 0;
-        }
-    }
-    const slice = buf[current_line_start..amt_read];
-    if (std.mem.indexOfScalar(u8, slice, '\n')) |pos| {
-        const line = slice[0..pos];
-        std.mem.replaceScalar(u8, line, '\t', ' ');
-        return line;
-    } else {
-        const line = slice;
-        std.mem.replaceScalar(u8, line, '\t', ' ');
-        return line;
-    }
-}

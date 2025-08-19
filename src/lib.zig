@@ -11,6 +11,7 @@ pub const TreeNest = @import("ansi").nest;
 comptime {
     _ = @import("pageload.zig");
     _ = @import("xml.zig");
+    _ = @import("fiberscript/vm.zig");
 }
 
 const std = @import("std");

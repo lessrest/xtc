@@ -44,7 +44,7 @@
       "args": ["build", "test", "--watch", "--summary", "none"],
       "group": "test",
       "options": {
-        "env": { "TEST_VERBOSE": "false" }
+        "env": { "TEST_VERBOSE": "true" }
       },
       "isTestCommand": true,
       "runOptions": { "instanceLimit": 1 },

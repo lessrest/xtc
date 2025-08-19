@@ -12,9 +12,6 @@ pub const std_options: std.Options = .{
     .logFn = logging.logFn,
 };
 
-/// Override panic handler for clean terminal exit
-pub const panic = logging.panic;
-
 /// Main entry point - simple boot and delegate
 pub fn main() !void {
     // Initialize memory management
@@ -32,3 +29,5 @@ pub fn main() !void {
 
     try application.run();
 }
+
+pub const panic = @import("ansi").panic;

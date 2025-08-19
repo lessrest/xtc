@@ -143,6 +143,10 @@ pub fn Dank(comptime Writer: type) type {
             try self.lineParts(&.{ iconPart(.skip), colored(name, .rgb(100, 100, 200)), dim("[skipped]") });
         }
 
+        pub fn testPending(self: Self, name: []const u8) !void {
+            try self.lineParts(&.{ iconPart(.skip), colored(name, .rgb(100, 100, 200)), dim("[pending]") });
+        }
+
         pub fn testCompact(self: Self, passed: bool) !void {
             if (passed) {
                 try self.barely(colored(".", .rgb(100, 200, 100)));
@@ -273,16 +277,19 @@ pub fn Dank(comptime Writer: type) type {
 
         // Stack trace formatting
         pub fn stackFrame(self: Self, file: []const u8, line: u64, col: u64, func: []const u8) !void {
-            _ = func; // autofix
+            const base = std.fs.path.basename(file);
+            const dir = std.fs.path.dirname(file) orelse ".";
+
             try self.compose(&.{
-                bold(file),
+                dim(dir),
+                dim("/"),
+                bold(base),
                 dim(":"),
                 self.integerPart(line),
                 dim(":"),
                 self.integerPart(col),
-                dim(": "),
-                red("error: "),
-                dim("test failed"),
+                dim(" "),
+                underline(func),
             }).joined("");
         }
 
@@ -299,17 +306,23 @@ pub fn Dank(comptime Writer: type) type {
             }
 
             const total_lines = line_buf.items.len;
-            const start_line = if (highlight_line) |hl| if (hl > context_lines) hl - context_lines else 0 else 0;
-            const end_line = if (highlight_line) |hl| @min(hl + context_lines, @as(u64, @intCast(total_lines))) else total_lines - 1;
+            var start_line = if (highlight_line) |hl| if (hl > context_lines) hl - context_lines - 1 else 0 else 0;
+            var end_line = if (highlight_line) |hl| @min(hl + context_lines - 1, @as(u64, @intCast(total_lines))) else total_lines - 1;
 
-            for (line_buf.items[start_line..end_line]) |line| {
+            // shift start and end back one step if possible
+            if (start_line > 0 and context_lines > 0) {
+                start_line -= 1;
+                end_line -= 1;
+            }
+
+            for (line_buf.items[start_line..@min(end_line + 1, total_lines)]) |line| {
                 if (line.len > longest_line) longest_line = line.len;
             }
 
             try self.tree.resetStyle();
             try self.tree.beginLine();
-            try self.spaces(5);
-            try self.topBorderSeparator(longest_line + 2);
+            //            try self.spaces(5);
+            //            try self.topBorderSeparator(longest_line + 2);
 
             var line_num = start_line;
             while (line_num <= end_line) : (line_num += 1) {
@@ -317,13 +330,14 @@ pub fn Dank(comptime Writer: type) type {
 
                 const line_idx = line_num;
                 const line = line_buf.items[line_idx];
-                const is_highlight = highlight_line != null and line_num == highlight_line.?;
+                const is_highlight = highlight_line != null and line_num + 1 == highlight_line.?;
 
-                const after_highlight = highlight_line != null and line_num > highlight_line.?;
+                const after_highlight = highlight_line != null and line_num + 1 > highlight_line.?;
 
                 try self.tree.beginLine();
+                try self.tree.dk().spaces(2);
 
-                const highlight_color = Color.rgb(200, 50, 100);
+                const highlight_color = Color.rgb(228, 171, 101);
 
                 // Line number
                 const num_part = treenest.formattedStyled(
@@ -343,46 +357,51 @@ pub fn Dank(comptime Writer: type) type {
                     try self.tree.styled("│ ", .{ .fg = Color.rgb(60, 60, 80) });
                 }
 
-                // Code line
-                if (is_highlight) {
-                    if (highlight_col) |col1| {
-                        var col2 = @min(col1 + 1, line.len - 1);
-                        // find end of current word/token
-                        while (col2 < line.len) : (col2 += 1) {
-                            if (std.mem.indexOfScalar(u8, " .(){}[]", line[col2]) != null) {
-                                break;
+                if (line.len != 0) {
+                    // Code line
+                    if (is_highlight) {
+                        if (highlight_col) |col1| {
+                            var col2 = @min(col1, line.len - 1);
+                            // find end of current word/token
+                            while (col2 < line.len) : (col2 += 1) {
+                                if (std.mem.indexOfScalar(u8, " .,()}]", line[col2]) != null) {
+                                    col2 = @min(col2 + 1, line.len - 1);
+                                    break;
+                                }
                             }
-                        }
 
-                        // Print line with underline at specific column
-                        if (col1 > 0 and col1 <= line.len) {
-                            const before = line[0 .. col1 - 1];
-                            const at = line[col1 - 1 .. col2];
-                            const after = line[col2..];
+                            // Print line with underline at specific column
+                            if (col1 > 0 and col1 - 1 <= line.len) {
+                                const before = line[0 .. col1 - 1];
+                                const at = line[col1 - 1 .. col2];
+                                const after = line[col2..];
 
-                            try self.compose(&.{
-                                colored(before, .rgb(200, 200, 200)),
-                                colored(at, highlight_color).underlined(),
-                                colored(after, .rgb(200, 200, 200)),
-                            }).inlineJoined("");
+                                try self.compose(&.{
+                                    colored(before, .rgb(161, 163, 117)),
+                                    colored(at, highlight_color),
+                                    colored(after, .rgb(161, 163, 117)),
+                                }).inlineJoined("");
+                            } else {
+                                try self.tree.styled(line, .{ .fg = Color.rgb(200, 200, 100) });
+                            }
                         } else {
                             try self.tree.styled(line, .{ .fg = Color.rgb(200, 200, 100) });
                         }
                     } else {
-                        try self.tree.styled(line, .{ .fg = Color.rgb(200, 200, 100) });
+                        try self.tree.styled(line, .{ .fg = Color.rgb(119, 119, 142) });
                     }
-                } else {
-                    try self.tree.styled(line, .{ .fg = Color.rgb(150, 150, 170) });
                 }
 
-                try self.spaces(longest_line - line.len);
+                // if (line.len < longest_line) {
+                //     try self.spaces(longest_line - line.len);
+                // }
 
-                // Border
-                if (is_highlight) {
-                    try self.tree.styled(" │", .{ .fg = highlight_color });
-                } else {
-                    try self.tree.styled(" │", .{ .fg = Color.rgb(60, 60, 80) });
-                }
+                // // Border
+                // if (is_highlight) {
+                //     try self.tree.styled(" │", .{ .fg = highlight_color });
+                // } else {
+                //     try self.tree.styled(" │", .{ .fg = Color.rgb(60, 60, 80) });
+                // }
 
                 try self.tree.newline();
 
@@ -392,9 +411,9 @@ pub fn Dank(comptime Writer: type) type {
             }
 
             try self.tree.resetStyle();
-            try self.tree.beginLine();
-            try self.spaces(5);
-            try self.bottomBorderSeparator(longest_line + 2);
+            //            try self.tree.beginLine();
+            //            try self.spaces(5);
+            //            try self.bottomBorderSeparator(longest_line + 2);
         }
 
         // Code snippet with line numbers

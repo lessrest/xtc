@@ -1,30 +1,28 @@
 const std = @import("std");
 
 const c = @import("wren.zig");
+const VMContext = @import("vm_context.zig").VMContext;
+const ErrorHandler = @import("error_handler.zig").ErrorHandler;
+const slots_api = @import("slots.zig");
 
-const TrackingAllocator = @import("../lib/TrackingAllocator.zig");
+const ansi = @import("ansi");
+const tree = ansi.nest;
 
 pub const Configuration = struct {
     API: type = struct {},
 };
 
-pub const ErrorReport = union(enum) {
-    none: struct {},
-    compilation_error: struct {
-        error_message: []const u8,
-        module_name: []const u8,
-        source_line: usize,
-    },
-    runtime_error: struct {
-        message: []const u8,
-        stack_trace: std.ArrayListUnmanaged(StackTraceLine),
-    },
-};
+pub const ErrorReport = ErrorHandler.ErrorReport;
+pub const StackTraceLine = ErrorHandler.StackTraceLine;
 
-pub const StackTraceLine = struct {
-    symbol_name: []const u8,
-    module_name: []const u8,
-    source_line: usize,
+pub const Request = union(enum) {
+    @"Ring.push": struct {
+        ring: *c.Handle,
+    },
+
+    @"Ring.pull": struct {
+        ring: *c.Handle,
+    },
 };
 
 pub fn Engine(configuration: Configuration) type {
@@ -39,24 +37,12 @@ pub fn Engine(configuration: Configuration) type {
         };
 
         allocator: std.mem.Allocator,
-
         vm: *c.VM,
+        context: *VMContext,
 
-        output_buffer: std.heap.FixedBufferAllocator,
-        error_buffer: std.heap.FixedBufferAllocator,
-        current_error: ErrorReport = .{ .none = .{} },
-        current_output: std.ArrayList(u8),
-
-        fn cast(ctx: anytype) *Self {
-            if (@TypeOf(ctx) == *anyopaque) {
-                return @ptrCast(@alignCast(ctx));
-            } else if (@TypeOf(ctx) == ?*anyopaque) {
-                return @ptrCast(@alignCast(ctx.?));
-            } else if (@TypeOf(ctx) == *c.VM) {
-                return @ptrCast(@alignCast(c.wrenGetUserData(ctx)));
-            } else {
-                @compileError("Invalid context type: " ++ @typeName(@TypeOf(ctx)));
-            }
+        fn getContext(vm: *c.VM) *VMContext {
+            const user_data = c.wrenGetUserData(vm);
+            return @ptrCast(@alignCast(user_data));
         }
 
         pub fn init(allocator: std.mem.Allocator) !*Self {
@@ -66,52 +52,36 @@ pub fn Engine(configuration: Configuration) type {
         }
 
         pub fn setup(self: *Self, allocator: std.mem.Allocator, options: Options) !void {
-            const error_buffer = std.heap.FixedBufferAllocator.init(
-                try allocator.alloc(u8, options.error_buffer_size),
-            );
-            errdefer allocator.free(error_buffer.buffer);
+            const context = try VMContext.init(allocator, .{
+                .output_buffer_size = options.output_buffer_size,
+                .error_buffer_size = options.error_buffer_size,
+            });
+            errdefer context.deinit(allocator);
 
-            const output_buffer = std.heap.FixedBufferAllocator.init(
-                try allocator.alloc(u8, options.output_buffer_size),
-            );
-            errdefer allocator.free(output_buffer.buffer);
-
-            var vmconf = c.Configuration{};
-            c.wrenInitConfiguration(&vmconf);
-            vmconf.reallocateFn = reallocateFn;
-            vmconf.writeFn = writeFn;
-            vmconf.errorFn = errorFn;
-            vmconf.bindForeignMethodFn = bindForeignMethodFn;
-
-            // The VM initialization calls the reallocate function,
-            // so we need to set the allocator before that,
-            // and the user data pointer needs to be correct.
-            vmconf.userData = self;
-            self.allocator = allocator;
+            var vmconf = context.createVMConfiguration();
 
             if (c.wrenNewVM(&vmconf)) |vm| {
                 self.* = .{
                     .allocator = allocator,
                     .vm = vm,
-                    .output_buffer = output_buffer,
-                    .error_buffer = error_buffer,
-                    .current_output = std.ArrayList(u8).init(self.output_buffer.allocator()),
+                    .context = context,
                 };
 
                 try self.bind();
             } else {
+                context.deinit(allocator);
                 return error.FailedToCreateVM;
             }
         }
 
         pub fn deinit(self: *Self) void {
             const allocator = self.allocator;
+            for (self.context.fiber_queue.items) |fiber| {
+                c.wrenReleaseHandle(self.vm, fiber);
+            }
 
             c.wrenFreeVM(self.vm);
-
-            allocator.free(self.output_buffer.buffer);
-            allocator.free(self.error_buffer.buffer);
-
+            self.context.deinit(allocator);
             allocator.destroy(self);
         }
 
@@ -150,212 +120,36 @@ pub fn Engine(configuration: Configuration) type {
                         , .{ method_name, sighash });
                     }
 
-                    std.debug.print("code: \n{s}\n", .{code.items});
                     try self.runTopLevel(module_name, code.items);
                 }
             }
 
-            try self.runTopLevel("core",
-                \\class Ring {
-                \\  queue { _queue }
-                \\
-                \\  construct new() {
-                \\    _queue = []
-                \\  }
-                \\
-                \\  push(item) {
-                \\    _queue.add(item)
-                \\  }
-                \\
-                \\  soon(block) {
-                \\    push(Fiber.new(block))
-                \\  }
-                \\
-                \\  pop() {
-                \\    return _queue.removeAt(0)
-                \\  }
-                \\
-                \\  size { _queue.count }
-                \\}
-                \\
-                \\var ring = Ring.new()
-                \\
-            );
-        }
-
-        fn bindForeignMethodFn(
-            vm: *c.VM,
-            module: [*:0]const u8,
-            className: [*:0]const u8,
-            isStatic: bool,
-            method: [*:0]const u8,
-        ) callconv(.C) c.ForeignMethodFn {
-            _ = module; // autofix
-            const self = cast(vm);
-            _ = self; // autofix
-
-            std.debug.print("className: {s}\n", .{className});
-            std.debug.print("isStatic: {any}\n", .{isStatic});
-            std.debug.print("method: {s}\n", .{method});
-
-            inline for (@typeInfo(API).@"struct".fields) |field| {
-                std.debug.print("field: {s}\n", .{field.name});
-            }
-
-            return null;
-        }
-
-        fn reallocateFn(
-            memory: ?*anyopaque,
-            new_size: usize,
-            ctxptr: *anyopaque,
-        ) callconv(.C) ?*anyopaque {
-            const self = cast(ctxptr);
-            const allocator = self.allocator;
-            var tracked = TrackingAllocator.create(allocator);
-            if (memory) |mem| {
-                const ptr: [*]u8 = @ptrCast(mem);
-                if (new_size == 0) {
-                    tracked.free(ptr);
-                    return null;
-                } else {
-                    return tracked.realloc(ptr, new_size);
-                }
-            } else {
-                if (new_size == 0) {
-                    return null;
-                }
-                return tracked.alloc(new_size);
-            }
-        }
-
-        fn writeFn(vm: *c.VM, text: [*:0]const u8) callconv(.C) void {
-            var self = cast(vm);
-            const str = std.mem.span(text);
-            self.current_output.appendSlice(str) catch {
-                const message = "output buffer full";
-                c.wrenSetSlotString(self.vm, 1, message);
-                c.wrenAbortFiber(vm, 1);
-            };
+            try self.runTopLevel("core", @embedFile("ring.wren"));
         }
 
         /// Returns the current error and clears it.
         pub fn takeError(self: *Self) ErrorReport {
-            const e = self.current_error;
-            self.current_error = .{ .none = .{} };
-            return e;
+            return self.context.takeError();
         }
 
         /// Returns an error if there is a current error.
         /// If there is no error, does nothing.
         pub fn checkError(self: *Self) error{ CompilationError, RuntimeError }!void {
-            switch (self.current_error) {
-                .compilation_error => return error.CompilationError,
-                .runtime_error => return error.RuntimeError,
-                else => {},
-            }
+            return self.context.checkError();
         }
 
         pub fn takeOutput(self: *Self, allocator: std.mem.Allocator) ![]const u8 {
-            const output = try allocator.dupe(u8, self.current_output.items);
-            self.current_output.clearAndFree();
-            return output;
+            return self.context.takeOutput(allocator);
         }
 
         pub fn croak(self: *Self) !void {
-            const e = self.takeError();
-            switch (e) {
-                .none => {},
-                .compilation_error => {
-                    std.debug.print("compilation error: {s}\n", .{e.compilation_error.error_message});
-                    return error.CompilationError;
-                },
-                .runtime_error => {
-                    std.debug.print("runtime error: {s}\n", .{e.runtime_error.message});
-                    for (e.runtime_error.stack_trace.items) |line| {
-                        std.debug.print("  {s} in {s}:{d}\n", .{
-                            line.symbol_name,
-                            line.module_name,
-                            line.source_line,
-                        });
-                    }
-                    return error.RuntimeError;
-                },
-            }
+            return self.context.croak();
         }
 
-        fn errorFn(
-            vm: *c.VM,
-            error_type: c.ErrorType,
-            module_ptr: ?[*:0]const u8,
-            line: c_int,
-            message_ptr: ?[*:0]const u8,
-        ) callconv(.C) void {
-            const self = cast(vm);
-
-            const allocator = self.error_buffer.allocator();
-            const message = if (message_ptr) |m| std.mem.span(m) else "";
-            const module = if (module_ptr) |m| std.mem.span(m) else "";
-            switch (self.current_error) {
-                .runtime_error => |*runtime_error| {
-                    switch (error_type) {
-                        .stack_trace => {
-                            runtime_error.stack_trace.append(allocator, .{
-                                .symbol_name = allocator.dupe(u8, message) catch {
-                                    std.debug.panic("failed to dupe symbol name", .{});
-                                },
-                                .module_name = allocator.dupe(u8, module) catch {
-                                    std.debug.panic("failed to dupe module name", .{});
-                                },
-                                .source_line = @intCast(line),
-                            }) catch {
-                                std.debug.panic("failed to append stack trace line", .{});
-                            };
-                        },
-                        else => std.debug.panic("{any} during runtime error", .{error_type}),
-                    }
-                },
-                else => {
-                    switch (error_type) {
-                        .compile => {
-                            self.current_error = .{
-                                .compilation_error = .{
-                                    .error_message = allocator.dupe(u8, message) catch {
-                                        std.debug.panic("failed to dupe error message", .{});
-                                    },
-                                    .module_name = allocator.dupe(u8, module) catch {
-                                        std.debug.panic("failed to dupe module name", .{});
-                                    },
-                                    .source_line = @intCast(line),
-                                },
-                            };
-                        },
-                        .runtime => {
-                            self.current_error = .{
-                                .runtime_error = .{
-                                    .message = allocator.dupe(u8, message) catch {
-                                        std.debug.panic("failed to dupe message", .{});
-                                    },
-                                    .stack_trace = std.ArrayListUnmanaged(StackTraceLine){},
-                                },
-                            };
-                        },
-                        .stack_trace => std.debug.panic("stack trace without error", .{}),
-                    }
-                },
-            }
-        }
-
-        pub fn ringSize(self: *Self) !usize {
-            c.wrenEnsureSlots(self.vm, 1);
-            c.wrenGetVariable(self.vm, "core", "ring", 0);
-            const handle = c.wrenMakeCallHandle(self.vm, "size") orelse {
-                return error.FailedToMakeCallHandle;
-            };
-            defer c.wrenReleaseHandle(self.vm, handle);
-            _ = c.wrenCall(self.vm, handle);
-            const result = c.wrenGetSlotDouble(self.vm, 0);
-            return @intFromFloat(result);
+        /// Start building a slot configuration for method calls.
+        /// Provides a fluent interface for working with Wren slots.
+        pub fn slots(self: *Self) slots_api.SlotBuilder {
+            return slots_api.SlotBuilder.init(self.vm, self.allocator);
         }
     };
 }
@@ -390,7 +184,7 @@ test "we can run a simple script" {
     try std.testing.expect(engine.takeError() == .none);
 }
 
-test "we can call ring.soon" {
+test "we can call Core.spawn" {
     const allocator = std.testing.allocator;
 
     const API = struct {
@@ -408,16 +202,16 @@ test "we can call ring.soon" {
 
     engine.runTopLevel("main",
         \\import "foo" for hello
-        \\import "core" for ring
+        \\import "core" for Core
         \\
         \\System.print(hello)
         \\
-        \\ring.soon {
-        \\  Fiber.yield(hello)
+        \\Core.spawn {
+        \\  System.print("hello")
         \\}
         \\
-        \\ring.soon {
-        \\  Fiber.yield(hello)
+        \\Core.spawn {
+        \\  System.print("hello")
         \\}
         \\
     ) catch {
@@ -427,5 +221,96 @@ test "we can call ring.soon" {
     const output = try engine.takeOutput(allocator);
     defer allocator.free(output);
 
-    try std.testing.expectEqual(try engine.ringSize(), 2);
+    try engine.context.trampoline(engine.vm);
+}
+
+test "slots API - simple method call" {
+    const allocator = std.testing.allocator;
+
+    var engine = try Engine(.{}).init(allocator);
+    defer engine.deinit();
+
+    try engine.runTopLevel("test",
+        \\class TestClass {
+        \\  static getValue() { 42 }
+        \\  static add(a, b) { a + b }
+        \\}
+    );
+
+    // Test simple static method call
+    var builder1 = engine.slots();
+    const result = try builder1
+        .variable("test", "TestClass", 0)
+        .call("getValue()")
+        .as(f64);
+
+    try std.testing.expectEqual(@as(f64, 42), result);
+
+    // Test method call with arguments
+    var builder2 = engine.slots();
+    _ = builder2.variable("test", "TestClass", 0);
+    _ = builder2.set(1, 10);
+    _ = builder2.set(2, 32);
+    const sum = try builder2.call("add(_,_)").as(f64);
+
+    try std.testing.expectEqual(@as(f64, 42), sum);
+}
+
+test "slots API - working with strings" {
+    const allocator = std.testing.allocator;
+
+    var engine = try Engine(.{}).init(allocator);
+    defer engine.deinit();
+
+    try engine.runTopLevel("test",
+        \\class StringHelper {
+        \\  static reverse(str) {
+        \\    var result = ""
+        \\    for (i in (str.count-1)..0) {
+        \\      result = result + str[i]
+        \\    }
+        \\    return result
+        \\  }
+        \\}
+    );
+
+    var builder = engine.slots();
+    _ = builder.variable("test", "StringHelper", 0);
+    _ = builder.set(1, "hello");
+    const result = try builder.call("reverse(_)").as([]const u8);
+    try std.testing.expectEqualStrings("olleh", result);
+}
+
+test "slots API - list operations" {
+    const allocator = std.testing.allocator;
+
+    var engine = try Engine(.{}).init(allocator);
+    defer engine.deinit();
+
+    try engine.runTopLevel("test",
+        \\class ListHelper {
+        \\  static createList() {
+        \\    var list = []
+        \\    list.add("first")
+        \\    list.add("second")
+        \\    return list
+        \\  }
+        \\  static getLength(list) { list.count }
+        \\}
+    );
+
+    // Create a list and get its length
+    var builder1 = engine.slots();
+    const list_handle = try builder1
+        .variable("test", "ListHelper", 0)
+        .call("createList()")
+        .as(*c.Handle);
+    defer c.wrenReleaseHandle(engine.vm, list_handle);
+
+    var builder2 = engine.slots();
+    _ = builder2.variable("test", "ListHelper", 0);
+    _ = builder2.set(1, list_handle);
+    const length = try builder2.call("getLength(_)").as(f64);
+
+    try std.testing.expectEqual(@as(f64, 2), length);
 }

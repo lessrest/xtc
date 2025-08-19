@@ -41,9 +41,41 @@ pub const Part = struct {
         return .{ .text = self.text, .style = self.style, .count = count };
     }
 
+    pub fn onColor(self: Part, color: Color) Part {
+        var part = self;
+        part.style.bg = color;
+        return part;
+    }
+
     pub fn underlined(self: Part) Part {
         var part = self;
         part.style.underline = true;
+        return part;
+    }
+
+    pub fn bold(self: Part) Part {
+        var part = self;
+        part.style.bold = true;
+        return part;
+    }
+
+    pub fn dim(self: Part) Part {
+        var part = self;
+        part.style.dim = true;
+        return part;
+    }
+
+    pub fn justifyRight(self: Part, allocator: std.mem.Allocator, width: usize) Part {
+        var part = self;
+        part.text = padLeft(allocator, part.text, width, ' ');
+        part.text = part.text[part.text.len - width ..];
+        return part;
+    }
+
+    pub fn justifyLeft(self: Part, allocator: std.mem.Allocator, width: usize) Part {
+        var part = self;
+        part.text = padRight(allocator, part.text, width, ' ');
+        part.text = part.text[0 .. part.text.len - width];
         return part;
     }
 };
@@ -118,21 +150,21 @@ pub fn formattedStyled(allocator: std.mem.Allocator, comptime fmt: []const u8, a
     return .{ .text = text, .style = style };
 }
 
-pub fn padLeft(allocator: std.mem.Allocator, text: []const u8, width: usize, pad_char: u8) Part {
-    if (text.len >= width) return plain(text);
+pub fn padLeft(allocator: std.mem.Allocator, text: []const u8, width: usize, pad_char: u8) []const u8 {
+    if (text.len >= width) return text;
     const padding_len = width - text.len;
-    const padded = allocator.alloc(u8, width) catch return plain(text);
+    const padded = allocator.alloc(u8, width) catch return text;
     @memset(padded[0..padding_len], pad_char);
     @memcpy(padded[padding_len..], text);
-    return plain(padded);
+    return padded;
 }
 
-pub fn padRight(allocator: std.mem.Allocator, text: []const u8, width: usize, pad_char: u8) Part {
-    if (text.len >= width) return plain(text);
-    const padded = allocator.alloc(u8, width) catch return plain(text);
+pub fn padRight(allocator: std.mem.Allocator, text: []const u8, width: usize, pad_char: u8) []const u8 {
+    if (text.len >= width) return text;
+    const padded = allocator.alloc(u8, width) catch return text;
     @memcpy(padded[0..text.len], text);
     @memset(padded[text.len..], pad_char);
-    return plain(padded);
+    return padded;
 }
 
 pub fn fixed(allocator: std.mem.Allocator, text: []const u8, width: usize) Part {
