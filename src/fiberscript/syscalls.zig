@@ -19,7 +19,7 @@ pub fn RequestUnion(comptime Syscalls: type) type {
         const value_type = @TypeOf(value);
         if (@typeInfo(value_type) == .@"fn") {
             const fn_info = @typeInfo(value_type).@"fn";
-            const PayloadType = fn_info.params[1].type.?;
+            const PayloadType = fn_info.params[2].type.?;
             union_fields[idx] = .{
                 .name = decl.name,
                 .type = PayloadType,
@@ -112,7 +112,7 @@ pub fn generateSlotParser(comptime Request: type, comptime Syscalls: type) type 
                 const value = @field(Syscalls, decl.name);
                 const value_type = @TypeOf(value);
                 if (@typeInfo(value_type) == .@"fn" and std.mem.eql(u8, operation, decl.name)) {
-                    const PayloadType = @typeInfo(value_type).@"fn".params[1].type.?;
+                    const PayloadType = @typeInfo(value_type).@"fn".params[2].type.?;
                     const payload_fields = std.meta.fields(PayloadType);
                     var payload: PayloadType = undefined;
                     inline for (payload_fields) |pf| {
@@ -127,12 +127,17 @@ pub fn generateSlotParser(comptime Request: type, comptime Syscalls: type) type 
 }
 
 /// Generate a trampoline dispatcher that bridges Wren fiber yields to syscall implementations.
-pub fn generateTrampoline(comptime Syscalls: type, comptime Context: type) type {
+pub fn generateTrampoline(
+    comptime Syscalls: type,
+    comptime Engine: type,
+    comptime Context: type,
+) type {
     return struct {
         const RequestType = RequestUnion(Syscalls);
         const ResultType = ResultUnion(Syscalls);
         const DispatchResult = SyscallResult(Syscalls);
 
+        engine: *Engine,
         context: *Context,
 
         /// Process a single request from a yielding fiber
@@ -147,13 +152,13 @@ pub fn generateTrampoline(comptime Syscalls: type, comptime Context: type) type 
                             const fn_info = @typeInfo(value_type).@"fn";
                             const ReturnType = fn_info.return_type.?;
                             if (ReturnType == Pending) {
-                                try value(self.context, payload);
+                                try value(self.engine, self.context, payload);
                                 return .{ .pending = {} };
                             } else if (ReturnType == void) {
-                                try value(self.context, payload);
+                                try value(self.engine, self.context, payload);
                                 return .{ .immediate = @unionInit(ResultType, decl.name, {}) };
                             } else {
-                                const val = try value(self.context, payload);
+                                const val = try value(self.engine, self.context, payload);
                                 return .{ .immediate = @unionInit(ResultType, decl.name, val) };
                             }
                         }
@@ -170,6 +175,8 @@ pub fn generateTrampoline(comptime Syscalls: type, comptime Context: type) type 
 
 const testing = std.testing;
 
+const TestEngine = struct {};
+
 const TestContext = struct {
     output_buffer: std.ArrayList(u8),
 
@@ -183,23 +190,26 @@ const TestContext = struct {
 };
 
 const TestSyscalls = struct {
-    pub fn print(context: *TestContext, payload: struct { message: []const u8 }) anyerror![]const u8 {
+    pub fn print(engine: *TestEngine, context: *TestContext, payload: struct { message: []const u8 }) anyerror![]const u8 {
+        _ = engine;
         try context.output_buffer.appendSlice(payload.message);
         return payload.message;
     }
 
-    pub fn sleep(context: *TestContext, payload: struct { duration_ms: u64 }) anyerror!void {
+    pub fn sleep(engine: *TestEngine, context: *TestContext, payload: struct { duration_ms: u64 }) anyerror!void {
+        _ = engine;
         _ = context;
         _ = payload;
     }
 };
 
 test "can generate trampoline dispatcher" {
-    const Trampoline = generateTrampoline(TestSyscalls, TestContext);
+    const Trampoline = generateTrampoline(TestSyscalls, TestEngine, TestContext);
+    var engine = TestEngine{};
     var context = TestContext.init(testing.allocator);
     defer context.deinit();
 
-    var trampoline = Trampoline{ .context = &context };
+    var trampoline = Trampoline{ .engine = &engine, .context = &context };
     const request = Trampoline.RequestType{ .print = .{ .message = "hello" } };
     const result = try trampoline.dispatch(request);
     switch (result) {

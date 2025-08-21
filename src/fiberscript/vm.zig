@@ -11,74 +11,8 @@ const TrackingAllocator = @import("../lib/TrackingAllocator.zig");
 const ansi = @import("ansi");
 const tree = ansi.nest;
 
-pub fn Syscalls(comptime Self: type) type {
-    return struct {
-        pub fn createElement(self: *Self, args: struct { style: []const u8 }) anyerror!dom.DomNodeId {
-            return self.document.addElement(args.style);
-        }
-
-        pub fn updateText(self: *Self, args: struct { nodeId: u32, text: []const u8 }) anyerror!void {
-            try self.document.updateText(args.nodeId, args.text);
-        }
-
-        pub fn updateClass(self: *Self, args: struct { nodeId: u32, className: []const u8 }) anyerror!void {
-            try self.document.updateClass(args.nodeId, args.className);
-        }
-
-        pub fn appendChild(self: *Self, args: struct { parentId: u32, childId: u32 }) anyerror!void {
-            try self.document.appendChild(args.parentId, args.childId);
-        }
-
-        pub fn removeChild(self: *Self, args: struct { parentId: u32, childId: u32 }) anyerror!void {
-            try self.document.removeChild(args.parentId, args.childId);
-        }
-
-        pub fn requestRender(self: *Self, args: struct {}) anyerror!void {
-            _ = self;
-            _ = args;
-            @panic("requestRender not implemented");
-        }
-
-        pub fn clearScreen(self: *Self, args: struct {}) anyerror!void {
-            _ = self;
-            _ = args;
-            @panic("clearScreen not implemented");
-        }
-
-        pub fn requestAnimationFrame(self: *Self, args: struct {}) anyerror!void {
-            _ = self;
-            _ = args;
-            @panic("requestAnimationFrame not implemented");
-        }
-
-        pub fn setTimeout(self: *Self, args: struct { delayMs: f64 }) anyerror!void {
-            _ = self;
-            _ = args;
-            @panic("setTimeout not implemented");
-        }
-
-        pub fn addEventListener(self: *Self, args: struct { eventType: []const u8 }) anyerror!void {
-            _ = self;
-            _ = args;
-            @panic("addEventListener not implemented");
-        }
-
-        pub fn getViewportSize(self: *Self, args: struct {}) anyerror!void {
-            _ = self;
-            _ = args;
-            @panic("getViewportSize not implemented");
-        }
-
-        pub fn setViewportSize(self: *Self, args: struct { width: u32, height: u32 }) anyerror!void {
-            _ = self;
-            _ = args;
-            @panic("setViewportSize not implemented");
-        }
-    };
-}
-
 pub const Configuration = struct {
-    Syscalls: fn (comptime Self: type) type = Syscalls,
+    Syscalls: fn (comptime EngineType: type, comptime ContextType: type) type = documentSyscalls,
 };
 
 pub const ErrorReport = ErrorHandler.ErrorReport;
@@ -91,19 +25,20 @@ pub fn Engine(configuration: Configuration) type {
         error_handler: ErrorHandler,
         fiber_queue: std.ArrayList(*c.Handle),
         trampoliner: Trampoline,
-        document: *dom.Dom,
+        syscall_context: *SyscallContext,
         vm: *c.VM,
 
         const Self = @This();
 
-        const SyscallsType = configuration.Syscalls(Self);
+        const SyscallsType = configuration.Syscalls(Self, SyscallContext);
         const Request = syscalls.RequestUnion(SyscallsType);
-        const Trampoline = syscalls.generateTrampoline(SyscallsType, Self);
+        const Trampoline = syscalls.generateTrampoline(SyscallsType, Self, SyscallContext);
         const SlotParser = syscalls.generateSlotParser(Request, SyscallsType);
 
         pub const Options = struct {
             output_buffer_size: usize = 1024 * 32,
             error_buffer_size: usize = 1024 * 32,
+            syscall_context: *SyscallContext,
         };
 
         pub fn init(base_allocator: std.mem.Allocator, options: Options) !*Self {
@@ -133,7 +68,8 @@ pub fn Engine(configuration: Configuration) type {
 
             self.fiber_queue = std.ArrayList(*c.Handle).init(allocator);
 
-            self.trampoliner = Trampoline{ .context = self };
+            self.syscall_context = options.syscall_context;
+            self.trampoliner = Trampoline{ .engine = self, .context = self.syscall_context };
 
             var vmconf = c.Configuration{};
             c.wrenInitConfiguration(&vmconf);
@@ -372,10 +308,95 @@ pub fn Engine(configuration: Configuration) type {
     };
 }
 
+pub const SyscallContext = struct {
+    document: *dom.Dom,
+};
+
+pub fn documentSyscalls(comptime EngineType: type, comptime Context: type) type {
+    return struct {
+        pub fn createElement(engine: *EngineType, context: *Context, args: struct { style: []const u8 }) anyerror!dom.DomNodeId {
+            _ = engine;
+            return context.document.addElement(args.style);
+        }
+
+        pub fn updateText(engine: *EngineType, context: *Context, args: struct { nodeId: u32, text: []const u8 }) anyerror!void {
+            _ = engine;
+            try context.document.updateText(args.nodeId, args.text);
+        }
+
+        pub fn updateClass(engine: *EngineType, context: *Context, args: struct { nodeId: u32, className: []const u8 }) anyerror!void {
+            _ = engine;
+            try context.document.updateClass(args.nodeId, args.className);
+        }
+
+        pub fn appendChild(engine: *EngineType, context: *Context, args: struct { parentId: u32, childId: u32 }) anyerror!void {
+            _ = engine;
+            try context.document.appendChild(args.parentId, args.childId);
+        }
+
+        pub fn removeChild(engine: *EngineType, context: *Context, args: struct { parentId: u32, childId: u32 }) anyerror!void {
+            _ = engine;
+            try context.document.removeChild(args.parentId, args.childId);
+        }
+
+        pub fn requestRender(engine: *EngineType, context: *Context, args: struct {}) anyerror!void {
+            _ = engine;
+            _ = context;
+            _ = args;
+            @panic("requestRender not implemented");
+        }
+
+        pub fn clearScreen(engine: *EngineType, context: *Context, args: struct {}) anyerror!void {
+            _ = engine;
+            _ = context;
+            _ = args;
+            @panic("clearScreen not implemented");
+        }
+
+        pub fn requestAnimationFrame(engine: *EngineType, context: *Context, args: struct {}) anyerror!void {
+            _ = engine;
+            _ = context;
+            _ = args;
+            @panic("requestAnimationFrame not implemented");
+        }
+
+        pub fn setTimeout(engine: *EngineType, context: *Context, args: struct { delayMs: f64 }) anyerror!void {
+            _ = engine;
+            _ = context;
+            _ = args;
+            @panic("setTimeout not implemented");
+        }
+
+        pub fn addEventListener(engine: *EngineType, context: *Context, args: struct { eventType: []const u8 }) anyerror!void {
+            _ = engine;
+            _ = context;
+            _ = args;
+            @panic("addEventListener not implemented");
+        }
+
+        pub fn getViewportSize(engine: *EngineType, context: *Context, args: struct {}) anyerror!void {
+            _ = engine;
+            _ = context;
+            _ = args;
+            @panic("getViewportSize not implemented");
+        }
+
+        pub fn setViewportSize(engine: *EngineType, context: *Context, args: struct { width: u32, height: u32 }) anyerror!void {
+            _ = engine;
+            _ = context;
+            _ = args;
+            @panic("setViewportSize not implemented");
+        }
+    };
+}
+
 test "we can create and destroy a VM" {
     const allocator = std.testing.allocator;
+    var document = try dom.Dom.init(allocator);
+    defer document.deinit();
+    var sc = SyscallContext{ .document = document };
 
-    var vm = try Engine(.{}).init(allocator, .{});
+    var vm = try Engine(.{}).init(allocator, .{ .syscall_context = &sc });
     defer vm.deinit();
 
     const output = try vm.takeOutput(allocator);
@@ -388,7 +409,11 @@ test "we can create and destroy a VM" {
 test "we can run a simple script" {
     const allocator = std.testing.allocator;
 
-    var engine = try Engine(.{}).init(allocator, .{});
+    var document = try dom.Dom.init(allocator);
+    defer document.deinit();
+    var sc = SyscallContext{ .document = document };
+
+    var engine = try Engine(.{}).init(allocator, .{ .syscall_context = &sc });
     defer engine.deinit();
 
     try engine.runTopLevel("foo",
@@ -405,7 +430,11 @@ test "we can run a simple script" {
 test "we can call Core.spawn" {
     const allocator = std.testing.allocator;
 
-    var engine = try Engine(.{}).init(allocator, .{});
+    var document = try dom.Dom.init(allocator);
+    defer document.deinit();
+    var sc = SyscallContext{ .document = document };
+
+    var engine = try Engine(.{}).init(allocator, .{ .syscall_context = &sc });
     defer engine.deinit();
 
     engine.runTopLevel("main",
@@ -451,7 +480,11 @@ test "we can call Core.spawn" {
 test "slots API - simple method call" {
     const allocator = std.testing.allocator;
 
-    var engine = try Engine(.{}).init(allocator, .{});
+    var document = try dom.Dom.init(allocator);
+    defer document.deinit();
+    var sc = SyscallContext{ .document = document };
+
+    var engine = try Engine(.{}).init(allocator, .{ .syscall_context = &sc });
     defer engine.deinit();
 
     try engine.runTopLevel("test",
@@ -483,7 +516,11 @@ test "slots API - simple method call" {
 test "slots API - working with strings" {
     const allocator = std.testing.allocator;
 
-    var engine = try Engine(.{}).init(allocator, .{});
+    var document = try dom.Dom.init(allocator);
+    defer document.deinit();
+    var sc = SyscallContext{ .document = document };
+
+    var engine = try Engine(.{}).init(allocator, .{ .syscall_context = &sc });
     defer engine.deinit();
 
     try engine.runTopLevel("test",
@@ -508,7 +545,11 @@ test "slots API - working with strings" {
 test "slots API - list operations" {
     const allocator = std.testing.allocator;
 
-    var engine = try Engine(.{}).init(allocator, .{});
+    var document = try dom.Dom.init(allocator);
+    defer document.deinit();
+    var sc = SyscallContext{ .document = document };
+
+    var engine = try Engine(.{}).init(allocator, .{ .syscall_context = &sc });
     defer engine.deinit();
 
     try engine.runTopLevel("test",
