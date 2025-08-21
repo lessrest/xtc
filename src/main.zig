@@ -2,8 +2,10 @@ const std = @import("std");
 const ansi = @import("ansi");
 
 const vm = @import("fiberscript/vm.zig");
+const dom = @import("dom.zig");
 
 const Engine = vm.Engine(.{});
+const SyscallContext = vm.SyscallContext;
 
 pub const version = "0.5.0";
 
@@ -57,7 +59,11 @@ fn run_script(allocator: std.mem.Allocator, name: []const u8) !void {
     const script = try file.readToEndAlloc(allocator, 1024 * 1024);
     defer allocator.free(script);
 
-    const engine = try Engine.init(allocator, .{});
+    var document = try dom.Dom.init(allocator);
+    defer document.deinit();
+    var sc = SyscallContext{ .document = document };
+
+    const engine = try Engine.init(allocator, .{ .syscall_context = &sc });
     defer engine.deinit();
 
     try engine.runTopLevel(name, script); // TODO: croak...
