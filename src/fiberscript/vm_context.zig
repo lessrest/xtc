@@ -190,13 +190,13 @@ pub const VMContext = struct {
         _ = vm; // autofix
         if (!isStatic) return null;
 
-        if (std.mem.eql(u8, std.mem.span(module), "core") and std.mem.eql(u8, std.mem.span(className), "Core")) {
+        if (std.mem.eql(u8, std.mem.span(module), "xtc") and std.mem.eql(u8, std.mem.span(className), "Core")) {
             if (std.mem.eql(u8, std.mem.span(method), "scheduleImmediately(_)")) {
                 return &(struct {
                     fn callback(ptr: *c.VM) callconv(.C) void {
                         var ctx: *VMContext = @ptrCast(@alignCast(c.wrenGetUserData(ptr)));
                         var work = Slots.SlotBuilder.init(ptr, ctx.allocator.allocator);
-                        const fiber = work.get(0, *c.Handle) catch std.debug.panic("expected fiber", .{});
+                        const fiber = work.get(1, *c.Handle) catch std.debug.panic("expected fiber", .{});
                         ctx.scheduleImmediately(fiber) catch std.debug.panic("failed to schedule fiber", .{});
                         _ = work.set(0, void{});
                     }
@@ -217,6 +217,8 @@ pub const VMContext = struct {
         std.debug.print("first round of trampoline\n", .{});
         var steps: usize = 0;
 
+        errdefer self.croak() catch {};
+
         while (steps < 16) : (steps += 1) {
             if (self.fiber_queue.items.len == 0) {
                 std.debug.print("trampoline: no fibers to run\n", .{});
@@ -225,10 +227,15 @@ pub const VMContext = struct {
 
             const fiber = self.fiber_queue.orderedRemove(0);
 
-            _ = work.set(0, fiber).call("call()");
+            defer {
+                c.wrenReleaseHandle(vm, fiber);
+            }
+
+            std.debug.print("trampoline: running fiber: {any}\n", .{fiber});
+            try work.set(0, fiber).call("call()").checkSuccess();
+
             if (work.countSlots() < 2) {
                 std.debug.print("trampoline: no slots, {}\n", .{steps});
-                c.wrenReleaseHandle(vm, fiber);
                 return;
             }
 

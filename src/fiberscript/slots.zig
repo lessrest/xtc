@@ -228,7 +228,7 @@ pub const CallResult = struct {
     }
 
     /// Check success and return appropriate error.
-    fn checkSuccess(self: CallResult) !void {
+    pub fn checkSuccess(self: CallResult) !void {
         if (self.has_error) return error.InternalError;
         switch (self.result) {
             .success => {},

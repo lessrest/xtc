@@ -1,8 +1,9 @@
-System.print("Hello, world!")
+import "xtc" for Core
 
-var f1 = Fiber.new {
-    System.print("Hello, world!")
-    Fiber.yield(3)
+System.print("printing from the top level")
+
+Core.spawn {
+    System.print("printing from the spawn")
 }
 
-Fiber.yield(f1)
+System.print("printing after the spawn")

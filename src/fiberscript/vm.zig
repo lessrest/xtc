@@ -70,8 +70,8 @@ pub fn Engine(configuration: Configuration) type {
                 c.wrenReleaseHandle(self.vm, fiber);
             }
 
-            c.wrenFreeVM(self.vm);
             self.context.deinit(allocator);
+            c.wrenFreeVM(self.vm);
             allocator.destroy(self);
         }
 
@@ -117,7 +117,7 @@ pub fn Engine(configuration: Configuration) type {
                 }
             }
 
-            try self.runTopLevel("core", @embedFile("ring.wren"));
+            try self.runTopLevel("xtc", @embedFile("xtc.wren"));
         }
 
         /// Returns the current error and clears it.
@@ -195,7 +195,7 @@ test "we can call Core.spawn" {
 
     engine.runTopLevel("main",
         \\import "foo" for hello
-        \\import "core" for Core
+        \\import "xtc" for Core
         \\
         \\System.print(hello)
         \\
@@ -230,7 +230,7 @@ test "Core.print operation" {
     defer engine.deinit();
 
     engine.runTopLevel("main",
-        \\import "core" for Core
+        \\import "xtc" for Core
         \\
         \\var fiber = Fiber.new {
         \\  Core.print("Hello from fiber!")

@@ -7,6 +7,8 @@ const Raster = @import("Raster.zig");
 const GlyphId = @import("GlyphTable.zig").GlyphId;
 const Rgba8 = @import("paint.zig").Rgba8;
 
+const noColor = Raster.TERMINAL_DEFAULT_COLOR;
+
 /// A run of changed cells with consistent colors
 pub const ChangeRun = struct {
     x: usize,
@@ -48,8 +50,8 @@ pub fn next(self: *DiffIterator) ?ChangeRun {
             self.x = start_x;
 
             // Found a change - determine colors for this run
-            const run_fg = if (self.back.cells.items(.fg)[start_idx] != TERMINAL_DEFAULT_COLOR) self.back.cells.items(.fg)[start_idx] else null;
-            const run_bg = if (self.back.cells.items(.bg)[start_idx] != TERMINAL_DEFAULT_COLOR) self.back.cells.items(.bg)[start_idx] else null;
+            const run_fg = if (self.back.cells.items(.fg)[start_idx] != noColor) self.back.cells.items(.fg)[start_idx] else null;
+            const run_bg = if (self.back.cells.items(.bg)[start_idx] != noColor) self.back.cells.items(.bg)[start_idx] else null;
 
             // Find end of run efficiently using indexOfDiff
             const end_x = self.findEndOfColorRun(start_y, start_x, run_fg, run_bg);
@@ -179,7 +181,7 @@ fn findEndOfColorRun(self: *const DiffIterator, y: usize, start_x: usize, run_fg
         const back_fg = self.back.cells.items(.fg);
         var i = search_start;
         while (i < line_end) : (i += 1) {
-            if (back_fg[i] != TERMINAL_DEFAULT_COLOR) {
+            if (back_fg[i] != noColor) {
                 end_x = @min(end_x, i - line_start);
                 break;
             }
@@ -190,7 +192,7 @@ fn findEndOfColorRun(self: *const DiffIterator, y: usize, start_x: usize, run_fg
         const back_bg = self.back.cells.items(.bg);
         var i = search_start;
         while (i < line_end) : (i += 1) {
-            if (back_bg[i] != TERMINAL_DEFAULT_COLOR) {
+            if (back_bg[i] != noColor) {
                 end_x = @min(end_x, i - line_start);
                 break;
             }
@@ -226,15 +228,15 @@ test "raster diff iterator detects runs of changes with consistent colors" {
     back.set(1, 0, 'H');
     back.set(2, 0, 'i');
     back.set(3, 0, '!');
-    const red = rgba8(255, 0, 0, 255);
+    const red = Rgba8.rgb(0xff, 0x00, 0x00);
     back.setFg(1, 0, red);
     back.setFg(2, 0, red);
     back.setFg(3, 0, red);
 
-    var runs = std.ArrayList(RasterDiff.ChangeRun).init(al);
+    var runs = std.ArrayList(ChangeRun).init(al);
     defer runs.deinit();
 
-    var iter = RasterDiff.iterateChanges(&front, &back);
+    var iter = iterateChanges(&front, &back);
     while (iter.next()) |run| {
         try runs.append(run);
     }
@@ -259,7 +261,7 @@ test "raster diff iterator detects runs of changes with consistent colors" {
     front.setFg(3, 0, red);
 
     runs.clearRetainingCapacity();
-    iter = RasterDiff.iterateChanges(&front, &back);
+    iter = iterateChanges(&front, &back);
     while (iter.next()) |r| {
         try runs.append(r);
     }
