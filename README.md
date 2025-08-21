@@ -7,23 +7,22 @@ compact paint/display-list pipeline.
 
 ### Highlights
 
-- **DOM + styles**: Small DOM with style interning for deduplication
-  (`src/dom.zig`, `src/style.zig`).
-- **Tailwind-like classes**: Parse utility-class strings into a compact
-  `StyleRow` (`src/tailwind.zig`). Includes flexbox subset, spacing, borders,
-  width/height sizing, and a color palette defined via OKLCH/converted to sRGB.
-- **Flex layout (subset)**: One-pass, row/column flex layout with justify/align,
-  grow distribution, and stable order (`src/layout.zig`).
-- **Text shaping for TTY**: Grapheme cluster iteration and display-width
-  measurement for monospaced terminals (via `zg` dependency).
+- **DOM + styles**: Small DOM with style interning for deduplication.
+- **Tailwind-like classes**: Parse utility-class strings into a compact style
+  representation. Includes flexbox subset, spacing, borders, width/height
+  sizing, and a color palette defined via OKLCH/converted to sRGB.
+- **Flex layout (subset)**: One-pass, row/column flex layout with justify/align
+  and grow distribution.
+- **Text shaping for TTY**: Grapheme-aware display-width measurement for
+  monospaced terminals.
 - **Paint pipeline**: Device-independent display list → ASCII/Unicode raster →
-  minimal ANSI diff writer (`src/paint.zig`, `src/tty.zig`).
-- **XML input (optional)**: Spec-compliant XML parser (derived from `zig-xml`)
-  to build a DOM from markup (`src/xmlparse.zig`, `src/xml.zig`).
+  minimal ANSI diff writer.
+- **XML input (optional)**: Spec-compliant XML parser to build a DOM from
+  markup.
 - **Live demo**: An interactive, raw-mode line editor rendering to an alternate
-  screen buffer to showcase incremental redraw (`src/live.zig`, `src/main.zig`).
-- **Embedded Wren scripting**: Lightweight scripting language for dynamic DOM
-  manipulation and interactive behavior (`src/wren.zig`, `src/wren_runner.zig`).
+  screen buffer to showcase incremental redraw.
+- **Embedded scripting**: The original Wren integration is being replaced by a
+  new Fiberscript runtime built on cooperative fibers.
 
 ### Status
 
@@ -66,10 +65,10 @@ zig-out/bin/xtc --log xtc.log   # optional log file (default: xtc.log)
 
 What you should see:
 
-- The app switches to the terminal's alternate screen and hides the cursor.
-- A simple UI driven by `src/live.zig` is rendered with flexbox-like layout.
-- Basic line editing works (grapheme-aware input, history, arrows, Home/End,
-  Delete, Ctrl-A/E/B/F/K/D/C). Exit with Ctrl-D on an empty line.
+  - The app switches to the terminal's alternate screen and hides the cursor.
+  - A simple UI is rendered with flexbox-like layout.
+  - Basic line editing works (grapheme-aware input, history, arrows, Home/End,
+    Delete, Ctrl-A/E/B/F/K/D/C). Exit with Ctrl-D on an empty line.
 
 ### Non-interactive XML rendering (for testing)
 
@@ -92,11 +91,7 @@ aaaa
 ## Using XML + classes
 
 XTC can parse XML and map elements to DOM nodes, reading Tailwind-like classes
-from the `class` attribute. See the example XML files in the repo:
-
-- `simple-flex.xml`
-- `nested-flex.xml`
-- `text-cards.xml`
+from the `class` attribute. Example XML files live in the repository.
 
 Example (`simple-flex.xml`):
 
@@ -111,65 +106,15 @@ Example (`simple-flex.xml`):
 ```
 
 Library usage mirrors the test helper: parse XML → build DOM → layout → paint →
-rasterize to ASCII. See `src/lib.zig` tests for end-to-end examples.
+rasterize to ASCII.
 
-## Wren Scripting
+## Scripting runtime
 
-XTC embeds the Wren scripting language for dynamic DOM manipulation. Scripts can be embedded directly in XML documents using `<script>` tags and are executed during document construction.
-
-### How it works
-
-1. **Wren VM Integration**: The Zig wrapper (`src/wren.zig`) provides:
-
-   - Memory management with tracked allocations
-   - Automatic FFI generation from Zig structs
-   - Type-safe bindings between Wren and Zig
-   - Error handling and stack management
-
-2. **DOM Bindings**: Scripts can manipulate the DOM through foreign functions:
-
-   - Create elements with styles: `DOM.createElement("flex w-10")`
-   - Create text nodes: `DOM.createText("Hello")`
-   - Append children: `DOM.appendChild(parent, child)`
-   - Access the root element: `DOM.root()`
-
-3. **Script Context**: Each script has access to:
-
-   - `self`: The element containing the script
-   - `document`: Global document object with helper methods
-   - DOM manipulation functions via the `DOM` class
-
-4. **XML Integration**: When parsing XML with embedded scripts:
-   - Scripts are extracted from `<script>` elements
-   - Each script runs in a sandboxed context with access to its parent element
-   - Scripts execute in document order during parsing
-   - Errors are caught and reported without crashing the parser
-
-### Example with Wren script
-
-```xml
-<?xml version="1.0" standalone="yes"?>
-<root class="flex flex-col">
-    <script>
-        // Create dynamic content
-        var box = document.createElement("w-20 h-4 bg-blue-500")
-        self.append(box)
-
-        var text = document.createText("Generated by Wren!")
-        box.append(text)
-    </script>
-</root>
-```
-
-### Implementation details
-
-The Wren integration uses compile-time reflection to automatically generate:
-
-- Foreign method bindings from Zig function signatures
-- Type conversions between Wren and Zig types
-- Module and class definitions in Wren from Zig structs
-
-This approach minimizes boilerplate while maintaining type safety across the language boundary.
+XTC embeds a lightweight scripting language for dynamic DOM manipulation. The
+original implementation uses Wren, but a new Fiberscript runtime is actively
+replacing it to provide cooperative fibers and batched syscalls. During the
+transition both systems coexist, with Fiberscript taking an increasingly central
+role. Documentation for the new runtime lives alongside its source.
 
 ## Supported utility classes (subset)
 
@@ -196,34 +141,14 @@ Notes:
 
 ## Architecture in brief
 
-1. XML (optional) → `Document` (`src/xmlparse.zig`) → DOM (`src/xml.zig`,
-   `src/dom.zig`)
-2. Styles are interned per unique `StyleRow` (`src/style.zig`) parsed from
-   classes (`src/tailwind.zig`).
-3. Layout builds a `BoxTree` and computes rects using a flexbox-like algorithm
-   (`src/layout.zig`).
-4. Paint emits device-independent ops: backgrounds, borders, text runs
-   (`src/paint.zig`).
-5. TTY backend rasterizes to ASCII/Unicode and emits minimal ANSI diffs
-   (`src/tty.zig`, used by `src/live.zig`).
-6. Wren scripts embedded in XML `<script>` tags can manipulate the DOM
-   dynamically during document construction.
-
-Key modules:
-
-- `src/dom.zig` — DOM and style table
-- `src/style.zig` — style data model
-- `src/tailwind.zig` — class parser and emitter
-- `src/layout.zig` — flex-like layout engine
-- `src/measure.zig` — intrinsic sizing/text measurement helpers
-- `src/paint.zig` — display list + text shaping
-- `src/tty.zig` — raster and ANSI renderer
-- `src/xmlparse.zig`, `src/xml.zig` — XML parsing and DOM mapping
-- `src/live.zig`, `src/main.zig` — interactive demo CLI
-- `src/wren.zig` — Wren VM Zig wrapper with FFI generation
-- `src/wren_runner.zig` — Script runner with DOM integration
-- `src/wren_xml.zig` — XML-to-DOM builder with script execution
-- `src/wren_wrappers/` — Wren-side DOM manipulation helpers
+1. Optional XML input is parsed into a DOM representation.
+2. Styles are interned per unique class combination.
+3. A flexbox-inspired layout engine builds a box tree and computes rectangles.
+4. A paint stage emits device-independent operations such as backgrounds,
+   borders and text runs.
+5. The TTY backend rasterizes to ASCII/Unicode and writes minimal ANSI diffs.
+6. Scripts embedded in XML `<script>` tags can manipulate the DOM during
+   document construction.
 
 ## Development
 
@@ -262,11 +187,11 @@ CLI flags:
 - Overflow clipping and z-index paint ordering
 - Performance: arenas, caching, fewer allocations in hot paths
 
-See in-code TODOs, e.g., `src/measure.zig`.
+See in-code TODOs for additional ideas and areas of work.
 
 ## Licensing and attribution
 
-- The entirety of `src/xmlparse.zig` is derived from `zig-xml` by Meghan Denny
-  (MPL-2.0). See `ATTRIBUTION.md` and `LICENSES/MPL-2.0.txt`.
+- The XML parser is derived from `zig-xml` by Meghan Denny (MPL-2.0). See
+  `ATTRIBUTION.md` and `LICENSES/MPL-2.0.txt`.
 - Other code in this repository may be under different terms; consult the
   repository’s `LICENSES/` and file headers.
