@@ -2,6 +2,9 @@
   "name": "xtc dev",
   "image": "mcr.microsoft.com/devcontainers/base:debian",
   "postCreateCommand": "bash scripts/setup.sh",
+  "containerEnv": {
+    "PATH": "${HOME}/.bun/bin:${containerWorkspaceFolder}/vendor/bin/zig:${PATH}"
+  },
   "customizations": {
     "vscode": {
       "extensions": [
