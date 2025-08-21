@@ -251,7 +251,11 @@ pub const VMContext = struct {
                 },
 
                 else => {
-                    try self.trampoliner.dispatch(request);
+                    const dispatch_result = try self.trampoliner.dispatch(request);
+                    switch (dispatch_result) {
+                        .immediate => |_| {},
+                        .pending => {},
+                    }
                 },
             }
         }
