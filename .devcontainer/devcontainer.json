@@ -1,16 +1,6 @@
 {
   "name": "xtc dev",
-  "image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04",
-  "features": {
-    "ghcr.io/devcontainers/features/git:1": {},
-    "ghcr.io/devcontainers/features/curl:1": {},
-    "ghcr.io/devcontainers/features/wget:1": {},
-    "ghcr.io/devcontainers/features/common-utils:2": {
-      "installZsh": "false",
-      "username": "codespace",
-      "upgradePackages": "true"
-    }
-  },
+  "image": "mcr.microsoft.com/devcontainers/base:debian",
   "postCreateCommand": "bash scripts/setup.sh",
   "customizations": {
     "vscode": {

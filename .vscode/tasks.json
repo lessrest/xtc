@@ -61,15 +61,11 @@
         "fileLocation": ["autoDetect", "${workspaceFolder}"],
         "pattern": [
           {
-            "regexp": "^\\((?:[A-Za-z]:)?[^:]+):(\\d+):(\\d+): test \\\"(.*)\\\" - ([^:]+): (.*)$",
+            "regexp": "^((?:[A-Za-z]:)?[^:]+):(\\d+):(\\d+): test \"(.*)\" - ([^:]+): (.*)$",
             "file": 1,
             "line": 2,
             "column": 3,
             "message": 6
-          },
-          {
-            "regexp": ".*",
-            "message": 0
           }
         ]
       }
