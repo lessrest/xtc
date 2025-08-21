@@ -81,8 +81,7 @@ The system follows a clean pipeline from Wren scripts to native syscall implemen
 
 ### Core Components
 
-- **VM Context** (`vm_context.zig`) - Unified Wren VM management with fiber scheduling
-- **Ring System** (`ring.wren`) - Async I/O abstraction for cooperative fiber scheduling  
+- **Ring System** (`ring.wren`) - Async I/O abstraction for cooperative fiber scheduling
 - **Syscalls** (`syscalls.zig`) - Comptime-generated syscall dispatch system
 - **Trampoline** - Control flow bridge between Wren fibers and native implementations
 
@@ -240,10 +239,7 @@ const RequestClasses = generateRequestClasses(MySyscalls);
 
 // Set up runtime
 var context = MyContext.init();
-var trampoline = Trampoline{ .syscalls = my_impl, .context = &context };
-
-// Generate Wren classes
-const wren_code = try generateWrenConstants(MySyscalls, allocator);
+var trampoline = Trampoline{ .context = &context };
 
 // Integrate with VM and run fibers
 ```
@@ -251,8 +247,7 @@ const wren_code = try generateWrenConstants(MySyscalls, allocator);
 ## Files
 
 ### Core System
-- `vm_context.zig` - VM management and fiber scheduling
-- `syscalls.zig` - Comptime syscall generation system  
+- `syscalls.zig` - Comptime syscall generation system
 - `vm.zig` - Core VM integration and request types
 - `ring.wren` - Wren-side ring system implementation
 - `slots.zig` - Wren slot manipulation utilities
