@@ -2,6 +2,11 @@ const std = @import("std");
 const testing = std.testing;
 const c = @import("wren.zig");
 
+/// Special marker type for syscalls that complete asynchronously.
+/// When a syscall returns this type, the fiber should remain suspended
+/// until the operation completes and a result is provided via other means.
+pub const Pending = struct {};
+
 /// Example context type for testing
 const TestContext = struct {
     output_buffer: std.ArrayList(u8),
@@ -141,21 +146,7 @@ pub fn bindSyscalls(comptime Interface: type, comptime Impl: type) Interface {
 pub fn RequestUnion(comptime Syscalls: type) type {
     const syscall_fields = std.meta.fields(Syscalls);
 
-    // Ring meta-ops + syscalls
-    var union_fields: [syscall_fields.len + 2]std.builtin.Type.UnionField = undefined;
-
-    // Add ring meta-operations
-    union_fields[0] = .{
-        .name = "Ring.push",
-        .type = struct { ring: *c.Handle },
-        .alignment = @alignOf(struct { ring: *c.Handle }),
-    };
-
-    union_fields[1] = .{
-        .name = "Ring.pull",
-        .type = struct { ring: *c.Handle },
-        .alignment = @alignOf(struct { ring: *c.Handle }),
-    };
+    var union_fields: [syscall_fields.len]std.builtin.Type.UnionField = undefined;
 
     // Add syscalls - extract parameter struct from function pointer signature
     for (syscall_fields, 0..) |field, i| {
@@ -166,7 +157,7 @@ pub fn RequestUnion(comptime Syscalls: type) type {
         // Get the payload struct (second parameter, after context)
         const param_type = func_info.params[1].type.?;
 
-        union_fields[i + 2] = .{
+        union_fields[i] = .{
             .name = field.name,
             .type = param_type,
             .alignment = @alignOf(param_type),
@@ -176,10 +167,7 @@ pub fn RequestUnion(comptime Syscalls: type) type {
     // Generate the tag enum
     var enum_fields: [union_fields.len]std.builtin.Type.EnumField = undefined;
     for (union_fields, 0..) |field, i| {
-        enum_fields[i] = .{
-            .name = field.name,
-            .value = i,
-        };
+        enum_fields[i] = .{ .name = field.name, .value = i };
     }
 
     const TagEnum = @Type(.{
@@ -201,22 +189,65 @@ pub fn RequestUnion(comptime Syscalls: type) type {
     });
 }
 
+/// Generate a union type representing the return values of each syscall.
+pub fn ResultUnion(comptime Syscalls: type) type {
+    const syscall_fields = std.meta.fields(Syscalls);
+
+    var union_fields: [syscall_fields.len]std.builtin.Type.UnionField = undefined;
+
+    // Build union fields from each syscall's return type
+    for (syscall_fields, 0..) |field, i| {
+        const ptr_info = @typeInfo(field.type).pointer;
+        const func_info = @typeInfo(ptr_info.child).@"fn";
+        var return_type = func_info.return_type.?;
+        if (@typeInfo(return_type) == .error_union) {
+            return_type = @typeInfo(return_type).error_union.payload;
+        }
+        const alignment = if (return_type == void) 0 else @alignOf(return_type);
+        union_fields[i] = .{
+            .name = field.name,
+            .type = return_type,
+            .alignment = alignment,
+        };
+    }
+
+    var enum_fields: [syscall_fields.len]std.builtin.Type.EnumField = undefined;
+    for (syscall_fields, 0..) |field, i| {
+        enum_fields[i] = .{ .name = field.name, .value = i };
+    }
+
+    const TagEnum = @Type(.{
+        .@"enum" = .{
+            .tag_type = u32,
+            .fields = &enum_fields,
+            .decls = &[_]std.builtin.Type.Declaration{},
+            .is_exhaustive = true,
+        },
+    });
+
+    return @Type(.{
+        .@"union" = .{
+            .layout = .auto,
+            .tag_type = TagEnum,
+            .fields = &union_fields,
+            .decls = &[_]std.builtin.Type.Declaration{},
+        },
+    });
+}
+
+/// Wrapper union distinguishing between immediate results and pending operations.
+pub fn SyscallResult(comptime Syscalls: type) type {
+    return union(enum) {
+        immediate: ResultUnion(Syscalls),
+        pending: void,
+    };
+}
+
 /// Generate slot parsing function for a Request union
 pub fn generateSlotParser(comptime Request: type, comptime Syscalls: type) type {
     return struct {
         pub fn parseRequest(slot_map: anytype) !Request {
             const operation = try slot_map.lookup("operation", []const u8);
-
-            // Handle ring meta-operations
-            if (std.mem.eql(u8, operation, "Ring.push")) {
-                const ring = try slot_map.lookup("ring", *c.Handle);
-                return Request{ .@"Ring.push" = .{ .ring = ring } };
-            }
-
-            if (std.mem.eql(u8, operation, "Ring.pull")) {
-                const ring = try slot_map.lookup("ring", *c.Handle);
-                return Request{ .@"Ring.pull" = .{ .ring = ring } };
-            }
 
             // Generate syscall parsing - comptime loop
             const syscall_fields = comptime std.meta.fields(Syscalls);
@@ -267,14 +298,14 @@ pub fn generateSlotParser(comptime Request: type, comptime Syscalls: type) type 
 /// Wren Fiber                Ring                 Trampoline              Syscalls
 /// -----------                ----                 ----------              --------
 /// ring.post(req) ──────────► submission_queue
-/// ring.push() ──────────────► yield(Ring.push) ──► grab() ──────────────► dispatch
+/// Fiber.yield(req) ────────► dispatch ─────────────► syscall
 ///                                                   │                     │
 ///                                                   │                     ▼
 ///                                                   │                    fn(*Context, Payload) Result
 ///                                                   │                     │
 ///                                                   ◄─────────────────────┘
 ///                                                   │
-/// result ◄─────────────────── Ring.pull ◄─────────── give(result)
+/// result ◄────────────────────────────────────────── give(result)
 /// ```
 ///
 /// ## Generated Dispatch Logic
@@ -288,28 +319,36 @@ pub fn generateSlotParser(comptime Request: type, comptime Syscalls: type) type 
 pub fn generateTrampoline(comptime Syscalls: type, comptime Context: type) type {
     return struct {
         const RequestType = RequestUnion(Syscalls);
+        const ResultType = ResultUnion(Syscalls);
+        const DispatchResult = SyscallResult(Syscalls);
 
         syscalls: Syscalls,
         context: *Context,
 
         /// Process a single request from a yielding fiber
-        pub fn dispatch(self: *@This(), request: RequestType) !void {
+        pub fn dispatch(self: *@This(), request: RequestType) !DispatchResult {
             const syscall_fields = comptime std.meta.fields(Syscalls);
 
             switch (request) {
-                // Ring meta-operations are handled by the VM context
-                .@"Ring.push" => return error.ShouldBeHandledByVMContext,
-                .@"Ring.pull" => return error.ShouldBeHandledByVMContext,
-
-                // Generated syscall dispatch
                 inline else => |payload, tag| {
                     // Find the matching syscall field
                     inline for (syscall_fields) |field| {
                         if (comptime std.mem.eql(u8, @tagName(tag), field.name)) {
                             const syscall_fn = @field(self.syscalls, field.name);
-                            const result = syscall_fn(self.context, payload) catch |err| return err;
-                            _ = result;
-                            return;
+                            const ptr_info = @typeInfo(@TypeOf(syscall_fn)).pointer;
+                            const func_info = @typeInfo(ptr_info.child).@"fn";
+                            const ReturnType = func_info.return_type.?;
+
+                            if (ReturnType == Pending) {
+                                _ = try syscall_fn(self.context, payload);
+                                return .{ .pending = {} };
+                            } else if (ReturnType == void) {
+                                try syscall_fn(self.context, payload);
+                                return .{ .immediate = @unionInit(ResultType, field.name, {}) };
+                            } else {
+                                const value = try syscall_fn(self.context, payload);
+                                return .{ .immediate = @unionInit(ResultType, field.name, value) };
+                            }
                         }
                     }
 
@@ -494,16 +533,13 @@ test "can generate Request union from syscalls struct" {
     const SyscallsType = TestSyscalls(TestContext);
     const Request = RequestUnion(SyscallsType);
 
-    // Should have ring ops + syscalls
     const union_info = @typeInfo(Request).@"union";
-    try testing.expect(union_info.fields.len == 5); // Ring.push, Ring.pull, print, readFile, sleep
+    try testing.expect(union_info.fields.len == 3);
 
     // Check field names are correct
-    try testing.expectEqualStrings("Ring.push", union_info.fields[0].name);
-    try testing.expectEqualStrings("Ring.pull", union_info.fields[1].name);
-    try testing.expectEqualStrings("print", union_info.fields[2].name);
-    try testing.expectEqualStrings("readFile", union_info.fields[3].name);
-    try testing.expectEqualStrings("sleep", union_info.fields[4].name);
+    try testing.expectEqualStrings("print", union_info.fields[0].name);
+    try testing.expectEqualStrings("readFile", union_info.fields[1].name);
+    try testing.expectEqualStrings("sleep", union_info.fields[2].name);
 }
 
 test "generated Request union has correct field types" {
@@ -668,14 +704,29 @@ test "can generate trampoline dispatcher" {
 
     // Test dispatching a print request
     const print_request = Trampoline.RequestType{ .print = .{ .message = "hello trampoline" } };
-    try trampoline.dispatch(print_request);
+    const print_result = try trampoline.dispatch(print_request);
+    switch (print_result) {
+        .immediate => |im| switch (im) {
+            .print => |msg| try testing.expectEqualStrings("hello trampoline", msg),
+            else => try testing.expect(false),
+        },
+        else => try testing.expect(false),
+    }
 
     // Verify the syscall was called
     try testing.expectEqualStrings("hello trampoline", context.output_buffer.items);
 
     // Test dispatching a readFile request
     const read_request = Trampoline.RequestType{ .readFile = .{ .path = "test.txt" } };
-    try trampoline.dispatch(read_request);
+    const read_result = try trampoline.dispatch(read_request);
+    switch (read_result) {
+        .immediate => |im| switch (im) {
+            .readFile => |contents| try testing.expectEqualStrings("file contents", contents),
+            else => try testing.expect(false),
+        },
+        else => try testing.expect(false),
+    }
+
 }
 
 test "can generate foreign class system for requests" {
@@ -778,8 +829,15 @@ test "complete syscalls system integration" {
     // 4. Dispatch foreign class request to get union
     const request = try RequestClasses.dispatchRequest(&foreign_request);
 
-    // 5. Process through trampoline
-    try trampoline.dispatch(request);
+    // 5. Process through trampoline and verify return value
+    const result = try trampoline.dispatch(request);
+    switch (result) {
+        .immediate => |im| switch (im) {
+            .print => |msg| try testing.expectEqualStrings("Hello from foreign class!", msg),
+            else => try testing.expect(false),
+        },
+        else => try testing.expect(false),
+    }
 
     // 6. Verify syscall was executed
     try testing.expectEqualStrings("Hello from foreign class!", context.output_buffer.items);
