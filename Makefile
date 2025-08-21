@@ -2,10 +2,10 @@
 
 vscode-build-and-test:
 	@echo "[begin compile]"
-	@zig build || { status=$$?; echo "[end compile]"; exit $$status; }
+	@zig build --summary new || { status=$$?; echo "[end compile]"; exit $$status; }
 	@echo "[end compile]"
 	@echo "[begin test]"
-	@zig build test || { status=$$?; echo "[end test]"; exit $$status; }
+	@zig build test --summary new || { status=$$?; echo "[end test]"; exit $$status; }
 	@echo "[end test]"
 
 ZIG ?= zig
@@ -17,11 +17,11 @@ BIN := bin/xtc
 
 all: build
 
-build:; $(ZIG) build
+build:; $(ZIG) build --summary new
 
 debug: build
 
-test:; $(ZIG) build test
+test:; $(ZIG) build test --summary new
 
 install:
 	$(ZIG) build
@@ -33,9 +33,8 @@ clean:
 
 help:
 	@echo "Targets:"
-	@echo "  build     - zig build (Debug)"
+	@echo "  build     - zig build --summary new (Debug)"
 	@echo "  release   - zig build (ReleaseSafe)"
-	@echo "  test      - zig build test"
+	@echo "  test      - zig build test --summary new"
 	@echo "  run       - run xtc on an XML file (make run FILE=foo.xml)"
 	@echo "  clean     - remove build artifacts"
-
