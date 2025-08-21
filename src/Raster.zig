@@ -7,8 +7,8 @@ const GlyphId = GlyphTable.GlyphId;
 
 const paint = @import("paint.zig");
 const Rgba8 = paint.Rgba8;
-const PaintContext = paint.PaintContext;
 const PaintBorderStyle = paint.PaintBorderStyle;
+const Painter = @import("Painter.zig").Painter;
 
 const Cell = struct {
     glyph: GlyphId,
@@ -230,9 +230,9 @@ pub fn rasterizeDisplayList(
     r: *Raster,
     alloc: std.mem.Allocator,
     glyphs: *GlyphTable,
-    paint_ctx: *const PaintContext,
+    painter: *const Painter,
 ) !void {
-    for (paint_ctx.ops.items) |op| switch (op) {
+    for (painter.ops.items) |op| switch (op) {
         .FillRect => |fr| {
             // Fill background color and glyphs using slice ops per row
             if (fr.w > 0 and fr.h > 0) {
