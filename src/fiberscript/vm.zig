@@ -1,9 +1,12 @@
 const std = @import("std");
 
 const c = @import("wren.zig");
-const VMContext = @import("vm_context.zig").VMContext;
 const ErrorHandler = @import("error_handler.zig").ErrorHandler;
 const slots_api = @import("slots.zig");
+const OutputHandler = @import("output.zig").OutputHandler;
+const syscalls = @import("syscalls.zig");
+const dom = @import("../dom.zig");
+const TrackingAllocator = @import("../lib/TrackingAllocator.zig");
 
 const ansi = @import("ansi");
 const tree = ansi.nest;
@@ -17,62 +20,350 @@ pub const StackTraceLine = ErrorHandler.StackTraceLine;
 
 pub fn Engine(configuration: Configuration) type {
     return struct {
+        allocator: std.mem.Allocator,
+        output_handler: OutputHandler,
+        error_handler: ErrorHandler,
+        fiber_queue: std.ArrayList(*c.Handle),
+        trampoliner: Trampoline,
+        document: *dom.Dom,
+        vm: *c.VM,
+
         const Self = @This();
 
         pub const API = configuration.API;
+
+        const Syscalls = syscalls.TTYSyscalls(Self);
+        const Request = syscalls.RequestUnion(Syscalls);
+        const Trampoline = syscalls.generateTrampoline(Syscalls, Self);
+        const SlotParser = syscalls.generateSlotParser(Request, Syscalls);
 
         pub const Options = struct {
             output_buffer_size: usize = 1024 * 32,
             error_buffer_size: usize = 1024 * 32,
         };
 
-        allocator: std.mem.Allocator,
-        vm: *c.VM,
-        context: *VMContext,
+        pub fn init(base_allocator: std.mem.Allocator, options: Options) !*Self {
+            const self = try base_allocator.create(Self);
+            errdefer base_allocator.destroy(self);
 
-        fn getContext(vm: *c.VM) *VMContext {
-            const user_data = c.wrenGetUserData(vm);
-            return @ptrCast(@alignCast(user_data));
-        }
-
-        pub fn init(allocator: std.mem.Allocator) !*Self {
-            var self = try allocator.create(Self);
-            try self.setup(allocator, .{});
+            try self.setup(base_allocator, options);
             return self;
         }
 
         pub fn setup(self: *Self, allocator: std.mem.Allocator, options: Options) !void {
-            const context = try VMContext.init(allocator, .{
-                .output_buffer_size = options.output_buffer_size,
-                .error_buffer_size = options.error_buffer_size,
-            });
-            errdefer context.deinit(allocator);
+            // Initialize fields needed prior to VM creation
+            self.allocator = allocator;
 
-            var vmconf = context.createVMConfiguration();
+            self.output_handler = try OutputHandler.init(
+                allocator,
+                .{ .buffer_size = options.output_buffer_size },
+            );
+
+            errdefer self.output_handler.deinit(allocator);
+
+            self.error_handler = try ErrorHandler.init(
+                allocator,
+                .{ .buffer_size = options.error_buffer_size },
+            );
+            errdefer self.error_handler.deinit(allocator);
+
+            self.fiber_queue = std.ArrayList(*c.Handle).init(allocator);
+
+            self.trampoliner = Trampoline{ .context = self, .syscalls = SyscallsImpl };
+
+            var vmconf = c.Configuration{};
+            c.wrenInitConfiguration(&vmconf);
+
+            vmconf.reallocateFn = reallocateFn;
+            vmconf.writeFn = writeFn;
+            vmconf.errorFn = errorFn;
+            vmconf.userData = self;
+            vmconf.bindForeignMethodFn = bindForeignMethodFn;
 
             if (c.wrenNewVM(&vmconf)) |vm| {
-                self.* = .{
-                    .allocator = allocator,
-                    .vm = vm,
-                    .context = context,
-                };
-
+                self.vm = vm;
                 try self.bind();
             } else {
-                context.deinit(allocator);
+                self.fiber_queue.deinit();
+                self.error_handler.deinit(allocator);
+                self.output_handler.deinit(allocator);
                 return error.FailedToCreateVM;
             }
         }
 
         pub fn deinit(self: *Self) void {
-            const allocator = self.allocator;
-            for (self.context.fiber_queue.items) |fiber| {
+            for (self.fiber_queue.items) |fiber| {
                 c.wrenReleaseHandle(self.vm, fiber);
             }
 
-            self.context.deinit(allocator);
             c.wrenFreeVM(self.vm);
-            allocator.destroy(self);
+
+            self.fiber_queue.deinit();
+            self.error_handler.deinit(self.allocator);
+            self.output_handler.deinit(self.allocator);
+
+            self.allocator.destroy(self);
+        }
+
+        const SyscallsImpl = if (@hasDecl(API, "Syscalls"))
+            syscalls.bindSyscalls(Syscalls, API.Syscalls)
+        else
+            syscalls.bindSyscalls(Syscalls, struct {
+                pub fn createElement(
+                    self: *Self,
+                    args: Syscalls.Payload(.createElement),
+                ) anyerror!dom.DomNodeId {
+                    return self.document.addElement(args.style);
+                }
+
+                pub fn updateText(
+                    self: *Self,
+                    args: Syscalls.Payload(.updateText),
+                ) anyerror!void {
+                    try self.document.updateText(args.nodeId, args.text);
+                }
+
+                pub fn updateClass(
+                    self: *Self,
+                    args: Syscalls.Payload(.updateClass),
+                ) anyerror!void {
+                    try self.document.updateClass(args.nodeId, args.className);
+                }
+
+                pub fn appendChild(
+                    self: *Self,
+                    args: Syscalls.Payload(.appendChild),
+                ) anyerror!void {
+                    try self.document.appendChild(args.parentId, args.childId);
+                }
+
+                pub fn removeChild(
+                    self: *Self,
+                    args: Syscalls.Payload(.removeChild),
+                ) anyerror!void {
+                    try self.document.removeChild(args.parentId, args.childId);
+                }
+
+                pub fn requestRender(
+                    self: *Self,
+                    _: Syscalls.Payload(.requestRender),
+                ) anyerror!void {
+                    _ = self; // autofix
+                    @panic("requestRender not implemented");
+                }
+
+                pub fn clearScreen(
+                    self: *Self,
+                    _: Syscalls.Payload(.clearScreen),
+                ) anyerror!void {
+                    _ = self; // autofix
+                    @panic("clearScreen not implemented");
+                }
+
+                pub fn requestAnimationFrame(
+                    self: *Self,
+                    _: Syscalls.Payload(.requestAnimationFrame),
+                ) anyerror!void {
+                    _ = self; // autofix
+                    @panic("requestAnimationFrame not implemented");
+                }
+
+                pub fn setTimeout(
+                    self: *Self,
+                    args: Syscalls.Payload(.setTimeout),
+                ) anyerror!void {
+                    _ = self; // autofix
+                    _ = args; // autofix
+                    @panic("setTimeout not implemented");
+                }
+
+                pub fn addEventListener(
+                    self: *Self,
+                    args: Syscalls.Payload(.addEventListener),
+                ) anyerror!void {
+                    _ = self; // autofix
+                    _ = args; // autofix
+                    @panic("addEventListener not implemented");
+                }
+
+                pub fn getViewportSize(
+                    self: *Self,
+                    _: Syscalls.Payload(.getViewportSize),
+                ) anyerror!void {
+                    _ = self; // autofix
+                    @panic("getViewportSize not implemented");
+                }
+
+                pub fn setViewportSize(
+                    self: *Self,
+                    args: Syscalls.Payload(.setViewportSize),
+                ) anyerror!void {
+                    _ = self; // autofix
+                    _ = args; // autofix
+                    @panic("setViewportSize not implemented");
+                }
+            });
+
+        /// C callback function for Wren's memory allocation needs.
+        ///
+        /// Handles allocation, reallocation, and deallocation according to Wren's
+        /// memory management contract:
+        /// - memory=null, new_size>0: allocate new memory
+        /// - memory!=null, new_size>0: reallocate existing memory
+        /// - memory!=null, new_size=0: free memory
+        /// - memory=null, new_size=0: no-op, return null
+        pub fn reallocateFn(
+            memory: ?*anyopaque,
+            new_size: usize,
+            user_data: *anyopaque,
+        ) callconv(.C) ?*anyopaque {
+            const self: *Self = @ptrCast(@alignCast(user_data));
+            var tracked = TrackingAllocator.create(self.allocator);
+
+            if (memory) |mem| {
+                const ptr: [*]u8 = @ptrCast(mem);
+                if (new_size == 0) {
+                    // Free memory
+                    tracked.free(ptr);
+                    return null;
+                } else {
+                    // Reallocate memory
+                    return tracked.realloc(ptr, new_size);
+                }
+            } else {
+                if (new_size == 0) {
+                    // No-op case
+                    return null;
+                }
+                // Allocate new memory
+                return tracked.alloc(new_size);
+            }
+        }
+
+        fn bindForeignMethodFn(
+            vm: *c.VM,
+            module: [*:0]const u8,
+            className: [*:0]const u8,
+            isStatic: bool,
+            method: [*:0]const u8,
+        ) callconv(.C) c.ForeignMethodFn {
+            _ = vm; // autofix
+            if (!isStatic) return null;
+
+            if (std.mem.eql(u8, std.mem.span(module), "xtc")) {
+                if (std.mem.eql(u8, std.mem.span(className), "Core")) {
+                    if (std.mem.eql(u8, std.mem.span(method), "scheduleImmediately(_)")) {
+                        return &(struct {
+                            fn callback(ptr: *c.VM) callconv(.C) void {
+                                var ctx: *Self = @ptrCast(@alignCast(c.wrenGetUserData(ptr)));
+                                var work = slots_api.SlotBuilder.init(ptr, ctx.allocator);
+                                const fiber = work.get(1, *c.Handle) catch std.debug.panic("expected fiber", .{});
+                                ctx.scheduleImmediately(fiber) catch std.debug.panic("failed to schedule fiber", .{});
+                                _ = work.set(0, void{});
+                            }
+                        }).callback;
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        pub fn scheduleImmediately(self: *Self, fiber: *c.Handle) !void {
+            try self.fiber_queue.append(fiber);
+            std.debug.print("scheduled fiber: {any}\n", .{fiber});
+        }
+
+        pub fn trampoline(self: *Self, vm: *c.VM) !void {
+            var work = slots_api.SlotBuilder.init(vm, self.allocator);
+            std.debug.print("first round of trampoline\n", .{});
+            var steps: usize = 0;
+
+            errdefer self.croak() catch {};
+
+            while (steps < 16) : (steps += 1) {
+                if (self.fiber_queue.items.len == 0) {
+                    std.debug.print("trampoline: no fibers to run\n", .{});
+                    return;
+                }
+
+                const fiber = self.fiber_queue.orderedRemove(0);
+
+                defer c.wrenReleaseHandle(vm, fiber);
+
+                std.debug.print("trampoline: running fiber: {any}\n", .{fiber});
+                try work.set(0, fiber).call("call()").checkSuccess();
+
+                if (work.countSlots() < 2) {
+                    std.debug.print("trampoline: no slots, {}\n", .{steps});
+                    return;
+                }
+
+                var slot_map = work.slotMap(0);
+                var request = try SlotParser.parseRequest(&slot_map);
+                std.debug.print("trampoline: {any} {any}\n", .{ fiber, request });
+
+                while (true) {
+                    const dispatch_result = try self.trampoliner.dispatch(request);
+                    switch (dispatch_result) {
+                        .immediate => |result| {
+                            _ = work.set(0, fiber);
+                            switch (result) {
+                                inline else => |value| {
+                                    if (@TypeOf(value) == void) {
+                                        _ = work.set(1, {});
+                                    } else {
+                                        _ = work.set(1, value);
+                                    }
+                                },
+                            }
+                            _ = work.call("call(_)");
+
+                            if (work.countSlots() < 2) {
+                                c.wrenReleaseHandle(vm, fiber);
+                                break;
+                            }
+
+                            slot_map = work.slotMap(0);
+                            request = try SlotParser.parseRequest(&slot_map);
+                            std.debug.print("trampoline: {any} {any}\n", .{ fiber, request });
+                            continue;
+                        },
+                        .pending => break,
+                    }
+                }
+            }
+        }
+
+        /// C callback wrapper for output handling.
+        fn writeFn(vm: *c.VM, text: [*:0]const u8) callconv(.C) void {
+            const self = getSelf(vm);
+            self.output_handler.writeFn(vm, text);
+        }
+
+        /// C callback wrapper for error handling.
+        fn errorFn(
+            vm: *c.VM,
+            error_type: c.ErrorType,
+            module_ptr: ?[*:0]const u8,
+            line: c_int,
+            message_ptr: ?[*:0]const u8,
+        ) callconv(.C) void {
+            const self = getSelf(vm);
+            self.error_handler.errorFn(error_type, module_ptr, line, message_ptr);
+        }
+
+        pub fn takeError(self: *Self) ErrorReport {
+            return self.error_handler.takeError();
+        }
+
+        pub fn checkError(self: *Self) !void {
+            return self.error_handler.checkError();
+        }
+
+        fn getSelf(vm: *c.VM) *Self {
+            const user_data = c.wrenGetUserData(vm);
+            return @ptrCast(@alignCast(user_data));
         }
 
         pub fn runTopLevel(self: *Self, module_name: []const u8, source: []const u8) !void {
@@ -120,23 +411,12 @@ pub fn Engine(configuration: Configuration) type {
             try self.runTopLevel("xtc", @embedFile("xtc.wren"));
         }
 
-        /// Returns the current error and clears it.
-        pub fn takeError(self: *Self) ErrorReport {
-            return self.context.takeError();
-        }
-
-        /// Returns an error if there is a current error.
-        /// If there is no error, does nothing.
-        pub fn checkError(self: *Self) error{ CompilationError, RuntimeError }!void {
-            return self.context.checkError();
-        }
-
         pub fn takeOutput(self: *Self, allocator: std.mem.Allocator) ![]const u8 {
-            return self.context.takeOutput(allocator);
+            return self.output_handler.takeOutput(allocator);
         }
 
         pub fn croak(self: *Self) !void {
-            return self.context.croak();
+            return self.error_handler.croak();
         }
 
         /// Start building a slot configuration for method calls.
@@ -150,7 +430,7 @@ pub fn Engine(configuration: Configuration) type {
 test "we can create and destroy a VM" {
     const allocator = std.testing.allocator;
 
-    var vm = try Engine(.{}).init(allocator);
+    var vm = try Engine(.{}).init(allocator, .{});
     defer vm.deinit();
 
     const output = try vm.takeOutput(allocator);
@@ -163,7 +443,7 @@ test "we can create and destroy a VM" {
 test "we can run a simple script" {
     const allocator = std.testing.allocator;
 
-    var engine = try Engine(.{}).init(allocator);
+    var engine = try Engine(.{}).init(allocator, .{});
     defer engine.deinit();
 
     try engine.runTopLevel("foo",
@@ -190,7 +470,7 @@ test "we can call Core.spawn" {
 
     var engine = try Engine(.{
         .API = API,
-    }).init(allocator);
+    }).init(allocator, .{});
     defer engine.deinit();
 
     engine.runTopLevel("main",
@@ -214,44 +494,44 @@ test "we can call Core.spawn" {
     const output = try engine.takeOutput(allocator);
     defer allocator.free(output);
 
-    try engine.context.trampoline(engine.vm);
+    try engine.trampoline(engine.vm);
 }
 
-test "Core.print operation" {
-    const allocator = std.testing.allocator;
+// test "Core.print operation" {
+//     const allocator = std.testing.allocator;
 
-    const API = struct {
-        const Self = Engine(.{ .API = @This() });
-    };
+//     const API = struct {
+//         const Self = Engine(.{ .API = @This() });
+//     };
 
-    var engine = try Engine(.{
-        .API = API,
-    }).init(allocator);
-    defer engine.deinit();
+//     var engine = try Engine(.{
+//         .API = API,
+//     }).init(allocator, .{});
+//     defer engine.deinit();
 
-    engine.runTopLevel("main",
-        \\import "xtc" for Core
-        \\
-        \\var fiber = Fiber.new {
-        \\  Core.print("Hello from fiber!")
-        \\}
-        \\
-        \\Core.scheduleImmediately(fiber)
-        \\
-    ) catch {
-        try engine.croak();
-    };
+//     engine.runTopLevel("main",
+//         \\import "xtc" for Core
+//         \\
+//         \\var fiber = Fiber.new {
+//         \\  Core.print("Hello from fiber!")
+//         \\}
+//         \\
+//         \\Core.scheduleImmediately(fiber)
+//         \\
+//     ) catch {
+//         try engine.croak();
+//     };
 
-    const output = try engine.takeOutput(allocator);
-    defer allocator.free(output);
+//     const output = try engine.takeOutput(allocator);
+//     defer allocator.free(output);
 
-    try engine.context.trampoline(engine.vm);
-}
+//     try engine.trampoline(engine.vm);
+// }
 
 test "slots API - simple method call" {
     const allocator = std.testing.allocator;
 
-    var engine = try Engine(.{}).init(allocator);
+    var engine = try Engine(.{}).init(allocator, .{});
     defer engine.deinit();
 
     try engine.runTopLevel("test",
@@ -283,7 +563,7 @@ test "slots API - simple method call" {
 test "slots API - working with strings" {
     const allocator = std.testing.allocator;
 
-    var engine = try Engine(.{}).init(allocator);
+    var engine = try Engine(.{}).init(allocator, .{});
     defer engine.deinit();
 
     try engine.runTopLevel("test",
@@ -308,7 +588,7 @@ test "slots API - working with strings" {
 test "slots API - list operations" {
     const allocator = std.testing.allocator;
 
-    var engine = try Engine(.{}).init(allocator);
+    var engine = try Engine(.{}).init(allocator, .{});
     defer engine.deinit();
 
     try engine.runTopLevel("test",

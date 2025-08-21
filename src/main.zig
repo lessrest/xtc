@@ -57,12 +57,13 @@ fn run_script(allocator: std.mem.Allocator, name: []const u8) !void {
     const script = try file.readToEndAlloc(allocator, 1024 * 1024);
     defer allocator.free(script);
 
-    const engine = try Engine.init(allocator);
+    const engine = try Engine.init(allocator, .{});
     defer engine.deinit();
 
     try engine.runTopLevel(name, script); // TODO: croak...
-    try engine.context.trampoline(engine.vm);
+    try engine.trampoline(engine.vm);
 
+    std.debug.print("trampoline done\n", .{});
     const output = try engine.takeOutput(allocator);
     defer allocator.free(output);
     try stderr.print("{s}", .{output});
