@@ -1,6 +1,6 @@
 const std = @import("std");
 const c = @import("wren.zig");
-const TrackingAllocator = @import("../lib/TrackingAllocator.zig");
+const TrackingAllocator = @import("tracking_allocator.zig");
 
 /// Wren allocator wrapper that integrates with Zig's allocator system.
 ///

@@ -5,105 +5,41 @@ const ErrorHandler = @import("error_handler.zig").ErrorHandler;
 const slots_api = @import("slots.zig");
 const OutputHandler = @import("output.zig").OutputHandler;
 const syscalls = @import("syscalls.zig");
-const dom = @import("../dom.zig");
-const TrackingAllocator = @import("../lib/TrackingAllocator.zig");
+const TrackingAllocator = @import("tracking_allocator.zig");
 
 const ansi = @import("ansi");
 const tree = ansi.nest;
 
-pub fn Syscalls(comptime Self: type) type {
-    return struct {
-        pub fn createElement(self: *Self, args: struct { style: []const u8 }) anyerror!dom.DomNodeId {
-            return self.document.addElement(args.style);
-        }
-
-        pub fn updateText(self: *Self, args: struct { nodeId: u32, text: []const u8 }) anyerror!void {
-            try self.document.updateText(args.nodeId, args.text);
-        }
-
-        pub fn updateClass(self: *Self, args: struct { nodeId: u32, className: []const u8 }) anyerror!void {
-            try self.document.updateClass(args.nodeId, args.className);
-        }
-
-        pub fn appendChild(self: *Self, args: struct { parentId: u32, childId: u32 }) anyerror!void {
-            try self.document.appendChild(args.parentId, args.childId);
-        }
-
-        pub fn removeChild(self: *Self, args: struct { parentId: u32, childId: u32 }) anyerror!void {
-            try self.document.removeChild(args.parentId, args.childId);
-        }
-
-        pub fn requestRender(self: *Self, args: struct {}) anyerror!void {
-            _ = self;
-            _ = args;
-            @panic("requestRender not implemented");
-        }
-
-        pub fn clearScreen(self: *Self, args: struct {}) anyerror!void {
-            _ = self;
-            _ = args;
-            @panic("clearScreen not implemented");
-        }
-
-        pub fn requestAnimationFrame(self: *Self, args: struct {}) anyerror!void {
-            _ = self;
-            _ = args;
-            @panic("requestAnimationFrame not implemented");
-        }
-
-        pub fn setTimeout(self: *Self, args: struct { delayMs: f64 }) anyerror!void {
-            _ = self;
-            _ = args;
-            @panic("setTimeout not implemented");
-        }
-
-        pub fn addEventListener(self: *Self, args: struct { eventType: []const u8 }) anyerror!void {
-            _ = self;
-            _ = args;
-            @panic("addEventListener not implemented");
-        }
-
-        pub fn getViewportSize(self: *Self, args: struct {}) anyerror!void {
-            _ = self;
-            _ = args;
-            @panic("getViewportSize not implemented");
-        }
-
-        pub fn setViewportSize(self: *Self, args: struct { width: u32, height: u32 }) anyerror!void {
-            _ = self;
-            _ = args;
-            @panic("setViewportSize not implemented");
-        }
-    };
-}
-
 pub const Configuration = struct {
-    Syscalls: fn (comptime Self: type) type = Syscalls,
+    Syscalls: fn (comptime EngineType: type, comptime Context: type) type,
+    Context: type,
 };
 
 pub const ErrorReport = ErrorHandler.ErrorReport;
 pub const StackTraceLine = ErrorHandler.StackTraceLine;
 
-pub fn Engine(configuration: Configuration) type {
+pub fn Engine(comptime configuration: Configuration) type {
     return struct {
         allocator: std.mem.Allocator,
         output_handler: OutputHandler,
         error_handler: ErrorHandler,
         fiber_queue: std.ArrayList(*c.Handle),
         trampoliner: Trampoline,
-        document: *dom.Dom,
+        syscall_context: *Context,
         vm: *c.VM,
 
         const Self = @This();
 
-        const SyscallsType = configuration.Syscalls(Self);
+        const Context = configuration.Context;
+        const SyscallsType = configuration.Syscalls(Self, Context);
         const Request = syscalls.RequestUnion(SyscallsType);
-        const Trampoline = syscalls.generateTrampoline(SyscallsType, Self);
+        const Trampoline = syscalls.generateTrampoline(SyscallsType, Self, Context);
         const SlotParser = syscalls.generateSlotParser(Request, SyscallsType);
 
         pub const Options = struct {
             output_buffer_size: usize = 1024 * 32,
             error_buffer_size: usize = 1024 * 32,
+            syscall_context: *Context,
         };
 
         pub fn init(base_allocator: std.mem.Allocator, options: Options) !*Self {
@@ -133,7 +69,8 @@ pub fn Engine(configuration: Configuration) type {
 
             self.fiber_queue = std.ArrayList(*c.Handle).init(allocator);
 
-            self.trampoliner = Trampoline{ .context = self };
+            self.syscall_context = options.syscall_context;
+            self.trampoliner = Trampoline{ .engine = self, .context = self.syscall_context };
 
             var vmconf = c.Configuration{};
             c.wrenInitConfiguration(&vmconf);
@@ -372,10 +309,19 @@ pub fn Engine(configuration: Configuration) type {
     };
 }
 
+fn NoSyscalls(comptime EngineType: type, comptime Context: type) type {
+    _ = EngineType;
+    _ = Context;
+    return struct {};
+}
+
+const TestContext = struct {};
+
 test "we can create and destroy a VM" {
     const allocator = std.testing.allocator;
-
-    var vm = try Engine(.{}).init(allocator, .{});
+    const EngineType = Engine(.{ .Syscalls = NoSyscalls, .Context = TestContext });
+    var context = TestContext{};
+    var vm = try EngineType.init(allocator, .{ .syscall_context = &context });
     defer vm.deinit();
 
     const output = try vm.takeOutput(allocator);
@@ -387,8 +333,9 @@ test "we can create and destroy a VM" {
 
 test "we can run a simple script" {
     const allocator = std.testing.allocator;
-
-    var engine = try Engine(.{}).init(allocator, .{});
+    const EngineType = Engine(.{ .Syscalls = NoSyscalls, .Context = TestContext });
+    var context = TestContext{};
+    var engine = try EngineType.init(allocator, .{ .syscall_context = &context });
     defer engine.deinit();
 
     try engine.runTopLevel("foo",
@@ -404,8 +351,9 @@ test "we can run a simple script" {
 
 test "we can call Core.spawn" {
     const allocator = std.testing.allocator;
-
-    var engine = try Engine(.{}).init(allocator, .{});
+    const EngineType = Engine(.{ .Syscalls = NoSyscalls, .Context = TestContext });
+    var context = TestContext{};
+    var engine = try EngineType.init(allocator, .{ .syscall_context = &context });
     defer engine.deinit();
 
     engine.runTopLevel("main",
@@ -450,8 +398,9 @@ test "we can call Core.spawn" {
 
 test "slots API - simple method call" {
     const allocator = std.testing.allocator;
-
-    var engine = try Engine(.{}).init(allocator, .{});
+    const EngineType = Engine(.{ .Syscalls = NoSyscalls, .Context = TestContext });
+    var context = TestContext{};
+    var engine = try EngineType.init(allocator, .{ .syscall_context = &context });
     defer engine.deinit();
 
     try engine.runTopLevel("test",
@@ -482,8 +431,9 @@ test "slots API - simple method call" {
 
 test "slots API - working with strings" {
     const allocator = std.testing.allocator;
-
-    var engine = try Engine(.{}).init(allocator, .{});
+    const EngineType = Engine(.{ .Syscalls = NoSyscalls, .Context = TestContext });
+    var context = TestContext{};
+    var engine = try EngineType.init(allocator, .{ .syscall_context = &context });
     defer engine.deinit();
 
     try engine.runTopLevel("test",
@@ -507,8 +457,9 @@ test "slots API - working with strings" {
 
 test "slots API - list operations" {
     const allocator = std.testing.allocator;
-
-    var engine = try Engine(.{}).init(allocator, .{});
+    const EngineType = Engine(.{ .Syscalls = NoSyscalls, .Context = TestContext });
+    var context = TestContext{};
+    var engine = try EngineType.init(allocator, .{ .syscall_context = &context });
     defer engine.deinit();
 
     try engine.runTopLevel("test",

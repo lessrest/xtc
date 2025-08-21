@@ -1,9 +1,12 @@
 const std = @import("std");
 const ansi = @import("ansi");
 
-const vm = @import("fiberscript/vm.zig");
+const fiberscript = @import("fiberscript");
+const scripting = @import("scripting.zig");
+const dom = @import("dom.zig");
 
-const Engine = vm.Engine(.{});
+const Engine = fiberscript.Engine(.{ .Syscalls = scripting.documentSyscalls, .Context = scripting.SyscallContext });
+const SyscallContext = scripting.SyscallContext;
 
 pub const version = "0.5.0";
 
@@ -11,7 +14,7 @@ pub const panic = ansi.panic;
 
 comptime {
     _ = @import("test/flex.test.zig");
-    _ = @import("fiberscript/vm.zig");
+    _ = @import("fiberscript");
 }
 
 pub fn main() !void {
@@ -57,7 +60,11 @@ fn run_script(allocator: std.mem.Allocator, name: []const u8) !void {
     const script = try file.readToEndAlloc(allocator, 1024 * 1024);
     defer allocator.free(script);
 
-    const engine = try Engine.init(allocator, .{});
+    var document = try dom.Dom.init(allocator);
+    defer document.deinit();
+    var sc = SyscallContext{ .document = document };
+
+    const engine = try Engine.init(allocator, .{ .syscall_context = &sc });
     defer engine.deinit();
 
     try engine.runTopLevel(name, script); // TODO: croak...

@@ -10,18 +10,18 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/lib/libansi.zig"),
     });
 
-    const wren = b.addModule("wren", .{
+    const fiberscript_mod = b.addModule("fiberscript", .{
         .target = target,
         .optimize = optimize,
-        .root_source_file = b.path("src/fiberscript/vm.zig"),
+        .root_source_file = b.path("src/fiberscript.zig"),
     });
 
-    wren.addImport("ansi", ansi);
+    fiberscript_mod.addImport("ansi", ansi);
 
-    wren.addIncludePath(b.path("deps/wren/src/include"));
-    wren.addIncludePath(b.path("deps/wren/src/vm"));
-    wren.addIncludePath(b.path("deps/wren/src/optional"));
-    wren.addCSourceFiles(.{
+    fiberscript_mod.addIncludePath(b.path("deps/wren/src/include"));
+    fiberscript_mod.addIncludePath(b.path("deps/wren/src/vm"));
+    fiberscript_mod.addIncludePath(b.path("deps/wren/src/optional"));
+    fiberscript_mod.addCSourceFiles(.{
         .files = &.{
             "deps/wren/src/vm/wren_compiler.c",
             "deps/wren/src/vm/wren_core.c",
@@ -43,15 +43,7 @@ pub fn build(b: *std.Build) void {
             "-DDEBUG",
         },
     });
-    wren.addCMacro("abort", "zig_abort");
-
-    const libwren = b.addLibrary(.{
-        .linkage = .static,
-        .name = "wren",
-        .root_module = wren,
-    });
-
-    libwren.linkLibC();
+    fiberscript_mod.addCMacro("abort", "zig_abort");
 
     // Create WASM-specific Wren library
     const libwren_wasm = b.addStaticLibrary(.{
@@ -98,6 +90,7 @@ pub fn build(b: *std.Build) void {
     });
 
     xtc.addImport("ansi", ansi);
+    xtc.addImport("fiberscript", fiberscript_mod);
 
     //    xtc.addImport("code_point", zg.module("code_point"));
     xtc.addImport("Graphemes", zg.module("Graphemes"));
@@ -110,7 +103,7 @@ pub fn build(b: *std.Build) void {
     });
 
     exe.linkSystemLibrary("m");
-    exe.linkLibrary(libwren);
+    exe.linkLibC();
 
     b.installArtifact(exe);
 
@@ -120,7 +113,7 @@ pub fn build(b: *std.Build) void {
     });
 
     exe_check.linkSystemLibrary("m");
-    exe_check.linkLibrary(libwren);
+    exe_check.linkLibC();
 
     const check_step = b.step("check", "Check the xtc executable");
     check_step.dependOn(&exe_check.step);
@@ -134,7 +127,7 @@ pub fn build(b: *std.Build) void {
         },
     });
 
-    unit_tests.linkLibrary(libwren);
+    unit_tests.linkLibC();
 
     b.installArtifact(unit_tests);
 
