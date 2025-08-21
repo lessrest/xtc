@@ -21,8 +21,8 @@ compact paint/display-list pipeline.
   markup.
 - **Live demo**: An interactive, raw-mode line editor rendering to an alternate
   screen buffer to showcase incremental redraw.
-- **Embedded scripting**: The original Wren integration is being replaced by a
-  new Fiberscript runtime built on cooperative fibers.
+- **Embedded scripting**: A new Wren integration (codename: Fiberscript)
+  uses cooperative fibers for concurrency.
 
 ### Status
 
@@ -110,11 +110,11 @@ rasterize to ASCII.
 
 ## Scripting runtime
 
-XTC embeds a lightweight scripting language for dynamic DOM manipulation. The
-original implementation uses Wren, but a new Fiberscript runtime is actively
-replacing it to provide cooperative fibers and batched syscalls. During the
-transition both systems coexist, with Fiberscript taking an increasingly central
-role. Documentation for the new runtime lives alongside its source.
+XTC embeds Wren for dynamic DOM manipulation. A new module built on Wren—
+codename "Fiberscript"—adds cooperative fibers and batched syscalls. During the
+transition both integrations coexist, with the Fiberscript module taking an
+increasingly central role. Documentation for this module lives alongside its
+source.
 
 ## Supported utility classes (subset)
 
