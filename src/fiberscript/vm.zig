@@ -32,7 +32,73 @@ pub fn Engine(configuration: Configuration) type {
 
         pub const API = configuration.API;
 
-        const Syscalls = syscalls.TTYSyscalls(Self);
+        const Syscalls = if (@hasDecl(API, "Syscalls"))
+            API.Syscalls
+        else
+            struct {
+                pub fn createElement(self: *Self, args: struct { style: []const u8 }) anyerror!dom.DomNodeId {
+                    return self.document.addElement(args.style);
+                }
+
+                pub fn updateText(self: *Self, args: struct { nodeId: u32, text: []const u8 }) anyerror!void {
+                    try self.document.updateText(args.nodeId, args.text);
+                }
+
+                pub fn updateClass(self: *Self, args: struct { nodeId: u32, className: []const u8 }) anyerror!void {
+                    try self.document.updateClass(args.nodeId, args.className);
+                }
+
+                pub fn appendChild(self: *Self, args: struct { parentId: u32, childId: u32 }) anyerror!void {
+                    try self.document.appendChild(args.parentId, args.childId);
+                }
+
+                pub fn removeChild(self: *Self, args: struct { parentId: u32, childId: u32 }) anyerror!void {
+                    try self.document.removeChild(args.parentId, args.childId);
+                }
+
+                pub fn requestRender(self: *Self, args: struct {}) anyerror!void {
+                    _ = self;
+                    _ = args;
+                    @panic("requestRender not implemented");
+                }
+
+                pub fn clearScreen(self: *Self, args: struct {}) anyerror!void {
+                    _ = self;
+                    _ = args;
+                    @panic("clearScreen not implemented");
+                }
+
+                pub fn requestAnimationFrame(self: *Self, args: struct {}) anyerror!void {
+                    _ = self;
+                    _ = args;
+                    @panic("requestAnimationFrame not implemented");
+                }
+
+                pub fn setTimeout(self: *Self, args: struct { delayMs: f64 }) anyerror!void {
+                    _ = self;
+                    _ = args;
+                    @panic("setTimeout not implemented");
+                }
+
+                pub fn addEventListener(self: *Self, args: struct { eventType: []const u8 }) anyerror!void {
+                    _ = self;
+                    _ = args;
+                    @panic("addEventListener not implemented");
+                }
+
+                pub fn getViewportSize(self: *Self, args: struct {}) anyerror!void {
+                    _ = self;
+                    _ = args;
+                    @panic("getViewportSize not implemented");
+                }
+
+                pub fn setViewportSize(self: *Self, args: struct { width: u32, height: u32 }) anyerror!void {
+                    _ = self;
+                    _ = args;
+                    @panic("setViewportSize not implemented");
+                }
+            };
+
         const Request = syscalls.RequestUnion(Syscalls);
         const Trampoline = syscalls.generateTrampoline(Syscalls, Self);
         const SlotParser = syscalls.generateSlotParser(Request, Syscalls);
@@ -69,7 +135,7 @@ pub fn Engine(configuration: Configuration) type {
 
             self.fiber_queue = std.ArrayList(*c.Handle).init(allocator);
 
-            self.trampoliner = Trampoline{ .context = self, .syscalls = SyscallsImpl };
+            self.trampoliner = Trampoline{ .context = self };
 
             var vmconf = c.Configuration{};
             c.wrenInitConfiguration(&vmconf);
@@ -105,104 +171,6 @@ pub fn Engine(configuration: Configuration) type {
             self.allocator.destroy(self);
         }
 
-        const SyscallsImpl = if (@hasDecl(API, "Syscalls"))
-            syscalls.bindSyscalls(Syscalls, API.Syscalls)
-        else
-            syscalls.bindSyscalls(Syscalls, struct {
-                pub fn createElement(
-                    self: *Self,
-                    args: Syscalls.Payload(.createElement),
-                ) anyerror!dom.DomNodeId {
-                    return self.document.addElement(args.style);
-                }
-
-                pub fn updateText(
-                    self: *Self,
-                    args: Syscalls.Payload(.updateText),
-                ) anyerror!void {
-                    try self.document.updateText(args.nodeId, args.text);
-                }
-
-                pub fn updateClass(
-                    self: *Self,
-                    args: Syscalls.Payload(.updateClass),
-                ) anyerror!void {
-                    try self.document.updateClass(args.nodeId, args.className);
-                }
-
-                pub fn appendChild(
-                    self: *Self,
-                    args: Syscalls.Payload(.appendChild),
-                ) anyerror!void {
-                    try self.document.appendChild(args.parentId, args.childId);
-                }
-
-                pub fn removeChild(
-                    self: *Self,
-                    args: Syscalls.Payload(.removeChild),
-                ) anyerror!void {
-                    try self.document.removeChild(args.parentId, args.childId);
-                }
-
-                pub fn requestRender(
-                    self: *Self,
-                    _: Syscalls.Payload(.requestRender),
-                ) anyerror!void {
-                    _ = self; // autofix
-                    @panic("requestRender not implemented");
-                }
-
-                pub fn clearScreen(
-                    self: *Self,
-                    _: Syscalls.Payload(.clearScreen),
-                ) anyerror!void {
-                    _ = self; // autofix
-                    @panic("clearScreen not implemented");
-                }
-
-                pub fn requestAnimationFrame(
-                    self: *Self,
-                    _: Syscalls.Payload(.requestAnimationFrame),
-                ) anyerror!void {
-                    _ = self; // autofix
-                    @panic("requestAnimationFrame not implemented");
-                }
-
-                pub fn setTimeout(
-                    self: *Self,
-                    args: Syscalls.Payload(.setTimeout),
-                ) anyerror!void {
-                    _ = self; // autofix
-                    _ = args; // autofix
-                    @panic("setTimeout not implemented");
-                }
-
-                pub fn addEventListener(
-                    self: *Self,
-                    args: Syscalls.Payload(.addEventListener),
-                ) anyerror!void {
-                    _ = self; // autofix
-                    _ = args; // autofix
-                    @panic("addEventListener not implemented");
-                }
-
-                pub fn getViewportSize(
-                    self: *Self,
-                    _: Syscalls.Payload(.getViewportSize),
-                ) anyerror!void {
-                    _ = self; // autofix
-                    @panic("getViewportSize not implemented");
-                }
-
-                pub fn setViewportSize(
-                    self: *Self,
-                    args: Syscalls.Payload(.setViewportSize),
-                ) anyerror!void {
-                    _ = self; // autofix
-                    _ = args; // autofix
-                    @panic("setViewportSize not implemented");
-                }
-            });
 
         /// C callback function for Wren's memory allocation needs.
         ///
