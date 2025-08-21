@@ -6,6 +6,7 @@ const slots_api = @import("slots.zig");
 const OutputHandler = @import("output.zig").OutputHandler;
 const syscalls = @import("syscalls.zig");
 const dom = @import("../dom.zig");
+const WindowMod = @import("../Window.zig");
 const TrackingAllocator = @import("../lib/TrackingAllocator.zig");
 
 const ansi = @import("ansi");
@@ -310,6 +311,9 @@ pub fn Engine(configuration: Configuration) type {
 
 pub const SyscallContext = struct {
     document: *dom.Dom,
+    window: ?*WindowMod.Window = null,
+    viewport_width: usize = 80,
+    viewport_height: usize = 24,
 };
 
 pub fn documentSyscalls(comptime EngineType: type, comptime Context: type) type {
@@ -317,6 +321,11 @@ pub fn documentSyscalls(comptime EngineType: type, comptime Context: type) type 
         pub fn createElement(engine: *EngineType, context: *Context, args: struct { style: []const u8 }) anyerror!dom.DomNodeId {
             _ = engine;
             return context.document.addElement(args.style);
+        }
+
+        pub fn createText(engine: *EngineType, context: *Context, args: struct { text: []const u8 }) anyerror!dom.DomNodeId {
+            _ = engine;
+            return context.document.addText(args.text);
         }
 
         pub fn updateText(engine: *EngineType, context: *Context, args: struct { nodeId: u32, text: []const u8 }) anyerror!void {
@@ -339,11 +348,36 @@ pub fn documentSyscalls(comptime EngineType: type, comptime Context: type) type 
             try context.document.removeChild(args.parentId, args.childId);
         }
 
+        pub fn openWindow(engine: *EngineType, context: *Context, args: struct {}) anyerror!void {
+            _ = engine;
+            _ = args;
+            if (context.window == null) {
+                const w = try context.document.alloc.create(WindowMod.Window);
+                w.* = try WindowMod.Window.init(context.document.alloc, .{
+                    .width = context.viewport_width,
+                    .height = context.viewport_height,
+                });
+                context.window = w;
+            }
+            const stdout_writer = std.io.getStdOut().writer();
+            try context.window.?.renderAndPresent(context.document, 0, stdout_writer);
+        }
+
+        pub fn printDocument(engine: *EngineType, context: *Context, args: struct {}) anyerror!void {
+            _ = engine;
+            _ = args;
+            // One-shot: print text content linearly for now (renderer hookup is for live mode)
+            const out = std.io.getStdOut().writer();
+            try printDomPlain(context.document, out, 0);
+        }
+
         pub fn requestRender(engine: *EngineType, context: *Context, args: struct {}) anyerror!void {
             _ = engine;
-            _ = context;
             _ = args;
-            @panic("requestRender not implemented");
+            if (context.window) |w| {
+                const stdout_writer = std.io.getStdOut().writer();
+                try w.renderAndPresent(context.document, 0, stdout_writer);
+            }
         }
 
         pub fn clearScreen(engine: *EngineType, context: *Context, args: struct {}) anyerror!void {
@@ -378,14 +412,31 @@ pub fn documentSyscalls(comptime EngineType: type, comptime Context: type) type 
             _ = engine;
             _ = context;
             _ = args;
-            @panic("getViewportSize not implemented");
         }
 
         pub fn setViewportSize(engine: *EngineType, context: *Context, args: struct { width: u32, height: u32 }) anyerror!void {
             _ = engine;
-            _ = context;
-            _ = args;
-            @panic("setViewportSize not implemented");
+            context.viewport_width = args.width;
+            context.viewport_height = args.height;
+            if (context.window) |w| {
+                try w.setViewport(context.viewport_width, context.viewport_height);
+            }
+        }
+
+        fn printDomPlain(document: *dom.Dom, writer: anytype, node_id: dom.DomNodeId) !void {
+            const kind = document.getNodeKind(node_id);
+            switch (kind) {
+                .text => {
+                    const text = document.getTextSlice(node_id);
+                    if (text.len > 0) try writer.print("{s}", .{text});
+                },
+                .element => {
+                    var child = document.getFirstChild(node_id);
+                    while (child != dom.Dom.NullId) : (child = document.getNextSibling(child)) {
+                        try printDomPlain(document, writer, child);
+                    }
+                },
+            }
         }
     };
 }

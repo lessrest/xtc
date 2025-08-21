@@ -16,6 +16,16 @@ class Core {
         var completions = ring.reap(1)
         return completions.isEmpty ? null : completions[0]["result"]
     }
+
+    // Start terminal UI mode: initialize window and begin rendering frames on requestRender
+    static openWindow() {
+        return Fiber.yield({ "operation": "openWindow" })
+    }
+
+    // Render current document once to stdout without switching buffers
+    static printDocument() {
+        return Fiber.yield({ "operation": "printDocument" })
+    }
 }
 
 class Ring {
@@ -176,3 +186,33 @@ class Ring {
 }
 
 var ring = Ring.new(64, 64)  // 64 entry SQ and CQ
+
+// Minimal DOM helpers that directly yield syscalls (bypassing ring batching for now)
+class Document {
+  // Document root node id is always 0
+  static root { 0 }
+
+  static createElement(style) {
+    return Fiber.yield({ "operation": "createElement", "style": style })
+  }
+
+  static createText(text) {
+    return Fiber.yield({ "operation": "createText", "text": text })
+  }
+
+  static updateText(nodeId, text) {
+    Fiber.yield({ "operation": "updateText", "nodeId": nodeId, "text": text })
+  }
+
+  static updateClass(nodeId, className) {
+    Fiber.yield({ "operation": "updateClass", "nodeId": nodeId, "className": className })
+  }
+
+  static append(parentId, childId) {
+    Fiber.yield({ "operation": "appendChild", "parentId": parentId, "childId": childId })
+  }
+
+  static requestRender() {
+    Fiber.yield({ "operation": "requestRender" })
+  }
+}

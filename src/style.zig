@@ -111,7 +111,6 @@ pub const StyleRow = struct {
     order: i16,
     // ASCII raster test helper: when non-zero, paint stage tiles this glyph in the element's border-box
     fill_glyph: u32 = 0,
-
 };
 
 fn hashBytesWy(seed: u64, bytes: []const u8) u64 {

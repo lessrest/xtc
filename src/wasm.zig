@@ -1,6 +1,6 @@
 const std = @import("std");
 const dom = @import("dom.zig");
-const renderer = @import("renderer.zig");
+const Window = @import("Window.zig");
 const paint = @import("paint.zig");
 const WrenRunner = @import("wren/runtime.zig");
 const DocumentLoader = @import("pageload.zig");
@@ -70,17 +70,10 @@ pub const WasmLiveSession = struct {
         }
 
         // Create renderer
-        const render_instance = try renderer.Renderer.init(
-            .{
-                .allocator = self.allocator,
-                .unicode = self.components.?.unicode,
-                .glyphs = self.components.?.glyphs,
-            },
-            .{
-                .width = self.config.output.width,
-                .height = self.config.output.height,
-            },
-        );
+        const render_instance = try Window.Window.init(self.allocator, .{
+            .width = self.config.output.width,
+            .height = self.config.output.height,
+        });
 
         // Create live session
         self.live_session = LiveSession.init(
