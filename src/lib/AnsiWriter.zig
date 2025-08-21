@@ -20,6 +20,10 @@ pub fn rgba8Blue(color: Rgba8) u8 {
 
 const GlyphId = u32;
 
+pub fn ansiWriter(writer: anytype) AnsiWriter(@TypeOf(writer)) {
+    return AnsiWriter(@TypeOf(writer)).init(writer);
+}
+
 /// ANSI escape sequence writer with semantic methods
 pub fn AnsiWriter(comptime WriterType: type) type {
     return struct {

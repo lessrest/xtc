@@ -1,6 +1,5 @@
 const std = @import("std");
 const c = @import("wren.zig");
-const Request = @import("vm.zig").Request;
 
 /// Builder for setting up slots before making a call.
 pub const SlotBuilder = struct {
@@ -60,6 +59,15 @@ pub const SlotBuilder = struct {
         return self.get(slot + 2, T);
     }
 
+    pub fn mapSet(self: *SlotBuilder, slot: c_int, name: []const u8, value: anytype) !void {
+        const cstr = try self.allocator.dupeZ(u8, name);
+        defer self.allocator.free(cstr);
+        try self.ensureSlots(slot + 2);
+        _ = self.set(slot + 1, cstr);
+        try self.set(slot + 2, value);
+        c.wrenSetMapValue(self.vm, slot, slot + 1, slot + 2);
+    }
+
     pub fn get(self: *SlotBuilder, slot: c_int, comptime T: type) !T {
         return switch (T) {
             bool => c.wrenGetSlotBool(self.vm, slot),
@@ -68,43 +76,6 @@ pub const SlotBuilder = struct {
             usize => @intFromFloat(c.wrenGetSlotDouble(self.vm, slot)),
             []const u8 => std.mem.span(c.wrenGetSlotString(self.vm, slot)),
             *c.Handle => c.wrenGetSlotHandle(self.vm, slot) orelse error.NullHandle,
-            Request => {
-                try self.expect(slot, c.Type.map);
-                const operation = try self.lookup(slot, "operation", []const u8);
-                
-                if (std.mem.eql(u8, operation, "Ring.flush")) {
-                    const ring = try self.lookup(slot, "ring", *c.Handle);
-                    const count = try self.lookup(slot, "count", u32);
-                    return Request{
-                        .@"Ring.flush" = .{
-                            .ring = ring,
-                            .count = count,
-                        },
-                    };
-                }
-
-                if (std.mem.eql(u8, operation, "Ring.wait")) {
-                    const ring = try self.lookup(slot, "ring", *c.Handle);
-                    const minComplete = try self.lookup(slot, "minComplete", u32);
-                    return Request{
-                        .@"Ring.wait" = .{
-                            .ring = ring,
-                            .minComplete = minComplete,
-                        },
-                    };
-                }
-
-                if (std.mem.eql(u8, operation, "Core.print")) {
-                    const message = try self.lookup(slot, "message", []const u8);
-                    return Request{
-                        .@"Core.print" = .{
-                            .message = message,
-                        },
-                    };
-                }
-
-                return error.InvalidOperation;
-            },
             else => @compileError("Unsupported type: " ++ @typeName(T)),
         };
     }
@@ -133,6 +104,23 @@ pub const SlotBuilder = struct {
     pub fn push(self: *SlotBuilder, value: anytype) *SlotBuilder {
         const slot = self.next_slot;
         return self.set(slot, value);
+    }
+
+    const SlotMap = struct {
+        slots: *SlotBuilder,
+        slot: c_int,
+
+        pub fn lookup(self: *SlotMap, name: []const u8, comptime T: type) !T {
+            return self.slots.lookup(self.slot, name, T);
+        }
+
+        pub fn put(self: *SlotMap, name: []const u8, value: anytype) !void {
+            return self.slots.mapSet(self.slot, name, value);
+        }
+    };
+
+    pub fn slotMap(self: *SlotBuilder, slot: c_int) SlotMap {
+        return SlotMap{ .slots = self, .slot = slot };
     }
 
     /// Make a method call with the current slot setup.
@@ -228,10 +216,7 @@ pub const CallResult = struct {
             usize => @intFromFloat(c.wrenGetSlotDouble(self.vm, 0)),
             []const u8 => std.mem.span(c.wrenGetSlotString(self.vm, 0)),
             *c.Handle => c.wrenGetSlotHandle(self.vm, 0) orelse error.NullHandle,
-            Request => {
-                var slot_builder = SlotBuilder.init(self.vm, self.allocator);
-                return try slot_builder.get(0, Request);
-            },
+            // Remove hardcoded Request handling - use generic syscalls system
 
             else => @compileError("Unsupported type: " ++ @typeName(T)),
         };

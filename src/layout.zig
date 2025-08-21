@@ -1,11 +1,18 @@
 const std = @import("std");
 const Dom = @import("dom.zig").Dom;
 const DomNodeId = @import("dom.zig").DomNodeId;
-const Layout = @import("lib.zig").Layout;
-const DisplayWidth = @import("lib.zig").DisplayWidth;
-const UnicodeData = @import("paint.zig").UnicodeData;
-const Trace = @import("Trace.zig").Trace;
-
+const DisplayWidth = @import("DisplayWidth");
+const UnicodeData = @import("unicode.zig");
+const Trace = @import("ansi").FileTrace;
+const measure = @import("measure.zig");
+const Size = @import("style.zig").Size;
+const StyleAlign = @import("style.zig").StyleAlign;
+const StyleFlexDir = @import("style.zig").StyleFlexDir;
+const StyleJustify = @import("style.zig").StyleJustify;
+const StyleOverflow = @import("style.zig").StyleOverflow;
+const StyleRow = @import("style.zig").StyleRow;
+const ContiguousTree = @import("tree.zig").ContiguousTree;
+const BoxSize = [2]usize;
 const LayoutEngine = @This();
 
 allocator: std.mem.Allocator,
@@ -23,15 +30,6 @@ pub fn init(
         .trace = trace,
     };
 }
-const measure = @import("measure.zig");
-const Size = @import("style.zig").Size;
-const StyleAlign = @import("style.zig").StyleAlign;
-const StyleFlexDir = @import("style.zig").StyleFlexDir;
-const StyleJustify = @import("style.zig").StyleJustify;
-const StyleOverflow = @import("style.zig").StyleOverflow;
-const StyleRow = @import("style.zig").StyleRow;
-const ContiguousTree = @import("tree.zig").ContiguousTree;
-const BoxSize = [2]usize;
 
 pub const Rect = struct {
     x: usize,
@@ -543,7 +541,7 @@ pub fn allocateBoxTreeFromDOM(alloc: std.mem.Allocator, dom: *const Dom, root: D
     return tree;
 }
 
-pub fn computeFlexLayout(
+pub fn layoutSubtree(
     self: *LayoutEngine,
     box_tree: *BoxTree,
     dom: *const Dom,
@@ -686,7 +684,7 @@ pub fn computeFlexLayout(
         });
 
         // Phase 5b: Recursively layout the flex item's subtree
-        try self.computeFlexLayout(
+        try self.layoutSubtree(
             box_tree,
             dom,
             item_box_node,

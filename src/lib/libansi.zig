@@ -5,6 +5,18 @@ pub const nest = @import("treenest.zig");
 pub const dank = @import("dank.zig");
 pub const abort = @import("abort.zig");
 
+pub const FileTrace = nest.TreeNest(std.fs.File.Writer);
+
+pub fn stderrTrace(allocator: std.mem.Allocator) FileTrace {
+    return nest.stderr(allocator);
+}
+
+pub fn silentTrace(allocator: std.mem.Allocator) FileTrace {
+    var stderr_nest = nest.silent(allocator);
+    stderr_nest.enabled = false;
+    return stderr_nest;
+}
+
 const std = @import("std");
 const ThreadContext = std.debug.ThreadContext;
 const StackIterator = std.debug.StackIterator;
@@ -19,7 +31,7 @@ pub const panic = struct {
         defer std.debug.unlockStdErr();
 
         const stderr = std.io.getStdErr().writer();
-        _ = stderr.write("\x1b[0m\x1b[?25h\x1b[?1049l\n") catch {};
+        // _ = stderr.write("\x1b[0m\x1b[?25h\x1b[?1049l\n") catch {};
 
         _ = stderr.writeAll(msg) catch {};
 

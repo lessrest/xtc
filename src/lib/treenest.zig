@@ -1,6 +1,24 @@
 const std = @import("std");
 const dank = @import("dank.zig");
 
+pub fn treeNest(allocator: std.mem.Allocator, writer: anytype) TreeNest(@TypeOf(writer)) {
+    return TreeNest(@TypeOf(writer)).init(allocator, writer);
+}
+
+pub fn silent(allocator: std.mem.Allocator) TreeNest(std.fs.File.Writer) {
+    var stderr_nest = stderr(allocator);
+    stderr_nest.enabled = false;
+    return stderr_nest;
+}
+
+pub fn stderr(allocator: std.mem.Allocator) TreeNest(std.fs.File.Writer) {
+    return treeNest(allocator, std.io.getStdErr().writer());
+}
+
+pub fn stdout(allocator: std.mem.Allocator) TreeNest(std.fs.File.Writer) {
+    return treeNest(allocator, std.io.getStdOut().writer());
+}
+
 pub const Color = struct {
     r: u8,
     g: u8,
@@ -628,12 +646,4 @@ pub fn TreeNest(comptime Writer: type) type {
             }
         };
     };
-}
-
-pub fn treeNest(allocator: std.mem.Allocator, writer: anytype) TreeNest(@TypeOf(writer)) {
-    return TreeNest(@TypeOf(writer)).init(allocator, writer);
-}
-
-pub fn testNest(allocator: std.mem.Allocator) TreeNest(std.fs.File.Writer) {
-    return treeNest(allocator, std.io.getStdOut().writer());
 }

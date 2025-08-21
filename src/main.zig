@@ -1,33 +1,70 @@
 const std = @import("std");
-const app = @import("app.zig");
-const logging = @import("logging.zig");
+const ansi = @import("ansi");
+
+pub const version = "0.5.0";
+
+pub const panic = ansi.panic;
 
 comptime {
+    _ = @import("test/flex.test.zig");
     _ = @import("fiberscript/vm.zig");
 }
 
-/// Global logging configuration
-pub const std_options: std.Options = .{
-    .log_level = .debug,
-    .logFn = logging.logFn,
-};
-
-/// Main entry point - simple boot and delegate
 pub fn main() !void {
-    // Initialize memory management
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
 
-    var arena = std.heap.ArenaAllocator.init(gpa.allocator());
-    defer arena.deinit();
+    const allocator = gpa.allocator();
 
-    const allocator = arena.allocator();
+    var stderr = std.io.getStdErr().writer();
 
-    // Create and run application
-    var application = try app.Application.init(allocator);
-    defer application.deinit();
+    var args = try std.process.argsWithAllocator(allocator);
+    defer args.deinit();
 
-    try application.run();
+    const program = try allocator.dupe(u8, args.next() orelse "xtc");
+    defer allocator.free(program);
+
+    if (args.next()) |arg| {
+        if (std.mem.eql(u8, arg, "-v") or std.mem.eql(u8, arg, "--version")) {
+            try stderr.print("{s} v{s}\n", .{ program, version });
+            return;
+        }
+
+        if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
+            try stderr.print("Usage: {s} <file>\n", .{program});
+            return;
+        }
+
+        if (std.mem.endsWith(u8, arg, ".wren")) {
+            return run_script(allocator, arg);
+        }
+    }
+
+    try stderr.print("Usage: {s} <file>\n", .{program});
+    return error.Usage;
 }
 
-pub const panic = @import("ansi").panic;
+fn run_script(allocator: std.mem.Allocator, name: []const u8) !void {
+    var stderr = std.io.getStdErr().writer();
+
+    const file = try std.fs.cwd().openFile(name, .{});
+    defer file.close();
+
+    const script = try file.readToEndAlloc(allocator, 1024 * 1024);
+    defer allocator.free(script);
+
+    const Engine = @import("fiberscript/vm.zig").Engine(.{});
+    const engine = try Engine.init(allocator);
+    defer engine.deinit();
+
+    if (engine.runTopLevel(name, script)) |_| {
+        const output = try engine.takeOutput(allocator);
+        defer allocator.free(output);
+        try stderr.print("{s}", .{output});
+    } else |_| {
+        try engine.croak();
+        const output = try engine.takeOutput(allocator);
+        defer allocator.free(output);
+        try stderr.print("{s}", .{output});
+    }
+}

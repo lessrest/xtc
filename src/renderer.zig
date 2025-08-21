@@ -2,9 +2,10 @@ const std = @import("std");
 const dom = @import("dom.zig");
 const layout = @import("layout.zig");
 const paint = @import("paint.zig");
-const tty = @import("tty.zig");
 const ansi = @import("ansi");
-const Trace = @import("Trace.zig").Trace;
+const Trace = @import("ansi").FileTrace;
+const Raster = @import("Raster.zig");
+const GlyphTable = @import("GlyphTable.zig");
 
 pub const Options = struct {
     width: usize,
@@ -14,12 +15,12 @@ pub const Options = struct {
 pub const Deps = struct {
     allocator: std.mem.Allocator,
     unicode: *paint.UnicodeData,
-    glyphs: *tty.GlyphTable,
+    glyphs: *GlyphTable,
 };
 
 pub const State = struct {
-    front: tty.Raster,
-    back: tty.Raster,
+    front: Raster,
+    back: Raster,
     needs_clear: bool = true,
 };
 
@@ -29,8 +30,8 @@ pub const Renderer = struct {
     state: State,
 
     pub fn init(deps: Deps, opts: Options) !Renderer {
-        const front = try tty.Raster.init(deps.allocator, opts.width, opts.height);
-        const back = try tty.Raster.init(deps.allocator, opts.width, opts.height);
+        const front = try Raster.init(deps.allocator, opts.width, opts.height);
+        const back = try Raster.init(deps.allocator, opts.width, opts.height);
 
         return Renderer{
             .deps = deps,
@@ -54,8 +55,8 @@ pub const Renderer = struct {
         self.state.front.deinit(self.deps.allocator);
         self.state.back.deinit(self.deps.allocator);
 
-        self.state.front = try tty.Raster.init(self.deps.allocator, width, height);
-        self.state.back = try tty.Raster.init(self.deps.allocator, width, height);
+        self.state.front = try Raster.init(self.deps.allocator, width, height);
+        self.state.back = try Raster.init(self.deps.allocator, width, height);
 
         self.opts.width = width;
         self.opts.height = height;
@@ -71,7 +72,7 @@ pub const Renderer = struct {
 
         // Compute layout
         var layout_engine = layout.init(self.deps.allocator, self.deps.unicode, tracer);
-        try layout_engine.computeFlexLayout(&tree, document, tree.getNodeMut(0), .{
+        try layout_engine.computeLayout(&tree, document, tree.getNodeMut(0), .{
             .x = 0,
             .y = 0,
             .w = @intCast(self.opts.width),
@@ -84,7 +85,7 @@ pub const Renderer = struct {
         try paint.computePaintCommands(&paint_ctx, document, &tree, self.deps.glyphs);
 
         // Rasterize to back buffer
-        try tty.rasterizeDisplayList(&self.state.back, self.deps.allocator, self.deps.glyphs, &paint_ctx);
+        try self.state.back.rasterizeDisplayList(self.deps.allocator, self.deps.glyphs, &paint_ctx);
     }
 
     pub fn present(self: *Renderer, writer: anytype) !void {
@@ -100,7 +101,7 @@ pub const Renderer = struct {
             self.state.needs_clear = false;
         }
 
-        var diff_iter = tty.RasterDiff.iterateChanges(&self.state.front, &self.state.back);
+        var diff_iter = RasterDiff.iterateChanges(&self.state.front, &self.state.back);
         while (diff_iter.next()) |change_run| {
             // Move cursor to 1-based row/col
             try ansi_writer.moveCursor(change_run.y + 1, change_run.x + 1);
@@ -126,7 +127,7 @@ pub const Renderer = struct {
         try writer.writeAll(buffer.items);
 
         // Swap buffers
-        std.mem.swap(tty.Raster, &self.state.front, &self.state.back);
+        std.mem.swap(Raster, &self.state.front, &self.state.back);
     }
 
     pub fn renderAndPresent(self: *Renderer, document: *dom.Dom, root: dom.DomNodeId, tracer: *Trace, writer: anytype) !void {
@@ -144,7 +145,7 @@ pub const Renderer = struct {
         try self.state.back.writeAnsiToWriter(&ansi_writer, self.deps.glyphs);
     }
 
-    pub fn getBackBuffer(self: *const Renderer) *const tty.Raster {
+    pub fn getBackBuffer(self: *const Renderer) *const Raster {
         return &self.state.back;
     }
 };

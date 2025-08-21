@@ -162,14 +162,14 @@ pub const Dom = struct {
         self.dirty = true;
     }
 
-    pub fn appendChild(self: *Dom, parent_id: DomNodeId, child_id: DomNodeId) void {
+    pub fn appendChild(self: *Dom, parent_id: DomNodeId, child_id: DomNodeId) !void {
         const p: usize = @intCast(parent_id);
         const c: usize = @intCast(child_id);
         var items = self.headers.slice();
         // Only element nodes can have children
         switch (items.items(.content)[p]) {
             .element => {},
-            else => return,
+            else => return error.InvalidNodeKind,
         }
         // Access parent's children payload
         const content_ptr = &items.items(.content)[p];
@@ -180,7 +180,7 @@ pub const Dom = struct {
                 p_first = &ch.first_child;
                 p_count = &ch.child_count;
             },
-            else => return,
+            else => return error.InvalidNodeKind,
         }
         items.items(.parent)[c] = parent_id;
         if (p_first.* == NullId) {
@@ -199,7 +199,7 @@ pub const Dom = struct {
         self.dirty = true;
     }
 
-    pub fn removeChild(self: *Dom, parent_id: DomNodeId, child_id: DomNodeId) void {
+    pub fn removeChild(self: *Dom, parent_id: DomNodeId, child_id: DomNodeId) !void {
         const p: usize = @intCast(parent_id);
         const c: usize = @intCast(child_id);
         var items = self.headers.slice();
@@ -210,7 +210,7 @@ pub const Dom = struct {
         // Only element nodes can have children
         switch (items.items(.content)[p]) {
             .element => {},
-            else => return,
+            else => return error.InvalidNodeKind,
         }
         // Access parent's children payload
         const content_ptr = &items.items(.content)[p];
@@ -221,7 +221,7 @@ pub const Dom = struct {
                 p_first = &ch.first_child;
                 p_count = &ch.child_count;
             },
-            else => return,
+            else => return error.InvalidNodeKind,
         }
         const c_prev = items.items(.prev_sibling)[c];
         const c_next = items.items(.next_sibling)[c];

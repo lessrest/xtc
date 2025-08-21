@@ -1,17 +1,17 @@
 const std = @import("std");
 const dom = @import("dom.zig");
 const layout = @import("layout.zig");
-const Graphemes = @import("Graphemes");
-const DisplayWidth = @import("DisplayWidth");
-const Words = @import("Words");
+const Unicode = @import("unicode.zig");
 const tailwind = @import("tailwind.zig");
-const tty = @import("tty.zig");
 const StyleRow = @import("style.zig").StyleRow;
 const StyleOverflow = @import("style.zig").StyleOverflow;
 const BorderStyle = @import("style.zig").BorderStyle;
 const StyleJustify = @import("style.zig").StyleJustify;
-const tracing = @import("Trace.zig");
-const Trace = tracing.Trace;
+const ansi = @import("ansi");
+const Trace = ansi.FileTrace;
+const GlyphTable = @import("GlyphTable.zig");
+const GlyphId = GlyphTable.GlyphId;
+const Raster = @import("Raster.zig");
 
 // --- Paint stage: device-independent display list ---
 
@@ -72,64 +72,58 @@ pub fn blendOver(dst: *Rgba8, src: Rgba8) void {
     dst.* = rgba8(out_r, out_g, out_b, out_a);
 }
 
-pub const PaintBorderStyle = enum { line_light, line_double, line_heavy, line_dashed };
+pub const PaintBorderStyle = enum {
+    line_light,
+    line_double,
+    line_heavy,
+    line_dashed,
+
+    pub fn templateFor(style: PaintBorderStyle) BorderBox {
+        return switch (style) {
+            .line_light => .{ .grid = .{
+                .{ "┌", "─", "┐" },
+                .{ "│", " ", "│" },
+                .{ "└", "─", "┘" },
+            } },
+            .line_heavy => .{ .grid = .{
+                .{ "┏", "━", "┓" },
+                .{ "┃", " ", "┃" },
+                .{ "┗", "━", "┛" },
+            } },
+            .line_double => .{ .grid = .{
+                .{ "╔", "═", "╗" },
+                .{ "║", " ", "║" },
+                .{ "╚", "═", "╝" },
+            } },
+            .line_dashed => .{ .grid = .{
+                .{ "┌", "╌", "┐" },
+                .{ "╎", " ", "╎" },
+                .{ "└", "╌", "┘" },
+            } },
+        };
+    }
+};
+
+const BorderBox = struct { grid: [3][3][]const u8 };
 
 pub const PaintOpTag = enum { FillRect, StrokeRect, GlyphRun, FillGlyphRect };
 pub const PaintOp = union(PaintOpTag) {
     FillRect: struct { x: usize, y: usize, w: usize, h: usize, color: Rgba8 },
     StrokeRect: struct { x: usize, y: usize, w: usize, h: usize, color: Rgba8, style: PaintBorderStyle, bg_color: ?Rgba8 = null },
-    GlyphRun: struct { x: usize, y: usize, glyphs: []const tty.GlyphId, color: Rgba8 },
-    FillGlyphRect: struct { x: usize, y: usize, w: usize, h: usize, glyph: tty.GlyphId, color: Rgba8 },
-};
-
-pub const UnicodeData = struct {
-    graphemes: *Graphemes,
-    display_width: *DisplayWidth,
-    words: *Words,
-
-    pub fn init(allocator: std.mem.Allocator) !UnicodeData {
-        const this = UnicodeData{
-            .graphemes = try allocator.create(Graphemes),
-            .display_width = try allocator.create(DisplayWidth),
-            .words = try allocator.create(Words),
-        };
-
-        try Graphemes.setup(this.graphemes, allocator);
-        try DisplayWidth.setupWithGraphemes(this.display_width, allocator, this.graphemes.*);
-        try Words.setup(this.words, allocator);
-
-        return this;
-    }
-
-    pub fn deinit(self: *UnicodeData, allocator: std.mem.Allocator) void {
-        self.graphemes.deinit(allocator);
-        self.display_width.deinit(allocator);
-        self.words.deinit(allocator);
-        allocator.destroy(self.graphemes);
-        allocator.destroy(self.display_width);
-        allocator.destroy(self.words);
-        self.* = undefined;
-    }
-
-    pub fn monospacedTextWidth(self: *const UnicodeData, text: []const u8) usize {
-        return self.display_width.strWidth(text);
-    }
-
-    pub fn graphemeClusterIterator(self: *const UnicodeData, text: []const u8) Graphemes.Iterator {
-        return self.graphemes.iterator(text);
-    }
-
-    pub fn wordIterator(self: *const UnicodeData, text: []const u8) Words.Iterator {
-        return self.words.iterator(text);
-    }
+    GlyphRun: struct { x: usize, y: usize, glyphs: []const GlyphId, color: Rgba8 },
+    FillGlyphRect: struct { x: usize, y: usize, w: usize, h: usize, glyph: GlyphId, color: Rgba8 },
 };
 
 pub const PaintContext = struct {
     ops: std.ArrayList(PaintOp),
-    unicode: *const UnicodeData,
+    unicode: *const Unicode,
     trace: *Trace,
 
-    pub fn init(allocator: std.mem.Allocator, unicode: *const UnicodeData, trace: *Trace) PaintContext {
+    pub fn init(
+        allocator: std.mem.Allocator,
+        unicode: *const Unicode,
+        trace: *Trace,
+    ) PaintContext {
         return .{
             .ops = std.ArrayList(PaintOp).init(allocator),
             .unicode = unicode,
@@ -145,10 +139,129 @@ pub const PaintContext = struct {
     pub fn push(self: *PaintContext, op: PaintOp) !void {
         try self.ops.append(op);
     }
-};
 
-// Backward compatibility alias
-pub const PaintCommandBatch = PaintContext;
+    pub fn computePaintCommands(
+        ctx: *PaintContext,
+        document: *const dom.Dom,
+        tree: *const layout.BoxTree,
+        glyphs: *GlyphTable,
+    ) !void {
+        ctx.trace.enter();
+        defer ctx.trace.exit();
+        ctx.trace.info("Computing paint commands for display list");
+        ctx.trace.fields("paint-start", .{
+            .node_count = tree.nodeCount(),
+            .initial_op_count = ctx.ops.items.len,
+        });
+
+        // Painting order follows CSS background, borders, then content (text). Stacking contexts are out of scope here.
+
+        var painted_nodes: usize = 0;
+        var skipped_nodes: usize = 0;
+
+        var i: usize = 0;
+        while (i < tree.nodeCount()) : (i += 1) {
+            const h = tree.getNode(@as(u32, @intCast(i)));
+            const row = document.getNodeStyle(h.data.dom_id);
+            const node_kind = document.getNodeKind(h.data.dom_id);
+
+            var node_id_buf: [32]u8 = undefined;
+            const debug_id = document.getDebugIdOrDefault(h.data.dom_id, &node_id_buf);
+
+            ctx.trace.enter();
+            defer ctx.trace.exit();
+            ctx.trace.info("Painting node");
+            ctx.trace.fields("node-info", .{
+                .index = i,
+                .id = debug_id,
+                .kind = node_kind,
+                .original = h.data.rect,
+            });
+
+            // Find scroll container parent and apply scroll offset
+            var paint_rect = h.data.rect;
+            var is_scrolled = false;
+
+            // Check if this node has a scroll container parent
+            if (h.getParentNode(tree)) |parent_node| {
+                const parent_row = document.getNodeStyle(parent_node.data.dom_id);
+
+                if (parent_row.overflow_y == .scroll) {
+                    is_scrolled = true;
+                    const scroll_offset = parent_node.data.scroll_offset_y;
+                    ctx.trace.decision("Node is in scroll container, applying scroll offset");
+                    ctx.trace.fields("scroll-offset", .{
+                        .offset = scroll_offset,
+                    });
+
+                    // Apply scroll offset: move content up by scroll amount
+                    if (paint_rect.y >= scroll_offset) {
+                        paint_rect.y -= scroll_offset;
+                        ctx.trace.fields("adjusted", .{
+                            .rect = paint_rect,
+                        });
+                    } else {
+                        // Content is scrolled out of view at the top
+                        ctx.trace.decision("Content scrolled out of view at top, skipping");
+                        skipped_nodes += 1;
+                        continue;
+                    }
+
+                    // Set up clipping rectangle to viewport
+                    const parent_content_rect = layout.computeInnerContentRect(parent_row, parent_node.data.rect);
+                    ctx.trace.fields("viewport", .{
+                        .rect = parent_content_rect,
+                    });
+
+                    // Skip if entirely outside viewport
+                    if (paint_rect.y >= parent_content_rect.y + parent_content_rect.h or
+                        paint_rect.y + paint_rect.h <= parent_content_rect.y)
+                    {
+                        ctx.trace.decision("Content outside viewport bounds, skipping");
+                        skipped_nodes += 1;
+                        continue;
+                    }
+                }
+            }
+
+            if (!is_scrolled) {
+                ctx.trace.fields("adjusted", .{
+                    .rect = paint_rect,
+                });
+            }
+
+            const ops_before = ctx.ops.items.len;
+
+            ctx.trace.enter();
+            defer ctx.trace.exit();
+            ctx.trace.info("Emitting paint ops");
+
+            try emitGlyphTileFill(ctx, glyphs, paint_rect, row);
+            try emitBackgroundFillIfAny(ctx, paint_rect, row);
+            try emitBorderStrokeIfAny(ctx, paint_rect, row);
+
+            if (node_kind == .text) {
+                try emitTextGlyphRuns(ctx, document, h.data.dom_id, paint_rect, row, glyphs);
+            }
+
+            const ops_after = ctx.ops.items.len;
+            const ops_added = ops_after - ops_before;
+            ctx.trace.fields("ops-added", .{
+                .ops_added = ops_added,
+            });
+
+            if (ops_added > 0) {
+                painted_nodes += 1;
+            }
+        }
+
+        ctx.trace.fields("paint-end", .{
+            .painted_nodes = painted_nodes,
+            .skipped_nodes = skipped_nodes,
+            .final_op_count = ctx.ops.items.len,
+        });
+    }
+};
 
 // No global rendering toggles here; the TTY backend chooses glyphs and fallbacks.
 /// Resolve effective foreground/background color along DOM ancestry, per CSS color inheritance.
@@ -175,14 +288,14 @@ fn resolveEffectiveFgBg(dref: *const dom.Dom, node_id: dom.DomNodeId) struct { f
 }
 
 /// Helper: emit a uniform glyph tile fill across the box rect (testing/demo aid).
-fn emitGlyphTileFill(ctx: *PaintContext, glyphs: *tty.GlyphTable, rect: layout.Rect, row: StyleRow) !void {
+fn emitGlyphTileFill(ctx: *PaintContext, glyphs: *GlyphTable, rect: layout.Rect, row: StyleRow) !void {
     if (!(row.fill_glyph != 0 and rect.w > 0 and rect.h > 0)) return;
 
     ctx.trace.enter();
     defer ctx.trace.exit();
     ctx.trace.info("Emitting glyph tile fill");
 
-    const gid: tty.GlyphId = row.fill_glyph;
+    const gid: GlyphId = row.fill_glyph;
     const str = glyphs.getSlice(gid);
 
     const color = rgba8(row.fg.r, row.fg.g, row.fg.b, 255);
@@ -364,11 +477,11 @@ fn computeJustifyOffset(content_w: usize, line_w_cols: usize, justify: StyleJust
 
 fn buildGlyphRun(
     ctx: *PaintContext,
-    glyphs: *tty.GlyphTable,
+    glyphs: *GlyphTable,
     text_bytes: []const u8,
     max_width_cols: usize,
     truncate_to_fit: bool,
-) !struct { run: []tty.GlyphId, width_cols: usize } {
+) !struct { run: []GlyphId, width_cols: usize } {
     ctx.trace.enter();
     defer ctx.trace.exit();
     ctx.trace.info("Building glyph run from text");
@@ -378,7 +491,7 @@ fn buildGlyphRun(
         .truncate_to_fit = truncate_to_fit,
     });
 
-    var glyph_ids = std.ArrayList(tty.GlyphId).init(ctx.ops.allocator);
+    var glyph_ids = std.ArrayList(GlyphId).init(ctx.ops.allocator);
     defer glyph_ids.deinit();
 
     var grapheme_iter = ctx.unicode.graphemeClusterIterator(text_bytes);
@@ -415,12 +528,12 @@ fn buildGlyphRun(
     // Handle empty result
     if (glyph_ids.items.len == 0) {
         ctx.trace.decision("Empty text result, returning empty glyph run");
-        return .{ .run = &[_]tty.GlyphId{}, .width_cols = 0 };
+        return .{ .run = &[_]GlyphId{}, .width_cols = 0 };
     }
 
     // Allocate and copy the final glyph run
-    const final_run = try ctx.ops.allocator.alloc(tty.GlyphId, glyph_ids.items.len);
-    std.mem.copyForwards(tty.GlyphId, final_run, glyph_ids.items);
+    const final_run = try ctx.ops.allocator.alloc(GlyphId, glyph_ids.items.len);
+    std.mem.copyForwards(GlyphId, final_run, glyph_ids.items);
 
     // Calculate final width: use accumulated width if truncating, otherwise measure full text
     const final_width_cols: usize = if (truncate_to_fit)
@@ -441,7 +554,7 @@ fn emitTextGlyphRuns(
     node_id: dom.DomNodeId,
     rect: layout.Rect,
     row: StyleRow,
-    glyphs: *tty.GlyphTable,
+    glyphs: *GlyphTable,
 ) !void {
     ctx.trace.enter();
     defer ctx.trace.exit();
@@ -576,128 +689,6 @@ fn emitTextGlyphRuns(
     });
 }
 
-pub fn computePaintCommands(
-    ctx: *PaintContext,
-    document: *const dom.Dom,
-    tree: *const layout.BoxTree,
-    glyphs: *tty.GlyphTable,
-) !void {
-    ctx.trace.enter();
-    defer ctx.trace.exit();
-    ctx.trace.info("Computing paint commands for display list");
-    ctx.trace.fields("paint-start", .{
-        .node_count = tree.nodeCount(),
-        .initial_op_count = ctx.ops.items.len,
-    });
-
-    // Painting order follows CSS background, borders, then content (text). Stacking contexts are out of scope here.
-
-    var painted_nodes: usize = 0;
-    var skipped_nodes: usize = 0;
-
-    var i: usize = 0;
-    while (i < tree.nodeCount()) : (i += 1) {
-        const h = tree.getNode(@as(u32, @intCast(i)));
-        const row = document.getNodeStyle(h.data.dom_id);
-        const node_kind = document.getNodeKind(h.data.dom_id);
-
-        var node_id_buf: [32]u8 = undefined;
-        const debug_id = document.getDebugIdOrDefault(h.data.dom_id, &node_id_buf);
-
-        ctx.trace.enter();
-        defer ctx.trace.exit();
-        ctx.trace.info("Painting node");
-        ctx.trace.fields("node-info", .{
-            .index = i,
-            .id = debug_id,
-            .kind = node_kind,
-            .original = h.data.rect,
-        });
-
-        // Find scroll container parent and apply scroll offset
-        var paint_rect = h.data.rect;
-        var is_scrolled = false;
-
-        // Check if this node has a scroll container parent
-        if (h.getParentNode(tree)) |parent_node| {
-            const parent_row = document.getNodeStyle(parent_node.data.dom_id);
-
-            if (parent_row.overflow_y == .scroll) {
-                is_scrolled = true;
-                const scroll_offset = parent_node.data.scroll_offset_y;
-                ctx.trace.decision("Node is in scroll container, applying scroll offset");
-                ctx.trace.fields("scroll-offset", .{
-                    .offset = scroll_offset,
-                });
-
-                // Apply scroll offset: move content up by scroll amount
-                if (paint_rect.y >= scroll_offset) {
-                    paint_rect.y -= scroll_offset;
-                    ctx.trace.fields("adjusted", .{
-                        .rect = paint_rect,
-                    });
-                } else {
-                    // Content is scrolled out of view at the top
-                    ctx.trace.decision("Content scrolled out of view at top, skipping");
-                    skipped_nodes += 1;
-                    continue;
-                }
-
-                // Set up clipping rectangle to viewport
-                const parent_content_rect = layout.computeInnerContentRect(parent_row, parent_node.data.rect);
-                ctx.trace.fields("viewport", .{
-                    .rect = parent_content_rect,
-                });
-
-                // Skip if entirely outside viewport
-                if (paint_rect.y >= parent_content_rect.y + parent_content_rect.h or
-                    paint_rect.y + paint_rect.h <= parent_content_rect.y)
-                {
-                    ctx.trace.decision("Content outside viewport bounds, skipping");
-                    skipped_nodes += 1;
-                    continue;
-                }
-            }
-        }
-
-        if (!is_scrolled) {
-            ctx.trace.fields("adjusted", .{
-                .rect = paint_rect,
-            });
-        }
-
-        const ops_before = ctx.ops.items.len;
-
-        ctx.trace.enter();
-        defer ctx.trace.exit();
-        ctx.trace.info("Emitting paint ops");
-
-        try emitGlyphTileFill(ctx, glyphs, paint_rect, row);
-        try emitBackgroundFillIfAny(ctx, paint_rect, row);
-        try emitBorderStrokeIfAny(ctx, paint_rect, row);
-
-        if (node_kind == .text) {
-            try emitTextGlyphRuns(ctx, document, h.data.dom_id, paint_rect, row, glyphs);
-        }
-
-        const ops_after = ctx.ops.items.len;
-        const ops_added = ops_after - ops_before;
-        ctx.trace.fields("ops-added", .{
-            .ops_added = ops_added,
-        });
-
-        if (ops_added > 0) {
-            painted_nodes += 1;
-        }
-    }
-
-    ctx.trace.fields("paint-end", .{
-        .painted_nodes = painted_nodes,
-        .skipped_nodes = skipped_nodes,
-        .final_op_count = ctx.ops.items.len,
-    });
-}
-
 test "source-over alpha blending mixes foreground and background colors correctly" {
     var dst = rgba8(0, 0, 255, 255);
     const src = rgba8(255, 0, 0, 128);
@@ -712,20 +703,34 @@ test "stroke rect command renders unicode box-drawing characters to the raster" 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const al = gpa.allocator();
-    var r = try tty.Raster.init(al, 10, 6);
+
+    var r = try Raster.init(al, 10, 6);
     defer r.deinit(al);
-    var glyphs = try tty.GlyphTable.init(al);
+    var glyphs = try GlyphTable.init(al);
     defer glyphs.deinit();
-    var unicode = try UnicodeData.init(al);
+    var unicode = try Unicode.init(al);
     defer unicode.deinit(al);
-    var trace = tracing.file(std.io.getStdErr(), .{});
+
+    var trace = ansi.silentTrace(al);
     var ctx = PaintContext.init(al, &unicode, &trace);
     defer ctx.deinit();
-    try ctx.push(PaintOp{ .StrokeRect = .{ .x = 2, .y = 1, .w = 6, .h = 4, .color = rgba8(255, 255, 255, 255), .style = .line_light, .bg_color = rgba8(0, 0, 0, 255) } });
-    // This test checks Unicode border rendering
-    try tty.rasterizeDisplayList(&r, al, glyphs, &ctx);
-    const got = try r.toStringAlloc(al, glyphs);
+
+    try ctx.push(PaintOp{
+        .StrokeRect = .{
+            .x = 2,
+            .y = 1,
+            .w = 6,
+            .h = 4,
+            .color = rgba8(255, 255, 255, 255),
+            .style = .line_light,
+            .bg_color = rgba8(0, 0, 0, 255),
+        },
+    });
+
+    try r.rasterizeDisplayList(al, glyphs, &ctx);
+    const got = try r.plainTextDump(al, glyphs);
     defer al.free(got);
+
     const want =
         "          \n" ++
         "  ┌────┐  \n" ++
@@ -747,28 +752,28 @@ test "text nodes inherit foreground color from their parent element's style" {
     defer d.deinit();
     const root = try d.addElement("text-blue-200");
     const txt = try d.addText("A");
-    d.appendChild(root, txt);
+    try d.appendChild(root, txt);
 
     var tree = try layout.allocateBoxTreeFromDOM(al, d, root);
     defer tree.deinit();
 
     // Perform layout so text node gets a non-zero rect
-    var unicode = try UnicodeData.init(al);
+    var unicode = try Unicode.init(al);
     defer unicode.deinit(al);
-    var trace = tracing.file(std.io.getStdErr(), .{});
+    var trace = ansi.silentTrace(al);
     var layout_engine = @import("layout.zig").init(al, &unicode, &trace);
-    try layout_engine.computeFlexLayout(
+    try layout_engine.layoutSubtree(
         &tree,
         d,
         tree.getNodeMut(0),
         .{ .x = 0, .y = 0, .w = 10, .h = 3 },
     );
 
-    var glyphs = try tty.GlyphTable.init(al);
+    var glyphs = try GlyphTable.init(al);
     defer glyphs.deinit();
     var ctx = PaintContext.init(al, &unicode, &trace);
     defer ctx.deinit();
-    try computePaintCommands(&ctx, d, &tree, glyphs);
+    try ctx.computePaintCommands(d, &tree, glyphs);
 
     var found = false;
     var got: Rgba8 = undefined;

@@ -21,11 +21,11 @@ fn xmlAddElementRecursive(dom: *Dom, el: @import("xmlparse.zig").Element) !DomNo
             switch (n) {
                 .element => |child_el| {
                     const cid = try xmlAddElementRecursive(dom, child_el);
-                    dom.appendChild(id, cid);
+                    try dom.appendChild(id, cid);
                 },
                 .text => |sidx| {
                     const tid = try dom.addText(sidx.slice());
-                    dom.appendChild(id, tid);
+                    try dom.appendChild(id, tid);
                 },
                 .pi => |_| {},
             }
@@ -65,11 +65,11 @@ pub fn loadDocumentFromMarkup(alloc: std.mem.Allocator, doc: *const @import("xml
                 switch (n) {
                     .element => |child_el| {
                         const cid = try xmlAddElementRecursive(dom, child_el);
-                        dom.appendChild(0, cid);
+                        try dom.appendChild(0, cid);
                     },
                     .text => |sidx| {
                         const tid = try dom.addText(sidx.slice());
-                        dom.appendChild(0, tid);
+                        try dom.appendChild(0, tid);
                     },
                     .pi => |_| {},
                 }
@@ -78,7 +78,7 @@ pub fn loadDocumentFromMarkup(alloc: std.mem.Allocator, doc: *const @import("xml
     } else {
         // Normal case: create a new element and attach to document root
         const root_id = try xmlAddElementRecursive(dom, root);
-        dom.appendChild(0, root_id);
+        try dom.appendChild(0, root_id);
     }
 
     return dom;

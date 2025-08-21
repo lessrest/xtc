@@ -7,8 +7,8 @@
 // which then distributes available space among children.
 
 const std = @import("std");
-const DisplayWidth = @import("lib.zig").DisplayWidth;
-const UnicodeData = @import("paint.zig").UnicodeData;
+const DisplayWidth = @import("DisplayWidth");
+const UnicodeData = @import("unicode.zig");
 const Dom = @import("dom.zig").Dom;
 const DomNodeId = @import("dom.zig").DomNodeId;
 const StyleRow = @import("style.zig").StyleRow;
@@ -210,13 +210,13 @@ pub fn intrinsicSize(
     unicode: *const UnicodeData,
 ) [2]usize {
     const node = box_tree.getNodeMut(node_index);
-    
+
     // Step 1: Check cache first
     if (node.data.intrinsic_size) |cached_size| {
         // Cache hit - return cached value
         return cached_size;
     }
-    
+
     const node_id = node.data.dom_id;
     const style = node.data.style;
     const content = dom.getNodeContent(node_id);
@@ -239,10 +239,10 @@ pub fn intrinsicSize(
         .text => measureTextNode(dom, box_tree, node_index, max_w, max_h, unicode),
         .element => measureElementNode(dom, box_tree, node_index, max_w, max_h, unicode),
     };
-    
+
     // Step 4: Cache the computed size
     node.data.intrinsic_size = size;
-    
+
     return size;
 }
 

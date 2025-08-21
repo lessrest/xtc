@@ -4,7 +4,8 @@ const WrenAllocator = @import("allocator.zig").WrenAllocator;
 const OutputHandler = @import("output.zig").OutputHandler;
 const ErrorHandler = @import("error_handler.zig").ErrorHandler;
 const Slots = @import("slots.zig");
-const Request = @import("vm.zig").Request;
+const syscalls = @import("syscalls.zig");
+const dom = @import("../dom.zig");
 
 /// Unified context that ties together all VM support systems.
 ///
@@ -16,6 +17,109 @@ pub const VMContext = struct {
     output_handler: OutputHandler,
     error_handler: ErrorHandler,
     fiber_queue: std.ArrayList(*c.Handle),
+    trampoliner: Trampoline,
+    document: *dom.Dom,
+
+    const Syscalls = syscalls.TTYSyscalls(@This());
+    const Request = syscalls.RequestUnion(Syscalls);
+    const Trampoline = syscalls.generateTrampoline(Syscalls, @This());
+    const SlotParser = syscalls.generateSlotParser(Request, Syscalls);
+
+    const SyscallsImpl = syscalls.bindSyscalls(Syscalls, struct {
+        pub fn createElement(
+            self: *VMContext,
+            args: Syscalls.Payload(.createElement),
+        ) anyerror!dom.DomNodeId {
+            return self.document.addElement(args.style);
+        }
+
+        pub fn updateText(
+            self: *VMContext,
+            args: Syscalls.Payload(.updateText),
+        ) anyerror!void {
+            try self.document.updateText(args.nodeId, args.text);
+        }
+
+        pub fn updateClass(
+            self: *VMContext,
+            args: Syscalls.Payload(.updateClass),
+        ) anyerror!void {
+            try self.document.updateClass(args.nodeId, args.className);
+        }
+
+        pub fn appendChild(
+            self: *VMContext,
+            args: Syscalls.Payload(.appendChild),
+        ) anyerror!void {
+            try self.document.appendChild(args.parentId, args.childId);
+        }
+
+        pub fn removeChild(
+            self: *VMContext,
+            args: Syscalls.Payload(.removeChild),
+        ) anyerror!void {
+            try self.document.removeChild(args.parentId, args.childId);
+        }
+
+        pub fn requestRender(
+            self: *VMContext,
+            _: Syscalls.Payload(.requestRender),
+        ) anyerror!void {
+            _ = self; // autofix
+            @panic("requestRender not implemented");
+        }
+
+        pub fn clearScreen(
+            self: *VMContext,
+            _: Syscalls.Payload(.clearScreen),
+        ) anyerror!void {
+            _ = self; // autofix
+            @panic("clearScreen not implemented");
+        }
+
+        pub fn requestAnimationFrame(
+            self: *VMContext,
+            _: Syscalls.Payload(.requestAnimationFrame),
+        ) anyerror!void {
+            _ = self; // autofix
+            @panic("requestAnimationFrame not implemented");
+        }
+
+        pub fn setTimeout(
+            self: *VMContext,
+            args: Syscalls.Payload(.setTimeout),
+        ) anyerror!void {
+            _ = self; // autofix
+            _ = args; // autofix
+            @panic("setTimeout not implemented");
+        }
+
+        pub fn addEventListener(
+            self: *VMContext,
+            args: Syscalls.Payload(.addEventListener),
+        ) anyerror!void {
+            _ = self; // autofix
+            _ = args; // autofix
+            @panic("addEventListener not implemented");
+        }
+
+        pub fn getViewportSize(
+            self: *VMContext,
+            _: Syscalls.Payload(.getViewportSize),
+        ) anyerror!void {
+            _ = self; // autofix
+            @panic("getViewportSize not implemented");
+        }
+
+        pub fn setViewportSize(
+            self: *VMContext,
+            args: Syscalls.Payload(.setViewportSize),
+        ) anyerror!void {
+            _ = self; // autofix
+            _ = args; // autofix
+            @panic("setViewportSize not implemented");
+        }
+    });
 
     pub const Options = struct {
         output_buffer_size: usize = 1024 * 32,
@@ -45,6 +149,11 @@ pub const VMContext = struct {
         };
 
         context.fiber_queue = std.ArrayList(*c.Handle).init(base_allocator);
+
+        context.trampoliner = Trampoline{
+            .context = context,
+            .syscalls = SyscallsImpl,
+        };
 
         return context;
     }
@@ -123,28 +232,26 @@ pub const VMContext = struct {
                 return;
             }
 
-            const request = try work.get(1, Request);
+            var slot_map = work.slotMap(0);
+            const request = try SlotParser.parseRequest(&slot_map);
             std.debug.print("trampoline: {any} {any}\n", .{ fiber, request });
 
             switch (request) {
-                .@"Ring.flush" => |flush| {
-                    // For now, simplified - just grab one batch and process it
-                    std.debug.print("flushing ring (count: {})\n", .{flush.count});
-                    
-                    // TODO: Implement proper batched request processing
-                    // For now, just resume the fiber
-                    _ = work.set(0, fiber).set(1, flush.count).call("call(_)");
+                .@"Ring.push" => |push| {
+                    _ = work.set(0, push.ring).call("grab()");
+                    const grabbed = try SlotParser.parseRequest(&slot_map);
+
+                    std.debug.print("grabbed: {any}\n", .{grabbed});
+                    _ = work.set(0, fiber).set(1, 1).call("call(_)");
                 },
 
-                .@"Ring.wait" => |wait| {
-                    // For now, just immediately resume - real impl would check completion queue
-                    std.debug.print("ring wait for {} completions\n", .{wait.minComplete});
-                    _ = work.set(0, fiber).set(1, wait.minComplete).call("call(_)");
+                .@"Ring.pull" => |pull| {
+                    _ = pull; // autofix
+                    std.debug.panic("pull not implemented", .{});
                 },
 
-                .@"Core.print" => |print| {
-                    std.debug.print("Direct print: {s}\n", .{print.message});
-                    _ = work.set(0, fiber).set(1, void{}).call("call(_)");
+                else => {
+                    try self.trampoliner.dispatch(request);
                 },
             }
         }

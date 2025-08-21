@@ -15,22 +15,6 @@ pub const Configuration = struct {
 pub const ErrorReport = ErrorHandler.ErrorReport;
 pub const StackTraceLine = ErrorHandler.StackTraceLine;
 
-pub const Request = union(enum) {
-    @"Ring.flush": struct {
-        ring: *c.Handle,
-        count: u32,
-    },
-
-    @"Ring.wait": struct {
-        ring: *c.Handle,
-        minComplete: u32,
-    },
-
-    @"Core.print": struct {
-        message: []const u8,
-    },
-};
-
 pub fn Engine(configuration: Configuration) type {
     return struct {
         const Self = @This();
@@ -91,11 +75,14 @@ pub fn Engine(configuration: Configuration) type {
             allocator.destroy(self);
         }
 
-        pub fn runTopLevel(self: *Self, module_name: [:0]const u8, source: []const u8) !void {
+        pub fn runTopLevel(self: *Self, module_name: []const u8, source: []const u8) !void {
             const source_as_cstr = try self.allocator.dupeZ(u8, source);
             defer self.allocator.free(source_as_cstr);
 
-            const result = c.wrenInterpret(self.vm, module_name, source_as_cstr);
+            const module_name_as_cstr = try self.allocator.dupeZ(u8, module_name);
+            defer self.allocator.free(module_name_as_cstr);
+
+            const result = c.wrenInterpret(self.vm, module_name_as_cstr, source_as_cstr);
 
             const outcome = @as(c.InterpretResult, @enumFromInt(result));
             switch (outcome) {
@@ -229,7 +216,6 @@ test "we can call Core.spawn" {
 
     try engine.context.trampoline(engine.vm);
 }
-
 
 test "Core.print operation" {
     const allocator = std.testing.allocator;

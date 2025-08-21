@@ -2,12 +2,14 @@ const std = @import("std");
 const dom = @import("dom.zig");
 const renderer = @import("renderer.zig");
 const paint = @import("paint.zig");
-const tty = @import("tty.zig");
 const WrenRunner = @import("wren/runtime.zig");
 const DocumentLoader = @import("pageload.zig");
 const cli = @import("cli.zig");
-const Trace = @import("Trace.zig").Trace;
+const GlyphTable = @import("GlyphTable.zig");
+const Raster = @import("Raster.zig");
+
 const ansi = @import("ansi");
+const Trace = ansi.FileTrace;
 
 /// WASM live session - supports interactive fiber-based animations
 pub const WasmLiveSession = struct {
@@ -134,7 +136,7 @@ const Components = struct {
     unicode: *paint.UnicodeData,
     document: *dom.Dom,
     wren_runner: *WrenRunner,
-    glyphs: *tty.GlyphTable,
+    glyphs: *GlyphTable,
     trace: *Trace,
 
     fn deinit(self: *Components) void {
@@ -159,7 +161,7 @@ fn initializeComponents(allocator: std.mem.Allocator) !Components {
     var wren_runner = try WrenRunner.init(allocator, document);
     errdefer wren_runner.deinit();
 
-    const glyphs = try tty.GlyphTable.init(allocator);
+    const glyphs = try GlyphTable.init(allocator);
     errdefer glyphs.deinit();
 
     const trace = try allocator.create(Trace);
