@@ -307,13 +307,9 @@ pub fn generateTrampoline(comptime Syscalls: type, comptime Context: type) type 
                     inline for (syscall_fields) |field| {
                         if (comptime std.mem.eql(u8, @tagName(tag), field.name)) {
                             const syscall_fn = @field(self.syscalls, field.name);
-                            const result = syscall_fn(self.context, payload);
-
-                            if (result) |r| {
-                                std.debug.print("result: {any} (ignoring...)\n", .{r});
-                            } else |err| {
-                                return err;
-                            }
+                            const result = syscall_fn(self.context, payload) catch |err| return err;
+                            _ = result;
+                            return;
                         }
                     }
 
@@ -654,33 +650,33 @@ test "can bind syscalls implementation to interface" {
     _ = syscalls_impl; // Ensure it compiles
 }
 
-// test "can generate trampoline dispatcher" {
-//     const SyscallsType = TestSyscalls(TestContext);
-//     const Trampoline = generateTrampoline(SyscallsType, TestContext);
+test "can generate trampoline dispatcher" {
+    const SyscallsType = TestSyscalls(TestContext);
+    const Trampoline = generateTrampoline(SyscallsType, TestContext);
 
-//     var context = TestContext.init(testing.allocator);
-//     defer context.deinit();
+    var context = TestContext.init(testing.allocator);
+    defer context.deinit();
 
-//     // Use the binding system to create the implementation
-//     const TestImpl = buildTestSyscallsImpl(SyscallsType);
-//     const syscalls_impl = bindSyscalls(SyscallsType, TestImpl);
+    // Use the binding system to create the implementation
+    const TestImpl = buildTestSyscallsImpl(SyscallsType);
+    const syscalls_impl = bindSyscalls(SyscallsType, TestImpl);
 
-//     var trampoline = Trampoline{
-//         .syscalls = syscalls_impl,
-//         .context = &context,
-//     };
+    var trampoline = Trampoline{
+        .syscalls = syscalls_impl,
+        .context = &context,
+    };
 
-//     // Test dispatching a print request
-//     const print_request = Trampoline.RequestType{ .print = .{ .message = "hello trampoline" } };
-//     try trampoline.dispatch(print_request);
+    // Test dispatching a print request
+    const print_request = Trampoline.RequestType{ .print = .{ .message = "hello trampoline" } };
+    try trampoline.dispatch(print_request);
 
-//     // Verify the syscall was called
-//     try testing.expectEqualStrings("hello trampoline", context.output_buffer.items);
+    // Verify the syscall was called
+    try testing.expectEqualStrings("hello trampoline", context.output_buffer.items);
 
-//     // Test dispatching a readFile request
-//     const read_request = Trampoline.RequestType{ .readFile = .{ .path = "test.txt" } };
-//     try trampoline.dispatch(read_request);
-// }
+    // Test dispatching a readFile request
+    const read_request = Trampoline.RequestType{ .readFile = .{ .path = "test.txt" } };
+    try trampoline.dispatch(read_request);
+}
 
 test "can generate foreign class system for requests" {
     const SyscallsType = TestSyscalls(TestContext);
@@ -749,47 +745,47 @@ test "can generate Wren operation constants" {
     try testing.expect(std.mem.indexOf(u8, constants, "construct new(duration_ms)") != null);
 }
 
-// test "complete syscalls system integration" {
-//     // This demonstrates the complete syscalls system working together
-//     const SyscallsType = TestSyscalls(TestContext);
-//     const Request = RequestUnion(SyscallsType);
-//     const Trampoline = generateTrampoline(SyscallsType, TestContext);
-//     const RequestClasses = generateRequestClasses(SyscallsType);
+test "complete syscalls system integration" {
+    // This demonstrates the complete syscalls system working together
+    const SyscallsType = TestSyscalls(TestContext);
+    const Request = RequestUnion(SyscallsType);
+    const Trampoline = generateTrampoline(SyscallsType, TestContext);
+    const RequestClasses = generateRequestClasses(SyscallsType);
 
-//     // Verify we can create parsers (tested separately)
-//     _ = generateSlotParser(Request, SyscallsType);
+    // Verify we can create parsers (tested separately)
+    _ = generateSlotParser(Request, SyscallsType);
 
-//     // 1. Create syscalls implementation
-//     const TestImpl = buildTestSyscallsImpl(SyscallsType);
-//     const syscalls_impl = bindSyscalls(SyscallsType, TestImpl);
+    // 1. Create syscalls implementation
+    const TestImpl = buildTestSyscallsImpl(SyscallsType);
+    const syscalls_impl = bindSyscalls(SyscallsType, TestImpl);
 
-//     // 2. Set up context and trampoline
-//     var context = TestContext.init(testing.allocator);
-//     defer context.deinit();
+    // 2. Set up context and trampoline
+    var context = TestContext.init(testing.allocator);
+    defer context.deinit();
 
-//     var trampoline = Trampoline{
-//         .syscalls = syscalls_impl,
-//         .context = &context,
-//     };
+    var trampoline = Trampoline{
+        .syscalls = syscalls_impl,
+        .context = &context,
+    };
 
-//     // 3. Create a foreign class request (simulating Wren foreign object)
-//     const PrintPayload = SyscallsType.Payload(.print);
-//     const PrintRequestData = RequestClasses.RequestData(PrintPayload, 0);
-//     var foreign_request = PrintRequestData{
-//         .payload = .{ .message = "Hello from foreign class!" },
-//     };
+    // 3. Create a foreign class request (simulating Wren foreign object)
+    const PrintPayload = SyscallsType.Payload(.print);
+    const PrintRequestData = RequestClasses.RequestData(PrintPayload, 0);
+    var foreign_request = PrintRequestData{
+        .payload = .{ .message = "Hello from foreign class!" },
+    };
 
-//     // 4. Dispatch foreign class request to get union
-//     const request = try RequestClasses.dispatchRequest(&foreign_request);
+    // 4. Dispatch foreign class request to get union
+    const request = try RequestClasses.dispatchRequest(&foreign_request);
 
-//     // 5. Process through trampoline
-//     try trampoline.dispatch(request);
+    // 5. Process through trampoline
+    try trampoline.dispatch(request);
 
-//     // 6. Verify syscall was executed
-//     try testing.expectEqualStrings("Hello from foreign class!", context.output_buffer.items);
+    // 6. Verify syscall was executed
+    try testing.expectEqualStrings("Hello from foreign class!", context.output_buffer.items);
 
-//     // 7. Generate Wren constants for runtime
-//     const constants = try generateWrenConstants(SyscallsType, testing.allocator);
-//     defer testing.allocator.free(constants);
-//     try testing.expect(constants.len > 0);
-// }
+    // 7. Generate Wren constants for runtime
+    const constants = try generateWrenConstants(SyscallsType, testing.allocator);
+    defer testing.allocator.free(constants);
+    try testing.expect(constants.len > 0);
+}
