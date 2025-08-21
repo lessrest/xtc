@@ -11,8 +11,74 @@ const TrackingAllocator = @import("../lib/TrackingAllocator.zig");
 const ansi = @import("ansi");
 const tree = ansi.nest;
 
+pub fn Syscalls(comptime Self: type) type {
+    return struct {
+        pub fn createElement(self: *Self, args: struct { style: []const u8 }) anyerror!dom.DomNodeId {
+            return self.document.addElement(args.style);
+        }
+
+        pub fn updateText(self: *Self, args: struct { nodeId: u32, text: []const u8 }) anyerror!void {
+            try self.document.updateText(args.nodeId, args.text);
+        }
+
+        pub fn updateClass(self: *Self, args: struct { nodeId: u32, className: []const u8 }) anyerror!void {
+            try self.document.updateClass(args.nodeId, args.className);
+        }
+
+        pub fn appendChild(self: *Self, args: struct { parentId: u32, childId: u32 }) anyerror!void {
+            try self.document.appendChild(args.parentId, args.childId);
+        }
+
+        pub fn removeChild(self: *Self, args: struct { parentId: u32, childId: u32 }) anyerror!void {
+            try self.document.removeChild(args.parentId, args.childId);
+        }
+
+        pub fn requestRender(self: *Self, args: struct {}) anyerror!void {
+            _ = self;
+            _ = args;
+            @panic("requestRender not implemented");
+        }
+
+        pub fn clearScreen(self: *Self, args: struct {}) anyerror!void {
+            _ = self;
+            _ = args;
+            @panic("clearScreen not implemented");
+        }
+
+        pub fn requestAnimationFrame(self: *Self, args: struct {}) anyerror!void {
+            _ = self;
+            _ = args;
+            @panic("requestAnimationFrame not implemented");
+        }
+
+        pub fn setTimeout(self: *Self, args: struct { delayMs: f64 }) anyerror!void {
+            _ = self;
+            _ = args;
+            @panic("setTimeout not implemented");
+        }
+
+        pub fn addEventListener(self: *Self, args: struct { eventType: []const u8 }) anyerror!void {
+            _ = self;
+            _ = args;
+            @panic("addEventListener not implemented");
+        }
+
+        pub fn getViewportSize(self: *Self, args: struct {}) anyerror!void {
+            _ = self;
+            _ = args;
+            @panic("getViewportSize not implemented");
+        }
+
+        pub fn setViewportSize(self: *Self, args: struct { width: u32, height: u32 }) anyerror!void {
+            _ = self;
+            _ = args;
+            @panic("setViewportSize not implemented");
+        }
+    };
+}
+
 pub const Configuration = struct {
-    API: type = struct {},
+    Syscalls: fn (comptime Self: type) type = Syscalls,
 };
 
 pub const ErrorReport = ErrorHandler.ErrorReport;
@@ -30,78 +96,10 @@ pub fn Engine(configuration: Configuration) type {
 
         const Self = @This();
 
-        pub const API = configuration.API;
-
-        const Syscalls = if (@hasDecl(API, "Syscalls"))
-            API.Syscalls
-        else
-            struct {
-                pub fn createElement(self: *Self, args: struct { style: []const u8 }) anyerror!dom.DomNodeId {
-                    return self.document.addElement(args.style);
-                }
-
-                pub fn updateText(self: *Self, args: struct { nodeId: u32, text: []const u8 }) anyerror!void {
-                    try self.document.updateText(args.nodeId, args.text);
-                }
-
-                pub fn updateClass(self: *Self, args: struct { nodeId: u32, className: []const u8 }) anyerror!void {
-                    try self.document.updateClass(args.nodeId, args.className);
-                }
-
-                pub fn appendChild(self: *Self, args: struct { parentId: u32, childId: u32 }) anyerror!void {
-                    try self.document.appendChild(args.parentId, args.childId);
-                }
-
-                pub fn removeChild(self: *Self, args: struct { parentId: u32, childId: u32 }) anyerror!void {
-                    try self.document.removeChild(args.parentId, args.childId);
-                }
-
-                pub fn requestRender(self: *Self, args: struct {}) anyerror!void {
-                    _ = self;
-                    _ = args;
-                    @panic("requestRender not implemented");
-                }
-
-                pub fn clearScreen(self: *Self, args: struct {}) anyerror!void {
-                    _ = self;
-                    _ = args;
-                    @panic("clearScreen not implemented");
-                }
-
-                pub fn requestAnimationFrame(self: *Self, args: struct {}) anyerror!void {
-                    _ = self;
-                    _ = args;
-                    @panic("requestAnimationFrame not implemented");
-                }
-
-                pub fn setTimeout(self: *Self, args: struct { delayMs: f64 }) anyerror!void {
-                    _ = self;
-                    _ = args;
-                    @panic("setTimeout not implemented");
-                }
-
-                pub fn addEventListener(self: *Self, args: struct { eventType: []const u8 }) anyerror!void {
-                    _ = self;
-                    _ = args;
-                    @panic("addEventListener not implemented");
-                }
-
-                pub fn getViewportSize(self: *Self, args: struct {}) anyerror!void {
-                    _ = self;
-                    _ = args;
-                    @panic("getViewportSize not implemented");
-                }
-
-                pub fn setViewportSize(self: *Self, args: struct { width: u32, height: u32 }) anyerror!void {
-                    _ = self;
-                    _ = args;
-                    @panic("setViewportSize not implemented");
-                }
-            };
-
-        const Request = syscalls.RequestUnion(Syscalls);
-        const Trampoline = syscalls.generateTrampoline(Syscalls, Self);
-        const SlotParser = syscalls.generateSlotParser(Request, Syscalls);
+        const SyscallsType = configuration.Syscalls(Self);
+        const Request = syscalls.RequestUnion(SyscallsType);
+        const Trampoline = syscalls.generateTrampoline(SyscallsType, Self);
+        const SlotParser = syscalls.generateSlotParser(Request, SyscallsType);
 
         pub const Options = struct {
             output_buffer_size: usize = 1024 * 32,
@@ -170,7 +168,6 @@ pub fn Engine(configuration: Configuration) type {
 
             self.allocator.destroy(self);
         }
-
 
         /// C callback function for Wren's memory allocation needs.
         ///
@@ -356,26 +353,6 @@ pub fn Engine(configuration: Configuration) type {
         }
 
         fn bind(self: *Self) !void {
-            inline for (@typeInfo(API).@"struct".fields) |field| {
-                const module_name = field.name;
-                if (@typeInfo(field.type) == .@"struct") {
-                    var code = std.ArrayList(u8).init(self.allocator);
-                    defer code.deinit();
-                    var writer = code.writer();
-
-                    inline for (@typeInfo(field.type).@"struct".fields) |method| {
-                        const method_name = method.name;
-                        const sighash = try @import("../ticket.zig").from(module_name ++ "." ++ method_name);
-                        try writer.print(
-                            \\var {s} = "{s}"
-                            \\
-                        , .{ method_name, sighash });
-                    }
-
-                    try self.runTopLevel(module_name, code.items);
-                }
-            }
-
             try self.runTopLevel("xtc", @embedFile("xtc.wren"));
         }
 
@@ -428,39 +405,20 @@ test "we can run a simple script" {
 test "we can call Core.spawn" {
     const allocator = std.testing.allocator;
 
-    const API = struct {
-        const Self = Engine(.{ .API = @This() });
-
-        foo: struct {
-            hello: fn (self: *Self) void,
-        },
-    };
-
-    var engine = try Engine(.{
-        .API = API,
-    }).init(allocator, .{});
+    var engine = try Engine(.{}).init(allocator, .{});
     defer engine.deinit();
 
     engine.runTopLevel("main",
-        \\import "foo" for hello
         \\import "xtc" for Core
-        \\
-        \\System.print(hello)
-        \\
         \\Core.spawn {
         \\  System.print("hello")
         \\}
-        \\
         \\Core.spawn {
         \\  System.print("hello")
         \\}
-        \\
     ) catch {
         try engine.croak();
     };
-
-    const output = try engine.takeOutput(allocator);
-    defer allocator.free(output);
 
     try engine.trampoline(engine.vm);
 }
@@ -468,13 +426,7 @@ test "we can call Core.spawn" {
 // test "Core.print operation" {
 //     const allocator = std.testing.allocator;
 
-//     const API = struct {
-//         const Self = Engine(.{ .API = @This() });
-//     };
-
-//     var engine = try Engine(.{
-//         .API = API,
-//     }).init(allocator, .{});
+//     var engine = try Engine(.{}).init(allocator, .{});
 //     defer engine.deinit();
 
 //     engine.runTopLevel("main",
