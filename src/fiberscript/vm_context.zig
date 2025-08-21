@@ -233,26 +233,37 @@ pub const VMContext = struct {
             }
 
             var slot_map = work.slotMap(0);
-            const request = try SlotParser.parseRequest(&slot_map);
+            var request = try SlotParser.parseRequest(&slot_map);
             std.debug.print("trampoline: {any} {any}\n", .{ fiber, request });
 
-            switch (request) {
-                .@"Ring.push" => |push| {
-                    _ = work.set(0, push.ring).call("grab()");
-                    const grabbed = try SlotParser.parseRequest(&slot_map);
+            while (true) {
+                const dispatch_result = try self.trampoliner.dispatch(request);
+                switch (dispatch_result) {
+                    .immediate => |result| {
+                        _ = work.set(0, fiber);
+                        switch (result) {
+                            inline else => |value| {
+                                if (@TypeOf(value) == void) {
+                                    _ = work.set(1, {});
+                                } else {
+                                    _ = work.set(1, value);
+                                }
+                            },
+                        }
+                        _ = work.call("call(_)");
 
-                    std.debug.print("grabbed: {any}\n", .{grabbed});
-                    _ = work.set(0, fiber).set(1, 1).call("call(_)");
-                },
+                        if (work.countSlots() < 2) {
+                            c.wrenReleaseHandle(vm, fiber);
+                            break;
+                        }
 
-                .@"Ring.pull" => |pull| {
-                    _ = pull; // autofix
-                    std.debug.panic("pull not implemented", .{});
-                },
-
-                else => {
-                    try self.trampoliner.dispatch(request);
-                },
+                        slot_map = work.slotMap(0);
+                        request = try SlotParser.parseRequest(&slot_map);
+                        std.debug.print("trampoline: {any} {any}\n", .{ fiber, request });
+                        continue;
+                    },
+                    .pending => break,
+                }
             }
         }
     }
