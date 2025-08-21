@@ -1,6 +1,6 @@
 const std = @import("std");
 const layout = @import("../layout.zig");
-const paint = @import("../paint.zig");
+const Painter = @import("../Painter.zig").Painter;
 const xml = @import("../xml.zig");
 const xmlparse = @import("../xmlparse.zig");
 const TreeNest = @import("ansi").nest;
@@ -69,8 +69,8 @@ pub fn renderMarkupToText(
     var glyphs = try GlyphTable.init(al);
     defer glyphs.deinit();
 
-    var ctx = paint.PaintContext.init(al, &unicode, &trace);
-    defer ctx.deinit();
+    var painter = Painter.init(al, &unicode, &trace);
+    defer painter.deinit();
 
     var fbs = std.io.fixedBufferStream(xml_input);
     var xdoc = try xmlparse.parse(al, "<stdin>", fbs.reader());
@@ -90,8 +90,8 @@ pub fn renderMarkupToText(
         .{ .x = 0, .y = 0, .w = width, .h = height },
     );
 
-    try ctx.computePaintCommands(document, &tree, glyphs);
-    try r.rasterizeDisplayList(al, glyphs, &ctx);
+    try painter.computePaintCommands(document, &tree, glyphs);
+    try r.rasterizeDisplayList(al, glyphs, &painter);
 
     return try r.plainTextDump(al, glyphs);
 }

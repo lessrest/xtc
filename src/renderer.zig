@@ -1,11 +1,12 @@
 const std = @import("std");
 const dom = @import("dom.zig");
 const layout = @import("layout.zig");
-const paint = @import("paint.zig");
 const ansi = @import("ansi");
 const Trace = @import("ansi").FileTrace;
 const Raster = @import("Raster.zig");
 const GlyphTable = @import("GlyphTable.zig");
+const Unicode = @import("unicode.zig");
+const Painter = @import("Painter.zig").Painter;
 
 pub const Options = struct {
     width: usize,
@@ -14,7 +15,7 @@ pub const Options = struct {
 
 pub const Deps = struct {
     allocator: std.mem.Allocator,
-    unicode: *paint.UnicodeData,
+    unicode: *Unicode,
     glyphs: *GlyphTable,
 };
 
@@ -80,12 +81,12 @@ pub const Renderer = struct {
         });
 
         // Generate paint commands
-        var paint_ctx = paint.PaintContext.init(self.deps.allocator, self.deps.unicode, tracer);
-        defer paint_ctx.deinit();
-        try paint.computePaintCommands(&paint_ctx, document, &tree, self.deps.glyphs);
+        var painter = Painter.init(self.deps.allocator, self.deps.unicode, tracer);
+        defer painter.deinit();
+        try painter.computePaintCommands(document, &tree, self.deps.glyphs);
 
         // Rasterize to back buffer
-        try self.state.back.rasterizeDisplayList(self.deps.allocator, self.deps.glyphs, &paint_ctx);
+        try self.state.back.rasterizeDisplayList(self.deps.allocator, self.deps.glyphs, &painter);
     }
 
     pub fn present(self: *Renderer, writer: anytype) !void {
