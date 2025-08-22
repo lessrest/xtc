@@ -276,18 +276,25 @@ pub fn Engine(configuration: Configuration) type {
 }
 
 pub const SyscallContext = struct {
+    const Timer = struct {
+        fiber: *c.Handle,
+        deadline_ms: u64,
+    };
+
     allocator: std.mem.Allocator,
     document: *dom.Dom,
     window: ?*WindowMod.Window = null,
     viewport_width: usize = 80,
     viewport_height: usize = 24,
     frame_fibers: std.ArrayListUnmanaged(*c.Handle) = .{},
+    sleep_timers: std.ArrayListUnmanaged(Timer) = .{},
 
     pub fn deinit(self: *SyscallContext) void {
         if (self.window) |w| {
             w.deinit();
             self.allocator.destroy(w);
         }
+        self.sleep_timers.deinit(self.allocator);
     }
 };
 const Fiber = *c.Handle;
@@ -418,6 +425,15 @@ pub fn documentSyscalls(comptime EngineType: type, comptime Context: type) type 
             _ = engine; // autofix
             _ = args; // autofix
             try context.frame_fibers.append(context.allocator, fiber);
+            return syscalls.Pending{};
+        }
+
+        pub fn sleep(engine: *EngineType, context: *Context, fiber: Fiber, args: struct { seconds: f64 }) anyerror!Pending {
+            _ = engine;
+            const now_ms = std.time.milliTimestamp();
+            const delay_ms = @as(i64, @intFromFloat(args.seconds * 1000.0));
+            const deadline: u64 = @intCast(now_ms + delay_ms);
+            try context.sleep_timers.append(context.allocator, .{ .fiber = fiber, .deadline_ms = deadline });
             return syscalls.Pending{};
         }
 
