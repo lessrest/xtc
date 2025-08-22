@@ -16,7 +16,7 @@ test "Element#print prints the element's region" {
     defer engine.deinit();
 
     const script =
-        \\import "xtc" for Document, Element
+        \\import "dom" for Document, Element
         \\var a = Element.create("w-4 h-3 bg-glyph-[a]")
         \\var b = Element.create("w-4 h-3 bg-glyph-[b]")
         \\Document.root.classes = "flex flex-row items-start"

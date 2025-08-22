@@ -1,4 +1,5 @@
-import "xtc" for Core, Element, Text, Document
+import "xtc" for Core
+import "dom" for Element, Text, Document
 
 var body = Element.create("flex flex-col")
 var text = Text.create("Hello, World!")
