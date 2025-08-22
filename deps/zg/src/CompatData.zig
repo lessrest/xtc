@@ -8,7 +8,13 @@ const CompatData = @This();
 pub fn init(allocator: mem.Allocator) !CompatData {
     var z = try zstdembed.open(allocator, @embedFile("compat"));
     defer z.deinit(allocator);
-    var reader = z.reader();
+    const bytes = z.readAllAlloc(allocator) catch |e| switch (e) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.OutOfMemory,
+    };
+    defer allocator.free(bytes);
+    var r_val: std.Io.Reader = .fixed(bytes);
+    var reader = &r_val;
 
     const endian = builtin.cpu.arch.endian();
     var cpdata = CompatData{
@@ -25,12 +31,12 @@ pub fn init(allocator: mem.Allocator) !CompatData {
     var total_len: usize = 0;
 
     while (true) {
-        const len: u8 = try reader.readInt(u8, endian);
+        const len: u8 = try reader.takeInt(u8, endian);
         if (len == 0) break;
-        const cp = try reader.readInt(u24, endian);
+        const cp = try reader.takeInt(u24, endian);
         const nk_s = cpdata.cps[total_len..][0 .. len - 1];
         for (0..len - 1) |i| {
-            nk_s[i] = @intCast(try reader.readInt(u24, endian));
+            nk_s[i] = @intCast(try reader.takeInt(u24, endian));
         }
         cpdata.nfkd[cp] = nk_s;
         total_len += len - 1;

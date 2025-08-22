@@ -9,7 +9,13 @@ const CanonData = @This();
 pub fn init(allocator: mem.Allocator) !CanonData {
     var z = try zstdembed.open(allocator, @embedFile("canon"));
     defer z.deinit(allocator);
-    var reader = z.reader();
+    const bytes = z.readAllAlloc(allocator) catch |e| switch (e) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.OutOfMemory,
+    };
+    defer allocator.free(bytes);
+    var r_val: std.Io.Reader = .fixed(bytes);
+    var reader = &r_val;
 
     const endian = builtin.cpu.arch.endian();
     var cdata = CanonData{
@@ -34,13 +40,13 @@ pub fn init(allocator: mem.Allocator) !CanonData {
     var total_len: usize = 0;
 
     while (true) {
-        const len: u8 = try reader.readInt(u8, endian);
+        const len: u8 = try reader.takeInt(u8, endian);
         if (len == 0) break;
-        const cp = try reader.readInt(u24, endian);
+        const cp = try reader.takeInt(u24, endian);
         total_cp = cp;
         const nfd_cp = cdata.cps[total_len..][0 .. len - 1];
         for (0..len - 1) |i| {
-            nfd_cp[i] = @intCast(try reader.readInt(u24, endian));
+            nfd_cp[i] = @intCast(try reader.takeInt(u24, endian));
         }
         if (len == 3) {
             try cdata.nfc.put(allocator, nfd_cp[0..2].*, @intCast(cp));

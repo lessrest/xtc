@@ -36,12 +36,18 @@ inline fn setupInner(self: *LetterCasing, allocator: mem.Allocator) !void {
     const upper_bytes = @embedFile("upper");
     var upper_z = try zstdembed.open(allocator, @embedFile("upper"));
     defer upper_z.deinit(allocator);
-    var upper_reader = upper_z.reader();
+    const upper_bytes = upper_z.readAllAlloc(allocator) catch |e| switch (e) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.OutOfMemory,
+    };
+    defer allocator.free(upper_bytes);
+    var upper_reader_val: std.Io.Reader = .fixed(upper_bytes);
+    var upper_reader = &upper_reader_val;
 
     while (true) {
-        const cp = try upper_reader.readInt(i24, endian);
+        const cp = try upper_reader.takeInt(i24, endian);
         if (cp == 0) break;
-        const diff = try upper_reader.readInt(i24, endian);
+        const diff = try upper_reader.takeInt(i24, endian);
         self.case_map[@intCast(cp)][0] = @intCast(cp + diff);
     }
 
@@ -49,12 +55,18 @@ inline fn setupInner(self: *LetterCasing, allocator: mem.Allocator) !void {
     const lower_bytes = @embedFile("lower");
     var lower_z = try zstdembed.open(allocator, @embedFile("lower"));
     defer lower_z.deinit(allocator);
-    var lower_reader = lower_z.reader();
+    const lower_bytes = lower_z.readAllAlloc(allocator) catch |e| switch (e) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.OutOfMemory,
+    };
+    defer allocator.free(lower_bytes);
+    var lower_reader_val: std.Io.Reader = .fixed(lower_bytes);
+    var lower_reader = &lower_reader_val;
 
     while (true) {
-        const cp = try lower_reader.readInt(i24, endian);
+        const cp = try lower_reader.takeInt(i24, endian);
         if (cp == 0) break;
-        const diff = try lower_reader.readInt(i24, endian);
+        const diff = try lower_reader.takeInt(i24, endian);
         self.case_map[@intCast(cp)][1] = @intCast(cp + diff);
     }
 
@@ -62,14 +74,20 @@ inline fn setupInner(self: *LetterCasing, allocator: mem.Allocator) !void {
     const cp_bytes = @embedFile("case_prop");
     var cp_z = try zstdembed.open(allocator, @embedFile("case_prop"));
     defer cp_z.deinit(allocator);
-    var cp_reader = cp_z.reader();
+    const cp_bytes = cp_z.readAllAlloc(allocator) catch |e| switch (e) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.OutOfMemory,
+    };
+    defer allocator.free(cp_bytes);
+    var cp_reader_val: std.Io.Reader = .fixed(cp_bytes);
+    var cp_reader = &cp_reader_val;
 
-    const stage_1_len: u16 = try cp_reader.readInt(u16, endian);
+    const stage_1_len: u16 = try cp_reader.takeInt(u16, endian);
     self.prop_s1 = try allocator.alloc(u16, stage_1_len);
     errdefer allocator.free(self.prop_s1);
-    for (0..stage_1_len) |i| self.prop_s1[i] = try cp_reader.readInt(u16, endian);
+    for (0..stage_1_len) |i| self.prop_s1[i] = try cp_reader.takeInt(u16, endian);
 
-    const stage_2_len: u16 = try cp_reader.readInt(u16, endian);
+    const stage_2_len: u16 = try cp_reader.takeInt(u16, endian);
     self.prop_s2 = try allocator.alloc(u8, stage_2_len);
     errdefer allocator.free(self.prop_s2);
     _ = try cp_reader.readAll(self.prop_s2);

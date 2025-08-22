@@ -51,15 +51,14 @@ pub fn main() !void {
     var flat_map = std.AutoHashMap(u21, u5).init(allocator);
     defer flat_map.deinit();
 
-    var line_buf: [4096]u8 = undefined;
+    // use codegen_io LineReader abstraction
 
     // Process HangulSyllableType.txt
     var in_file = try std.fs.cwd().openFile("data/unicode/auxiliary/WordBreakProperty.txt", .{});
     defer in_file.close();
-    var in_buf = std.io.bufferedReader(in_file.reader());
-    const in_reader = in_buf.reader();
-
-    while (try in_reader.readUntilDelimiterOrEof(&line_buf, '\n')) |line| {
+    var lr = try (@import("codegen_io").LineReader).initAlloc(allocator, "data/unicode/auxiliary/WordBreakProperty.txt");
+    defer lr.deinit(allocator);
+    while (lr.next()) |line| {
         if (line.len == 0 or line[0] == '#') continue;
 
         const no_comment = if (std.mem.indexOfScalar(u8, line, '#')) |octo| line[0..octo] else line;
@@ -95,11 +94,11 @@ pub fn main() !void {
     var blocks_map = BlockMap.init(allocator);
     defer blocks_map.deinit();
 
-    var stage1 = std.ArrayList(u16).init(allocator);
-    defer stage1.deinit();
+    var stage1 = std.ArrayList(u16){};
+    defer stage1.deinit(allocator);
 
-    var stage2 = std.ArrayList(u5).init(allocator);
-    defer stage2.deinit();
+    var stage2 = std.ArrayList(u5){};
+    defer stage2.deinit(allocator);
 
     var block: Block = [_]u5{0} ** block_size;
     var block_len: u16 = 0;
@@ -117,10 +116,10 @@ pub fn main() !void {
         const gop = try blocks_map.getOrPut(block);
         if (!gop.found_existing) {
             gop.value_ptr.* = @intCast(stage2.items.len);
-            try stage2.appendSlice(&block);
+            try stage2.appendSlice(allocator, &block);
         }
 
-        try stage1.append(gop.value_ptr.*);
+        try stage1.append(allocator, gop.value_ptr.*);
         block_len = 0;
     }
 
@@ -131,7 +130,9 @@ pub fn main() !void {
 
     var out_file = try std.fs.cwd().createFile(output_path, .{});
     defer out_file.close();
-    const writer = out_file.writer();
+    var out_buf: [1024]u8 = undefined;
+    var out_writer_state = out_file.writer(&out_buf);
+    const writer: *std.Io.Writer = &out_writer_state.interface;
 
     const endian = builtin.cpu.arch.endian();
     try writer.writeInt(u16, @intCast(stage1.items.len), endian);
@@ -139,6 +140,8 @@ pub fn main() !void {
 
     try writer.writeInt(u16, @intCast(stage2.items.len), endian);
     for (stage2.items) |i| try writer.writeInt(u8, i, endian);
+
+    try writer.flush();
 
     try out_file.sync();
 }

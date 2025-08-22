@@ -7,10 +7,8 @@ pub fn main() !void {
     const allocator = arena.allocator();
 
     // Process UnicodeData.txt
-    var in_file = try std.fs.cwd().openFile("data/unicode/UnicodeData.txt", .{});
-    defer in_file.close();
-    var in_buf = std.io.bufferedReader(in_file.reader());
-    const in_reader = in_buf.reader();
+    var lr = try (@import("codegen_io").LineReader).initAlloc(allocator, "data/unicode/UnicodeData.txt");
+    defer lr.deinit(allocator);
 
     var args_iter = try std.process.argsWithAllocator(allocator);
     defer args_iter.deinit();
@@ -22,9 +20,8 @@ pub fn main() !void {
     const writer = out_file.writer();
 
     const endian = builtin.cpu.arch.endian();
-    var line_buf: [4096]u8 = undefined;
 
-    lines: while (try in_reader.readUntilDelimiterOrEof(&line_buf, '\n')) |line| {
+    lines: while (lr.next()) |line| {
         if (line.len == 0) continue;
 
         var field_iter = std.mem.splitScalar(u8, line, ';');

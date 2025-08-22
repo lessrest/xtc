@@ -8,17 +8,14 @@ pub fn main() !void {
     const allocator = gpa.allocator();
 
     // Process DerivedCoreProperties.txt
-    var props_file = try std.fs.cwd().openFile("data/unicode/DerivedCoreProperties.txt", .{});
-    defer props_file.close();
-    var props_buf = std.io.bufferedReader(props_file.reader());
-    const props_reader = props_buf.reader();
+    var props_lr = try (@import("codegen_io").LineReader).initAlloc(allocator, "data/unicode/DerivedCoreProperties.txt");
+    defer props_lr.deinit(allocator);
 
     var props_map = std.AutoHashMap(u21, void).init(allocator);
     defer props_map.deinit();
 
-    var line_buf: [4096]u8 = undefined;
 
-    props_lines: while (try props_reader.readUntilDelimiterOrEof(&line_buf, '\n')) |line| {
+    props_lines: while (props_lr.next()) |line| {
         if (line.len == 0 or line[0] == '#') continue;
 
         const no_comment = if (std.mem.indexOfScalar(u8, line, '#')) |octo| line[0..octo] else line;
@@ -55,12 +52,10 @@ pub fn main() !void {
     defer codepoint_mapping.deinit();
 
     // Process CaseFolding.txt
-    var cp_file = try std.fs.cwd().openFile("data/unicode/CaseFolding.txt", .{});
-    defer cp_file.close();
-    var cp_buf = std.io.bufferedReader(cp_file.reader());
-    const cp_reader = cp_buf.reader();
+    var cp_lr = try (@import("codegen_io").LineReader).initAlloc(allocator, "data/unicode/CaseFolding.txt");
+    defer cp_lr.deinit(allocator);
 
-    while (try cp_reader.readUntilDelimiterOrEof(&line_buf, '\n')) |line| {
+    while (cp_lr.next()) |line| {
         if (line.len == 0 or line[0] == '#') continue;
 
         var field_it = std.mem.splitScalar(u8, line, ';');

@@ -605,21 +605,21 @@ const SneakIterator = struct {
 };
 
 inline fn setupImpl(wb: *Words, allocator: Allocator) !void {
-    var z = try zstdembed.open(allocator, @embedFile("wbp"));
-    defer z.deinit(allocator);
-    var reader = z.reader();
+    const bytes = @embedFile("wbp");
+    var r_val: std.Io.Reader = .fixed(bytes);
+    const reader = &r_val;
 
     const endian = builtin.cpu.arch.endian();
 
-    const stage_1_len: u16 = try reader.readInt(u16, endian);
+    const stage_1_len: u16 = try reader.takeInt(u16, endian);
     wb.s1 = try allocator.alloc(u16, stage_1_len);
     errdefer allocator.free(wb.s1);
-    for (0..stage_1_len) |i| wb.s1[i] = try reader.readInt(u16, endian);
+    for (0..stage_1_len) |i| wb.s1[i] = try reader.takeInt(u16, endian);
 
-    const stage_2_len: u16 = try reader.readInt(u16, endian);
+    const stage_2_len: u16 = try reader.takeInt(u16, endian);
     wb.s2 = try allocator.alloc(u5, stage_2_len);
     errdefer allocator.free(wb.s2);
-    for (0..stage_2_len) |i| wb.s2[i] = @intCast(try reader.readInt(u8, endian));
+    for (0..stage_2_len) |i| wb.s2[i] = @intCast(try reader.takeInt(u8, endian));
     var count_0: usize = 0;
     for (wb.s2) |nyb| {
         if (nyb == 0) count_0 += 1;

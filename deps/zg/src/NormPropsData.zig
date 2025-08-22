@@ -8,20 +8,26 @@ const NormProps = @This();
 pub fn init(allocator: mem.Allocator) !NormProps {
     var z = try zstdembed.open(allocator, @embedFile("normp"));
     defer z.deinit(allocator);
-    var reader = z.reader();
+    const bytes = z.readAllAlloc(allocator) catch |e| switch (e) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.OutOfMemory,
+    };
+    defer allocator.free(bytes);
+    var r_val: std.Io.Reader = .fixed(bytes);
+    var reader = &r_val;
 
     const endian = builtin.cpu.arch.endian();
     var norms = NormProps{};
 
-    const stage_1_len: u16 = try reader.readInt(u16, endian);
+    const stage_1_len: u16 = try reader.takeInt(u16, endian);
     norms.s1 = try allocator.alloc(u16, stage_1_len);
     errdefer allocator.free(norms.s1);
-    for (0..stage_1_len) |i| norms.s1[i] = try reader.readInt(u16, endian);
+    for (0..stage_1_len) |i| norms.s1[i] = try reader.takeInt(u16, endian);
 
-    const stage_2_len: u16 = try reader.readInt(u16, endian);
+    const stage_2_len: u16 = try reader.takeInt(u16, endian);
     norms.s2 = try allocator.alloc(u4, stage_2_len);
     errdefer allocator.free(norms.s2);
-    for (0..stage_2_len) |i| norms.s2[i] = @intCast(try reader.readInt(u8, endian));
+    for (0..stage_2_len) |i| norms.s2[i] = @intCast(try reader.takeInt(u8, endian));
 
     return norms;
 }

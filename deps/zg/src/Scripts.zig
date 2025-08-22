@@ -198,21 +198,27 @@ pub fn setup(scripts: *Scripts, allocator: Allocator) Allocator.Error!void {
 inline fn setupInner(scripts: *Scripts, allocator: mem.Allocator) !void {
     var z = try zstdembed.open(allocator, @embedFile("scripts"));
     defer z.deinit(allocator);
-    var reader = z.reader();
+    const bytes = z.readAllAlloc(allocator) catch |e| switch (e) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.OutOfMemory,
+    };
+    defer allocator.free(bytes);
+    var r_val: std.Io.Reader = .fixed(bytes);
+    var reader = &r_val;
 
     const endian = builtin.cpu.arch.endian();
 
-    const s1_len: u16 = try reader.readInt(u16, endian);
+    const s1_len: u16 = try reader.takeInt(u16, endian);
     scripts.s1 = try allocator.alloc(u16, s1_len);
     errdefer allocator.free(scripts.s1);
-    for (0..s1_len) |i| scripts.s1[i] = try reader.readInt(u16, endian);
+    for (0..s1_len) |i| scripts.s1[i] = try reader.takeInt(u16, endian);
 
-    const s2_len: u16 = try reader.readInt(u16, endian);
+    const s2_len: u16 = try reader.takeInt(u16, endian);
     scripts.s2 = try allocator.alloc(u8, s2_len);
     errdefer allocator.free(scripts.s2);
     _ = try reader.readAll(scripts.s2);
 
-    const s3_len: u16 = try reader.readInt(u8, endian);
+    const s3_len: u16 = try reader.takeInt(u8, endian);
     scripts.s3 = try allocator.alloc(u8, s3_len);
     errdefer allocator.free(scripts.s3);
     _ = try reader.readAll(scripts.s3);

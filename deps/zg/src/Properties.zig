@@ -30,14 +30,20 @@ inline fn setupInner(props: *Properties, allocator: Allocator) !void {
     // Process DerivedCoreProperties.txt
     var core_z = try zstdembed.open(allocator, @embedFile("core_props"));
     defer core_z.deinit(allocator);
-    var core_reader = core_z.reader();
+    const core_bytes = core_z.readAllAlloc(allocator) catch |e| switch (e) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.OutOfMemory,
+    };
+    defer allocator.free(core_bytes);
+    var core_reader_val: std.Io.Reader = .fixed(core_bytes);
+    var core_reader = &core_reader_val;
 
-    const core_stage_1_len: u16 = try core_reader.readInt(u16, endian);
+    const core_stage_1_len: u16 = try core_reader.takeInt(u16, endian);
     props.core_s1 = try allocator.alloc(u16, core_stage_1_len);
     errdefer allocator.free(props.core_s1);
-    for (0..core_stage_1_len) |i| props.core_s1[i] = try core_reader.readInt(u16, endian);
+    for (0..core_stage_1_len) |i| props.core_s1[i] = try core_reader.takeInt(u16, endian);
 
-    const core_stage_2_len: u16 = try core_reader.readInt(u16, endian);
+    const core_stage_2_len: u16 = try core_reader.takeInt(u16, endian);
     props.core_s2 = try allocator.alloc(u8, core_stage_2_len);
     errdefer allocator.free(props.core_s2);
     _ = try core_reader.readAll(props.core_s2);
@@ -45,14 +51,20 @@ inline fn setupInner(props: *Properties, allocator: Allocator) !void {
     // Process PropList.txt
     var props_z = try zstdembed.open(allocator, @embedFile("props"));
     defer props_z.deinit(allocator);
-    var props_reader = props_z.reader();
+    const props_bytes = props_z.readAllAlloc(allocator) catch |e| switch (e) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.OutOfMemory,
+    };
+    defer allocator.free(props_bytes);
+    var props_reader_val: std.Io.Reader = .fixed(props_bytes);
+    var props_reader = &props_reader_val;
 
-    const stage_1_len: u16 = try props_reader.readInt(u16, endian);
+    const stage_1_len: u16 = try props_reader.takeInt(u16, endian);
     props.props_s1 = try allocator.alloc(u16, stage_1_len);
     errdefer allocator.free(props.props_s1);
-    for (0..stage_1_len) |i| props.props_s1[i] = try props_reader.readInt(u16, endian);
+    for (0..stage_1_len) |i| props.props_s1[i] = try props_reader.takeInt(u16, endian);
 
-    const stage_2_len: u16 = try props_reader.readInt(u16, endian);
+    const stage_2_len: u16 = try props_reader.takeInt(u16, endian);
     props.props_s2 = try allocator.alloc(u8, stage_2_len);
     errdefer allocator.free(props.props_s2);
     _ = try props_reader.readAll(props.props_s2);
@@ -60,14 +72,20 @@ inline fn setupInner(props: *Properties, allocator: Allocator) !void {
     // Process DerivedNumericType.txt
     var num_z = try zstdembed.open(allocator, @embedFile("numeric"));
     defer num_z.deinit(allocator);
-    var num_reader = num_z.reader();
+    const num_bytes = num_z.readAllAlloc(allocator) catch |e| switch (e) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.OutOfMemory,
+    };
+    defer allocator.free(num_bytes);
+    var num_reader_val: std.Io.Reader = .fixed(num_bytes);
+    var num_reader = &num_reader_val;
 
-    const num_stage_1_len: u16 = try num_reader.readInt(u16, endian);
+    const num_stage_1_len: u16 = try num_reader.takeInt(u16, endian);
     props.num_s1 = try allocator.alloc(u16, num_stage_1_len);
     errdefer allocator.free(props.num_s1);
-    for (0..num_stage_1_len) |i| props.num_s1[i] = try num_reader.readInt(u16, endian);
+    for (0..num_stage_1_len) |i| props.num_s1[i] = try num_reader.takeInt(u16, endian);
 
-    const num_stage_2_len: u16 = try num_reader.readInt(u16, endian);
+    const num_stage_2_len: u16 = try num_reader.takeInt(u16, endian);
     props.num_s2 = try allocator.alloc(u8, num_stage_2_len);
     errdefer allocator.free(props.num_s2);
     _ = try num_reader.readAll(props.num_s2);

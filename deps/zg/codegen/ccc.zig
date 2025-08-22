@@ -29,15 +29,11 @@ pub fn main() !void {
     var flat_map = std.AutoHashMap(u21, u8).init(allocator);
     defer flat_map.deinit();
 
-    var line_buf: [4096]u8 = undefined;
 
     // Process DerivedCombiningClass.txt
-    var cc_file = try std.fs.cwd().openFile("data/unicode/extracted/DerivedCombiningClass.txt", .{});
-    defer cc_file.close();
-    var cc_buf = std.io.bufferedReader(cc_file.reader());
-    const cc_reader = cc_buf.reader();
-
-    while (try cc_reader.readUntilDelimiterOrEof(&line_buf, '\n')) |line| {
+    var lr = try (@import("codegen_io").LineReader).initAlloc(allocator, "data/unicode/extracted/DerivedCombiningClass.txt");
+    defer lr.deinit(allocator);
+    while (lr.next()) |line| {
         if (line.len == 0 or line[0] == '#') continue;
         const no_comment = if (std.mem.indexOfScalar(u8, line, '#')) |octo| line[0..octo] else line;
 

@@ -61,15 +61,12 @@ pub fn main() !void {
     var emoji_set = std.AutoHashMap(u21, void).init(allocator);
     defer emoji_set.deinit();
 
-    var line_buf: [4096]u8 = undefined;
+    // (bufferedReader removed in Zig 0.15; use module codegen_io instead)
 
     // Process Indic
-    var indic_file = try std.fs.cwd().openFile("data/unicode/DerivedCoreProperties.txt", .{});
-    defer indic_file.close();
-    var indic_buf = std.io.bufferedReader(indic_file.reader());
-    const indic_reader = indic_buf.reader();
-
-    while (try indic_reader.readUntilDelimiterOrEof(&line_buf, '\n')) |line| {
+    var indic_lr = try (@import("codegen_io").LineReader).initAlloc(allocator, "data/unicode/DerivedCoreProperties.txt");
+    defer indic_lr.deinit(allocator);
+    while (indic_lr.next()) |line| {
         if (line.len == 0 or line[0] == '#') continue;
         if (std.mem.indexOf(u8, line, "InCB") == null) continue;
         const no_comment = if (std.mem.indexOfScalar(u8, line, '#')) |octo| line[0..octo] else line;
@@ -103,12 +100,9 @@ pub fn main() !void {
     }
 
     // Process GBP
-    var gbp_file = try std.fs.cwd().openFile("data/unicode/auxiliary/GraphemeBreakProperty.txt", .{});
-    defer gbp_file.close();
-    var gbp_buf = std.io.bufferedReader(gbp_file.reader());
-    const gbp_reader = gbp_buf.reader();
-
-    while (try gbp_reader.readUntilDelimiterOrEof(&line_buf, '\n')) |line| {
+    var gbp_lr = try (@import("codegen_io").LineReader).initAlloc(allocator, "data/unicode/auxiliary/GraphemeBreakProperty.txt");
+    defer gbp_lr.deinit(allocator);
+    while (gbp_lr.next()) |line| {
         if (line.len == 0 or line[0] == '#') continue;
         const no_comment = if (std.mem.indexOfScalar(u8, line, '#')) |octo| line[0..octo] else line;
 
@@ -141,12 +135,9 @@ pub fn main() !void {
     }
 
     // Process Emoji
-    var emoji_file = try std.fs.cwd().openFile("data/unicode/emoji/emoji-data.txt", .{});
-    defer emoji_file.close();
-    var emoji_buf = std.io.bufferedReader(emoji_file.reader());
-    const emoji_reader = emoji_buf.reader();
-
-    while (try emoji_reader.readUntilDelimiterOrEof(&line_buf, '\n')) |line| {
+    var emoji_lr = try (@import("codegen_io").LineReader).initAlloc(allocator, "data/unicode/emoji/emoji-data.txt");
+    defer emoji_lr.deinit(allocator);
+    while (emoji_lr.next()) |line| {
         if (line.len == 0 or line[0] == '#') continue;
         if (std.mem.indexOf(u8, line, "Extended_Pictographic") == null) continue;
         const no_comment = if (std.mem.indexOfScalar(u8, line, '#')) |octo| line[0..octo] else line;
@@ -175,11 +166,11 @@ pub fn main() !void {
     var blocks_map = BlockMap.init(allocator);
     defer blocks_map.deinit();
 
-    var stage1 = std.ArrayList(u16).init(allocator);
-    defer stage1.deinit();
+    var stage1 = std.ArrayList(u16){};
+    defer stage1.deinit(allocator);
 
-    var stage2 = std.ArrayList(u16).init(allocator);
-    defer stage2.deinit();
+    var stage2 = std.ArrayList(u16){};
+    defer stage2.deinit(allocator);
 
     var stage3 = std.AutoArrayHashMap(u8, u16).init(allocator);
     defer stage3.deinit();
@@ -215,10 +206,10 @@ pub fn main() !void {
         const gop = try blocks_map.getOrPut(block);
         if (!gop.found_existing) {
             gop.value_ptr.* = @intCast(stage2.items.len);
-            try stage2.appendSlice(&block);
+            try stage2.appendSlice(allocator, &block);
         }
 
-        try stage1.append(gop.value_ptr.*);
+        try stage1.append(allocator, gop.value_ptr.*);
         block_len = 0;
     }
 
@@ -229,7 +220,9 @@ pub fn main() !void {
 
     var out_file = try std.fs.cwd().createFile(output_path, .{});
     defer out_file.close();
-    const writer = out_file.writer();
+    var out_buf: [1024]u8 = undefined;
+    var out_writer_state = out_file.writer(&out_buf);
+    const writer: *std.Io.Writer = &out_writer_state.interface;
 
     const endian = builtin.cpu.arch.endian();
     try writer.writeInt(u16, @intCast(stage1.items.len), endian);
@@ -242,5 +235,6 @@ pub fn main() !void {
     try writer.writeInt(u16, @intCast(props_bytes.len), endian);
     try writer.writeAll(props_bytes);
 
+    try writer.flush();
     try out_file.sync();
 }

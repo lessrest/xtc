@@ -50,34 +50,34 @@ fn setupImpl(casefold: *CaseFolding, allocator: Allocator) Allocator.Error!void 
 inline fn setupImplInner(casefold: *CaseFolding, allocator: Allocator) !void {
     var z = try zstdembed.open(allocator, @embedFile("fold"));
     defer z.deinit(allocator);
-    var reader = z.reader();
+    const reader = z.reader();
 
     const endian = builtin.cpu.arch.endian();
 
-    casefold.cutoff = @intCast(try reader.readInt(u24, endian));
-    casefold.multiple_start = @intCast(try reader.readInt(u24, endian));
+    casefold.cutoff = @intCast(try reader.takeInt(u24, endian));
+    casefold.multiple_start = @intCast(try reader.takeInt(u24, endian));
 
-    var len = try reader.readInt(u16, endian);
+    var len = try reader.takeInt(u16, endian);
     casefold.stage1 = try allocator.alloc(u8, len);
     errdefer allocator.free(casefold.stage1);
-    for (0..len) |i| casefold.stage1[i] = try reader.readInt(u8, endian);
+    for (0..len) |i| casefold.stage1[i] = try reader.takeInt(u8, endian);
 
-    len = try reader.readInt(u16, endian);
+    len = try reader.takeInt(u16, endian);
     casefold.stage2 = try allocator.alloc(u8, len);
     errdefer allocator.free(casefold.stage2);
-    for (0..len) |i| casefold.stage2[i] = try reader.readInt(u8, endian);
+    for (0..len) |i| casefold.stage2[i] = try reader.takeInt(u8, endian);
 
-    len = try reader.readInt(u16, endian);
+    len = try reader.takeInt(u16, endian);
     casefold.stage3 = try allocator.alloc(i24, len);
     errdefer allocator.free(casefold.stage3);
-    for (0..len) |i| casefold.stage3[i] = try reader.readInt(i24, endian);
+    for (0..len) |i| casefold.stage3[i] = try reader.takeInt(i24, endian);
 
-    casefold.cwcf_exceptions_min = @intCast(try reader.readInt(u24, endian));
-    casefold.cwcf_exceptions_max = @intCast(try reader.readInt(u24, endian));
-    len = try reader.readInt(u16, endian);
+    casefold.cwcf_exceptions_min = @intCast(try reader.takeInt(u24, endian));
+    casefold.cwcf_exceptions_max = @intCast(try reader.takeInt(u24, endian));
+    len = try reader.takeInt(u16, endian);
     casefold.cwcf_exceptions = try allocator.alloc(u21, len);
     errdefer allocator.free(casefold.cwcf_exceptions);
-    for (0..len) |i| casefold.cwcf_exceptions[i] = @intCast(try reader.readInt(u24, endian));
+    for (0..len) |i| casefold.cwcf_exceptions[i] = @intCast(try reader.takeInt(u24, endian));
 }
 
 pub fn deinit(fdata: *const CaseFolding, allocator: mem.Allocator) void {

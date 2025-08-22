@@ -49,24 +49,30 @@ pub fn init(allocator: Allocator) Allocator.Error!GeneralCategories {
 pub fn setup(gencat: *GeneralCategories, allocator: Allocator) Allocator.Error!void {
     var z = try zstdembed.open(allocator, @embedFile("gencat"));
     defer z.deinit(allocator);
-    var reader = z.reader();
+    const bytes = z.readAllAlloc(allocator) catch |e| switch (e) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.OutOfMemory,
+    };
+    defer allocator.free(bytes);
+    var r_val: std.Io.Reader = .fixed(bytes);
+    const reader = &r_val;
 
     const endian = builtin.cpu.arch.endian();
 
-    const s1_len: u16 = reader.readInt(u16, endian) catch unreachable;
+    const s1_len: u16 = reader.takeInt(u16, endian) catch unreachable;
     gencat.s1 = try allocator.alloc(u16, s1_len);
     errdefer allocator.free(gencat.s1);
-    for (0..s1_len) |i| gencat.s1[i] = reader.readInt(u16, endian) catch unreachable;
+    for (0..s1_len) |i| gencat.s1[i] = reader.takeInt(u16, endian) catch unreachable;
 
-    const s2_len: u16 = reader.readInt(u16, endian) catch unreachable;
+    const s2_len: u16 = reader.takeInt(u16, endian) catch unreachable;
     gencat.s2 = try allocator.alloc(u5, s2_len);
     errdefer allocator.free(gencat.s2);
-    for (0..s2_len) |i| gencat.s2[i] = @intCast(reader.readInt(u8, endian) catch unreachable);
+    for (0..s2_len) |i| gencat.s2[i] = @intCast(reader.takeInt(u8, endian) catch unreachable);
 
-    const s3_len: u16 = reader.readInt(u8, endian) catch unreachable;
+    const s3_len: u16 = reader.takeInt(u8, endian) catch unreachable;
     gencat.s3 = try allocator.alloc(u5, s3_len);
     errdefer allocator.free(gencat.s3);
-    for (0..s3_len) |i| gencat.s3[i] = @intCast(reader.readInt(u8, endian) catch unreachable);
+    for (0..s3_len) |i| gencat.s3[i] = @intCast(reader.takeInt(u8, endian) catch unreachable);
 }
 
 pub fn deinit(gencat: *const GeneralCategories, allocator: mem.Allocator) void {

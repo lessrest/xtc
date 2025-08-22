@@ -39,21 +39,21 @@ pub fn setupWithGraphemes(dw: *DisplayWidth, allocator: Allocator, graphemes: Gr
 
 // Sets up the DisplayWidthData, leaving the GraphemeData undefined.
 pub fn setup(dw: *DisplayWidth, allocator: Allocator) Allocator.Error!void {
-    var z = try zstdembed.open(allocator, @embedFile("dwp"));
-    defer z.deinit(allocator);
-    var reader = z.reader();
+    const bytes = @embedFile("dwp");
+    var r_val: std.Io.Reader = .fixed(bytes);
+    const reader = &r_val;
 
     const endian = builtin.cpu.arch.endian();
 
-    const stage_1_len: u16 = reader.readInt(u16, endian) catch unreachable;
+    const stage_1_len: u16 = reader.takeInt(u16, endian) catch unreachable;
     dw.s1 = try allocator.alloc(u16, stage_1_len);
     errdefer allocator.free(dw.s1);
-    for (0..stage_1_len) |i| dw.s1[i] = reader.readInt(u16, endian) catch unreachable;
+    for (0..stage_1_len) |i| dw.s1[i] = reader.takeInt(u16, endian) catch unreachable;
 
-    const stage_2_len: u16 = reader.readInt(u16, endian) catch unreachable;
+    const stage_2_len: u16 = reader.takeInt(u16, endian) catch unreachable;
     dw.s2 = try allocator.alloc(i4, stage_2_len);
     errdefer allocator.free(dw.s2);
-    for (0..stage_2_len) |i| dw.s2[i] = @intCast(reader.readInt(i8, endian) catch unreachable);
+    for (0..stage_2_len) |i| dw.s2[i] = @intCast(reader.takeInt(i8, endian) catch unreachable);
 }
 
 pub fn deinit(dw: *const DisplayWidth, allocator: Allocator) void {

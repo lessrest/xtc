@@ -17,20 +17,26 @@ const Hangul = @This();
 pub fn init(allocator: mem.Allocator) !Hangul {
     var z = try zstdembed.open(allocator, @embedFile("hangul"));
     defer z.deinit(allocator);
-    var reader = z.reader();
+    const bytes = z.readAllAlloc(allocator) catch |e| switch (e) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.OutOfMemory,
+    };
+    defer allocator.free(bytes);
+    var r_val: std.Io.Reader = .fixed(bytes);
+    var reader = &r_val;
 
     const endian = builtin.cpu.arch.endian();
     var hangul = Hangul{};
 
-    const stage_1_len: u16 = try reader.readInt(u16, endian);
+    const stage_1_len: u16 = try reader.takeInt(u16, endian);
     hangul.s1 = try allocator.alloc(u16, stage_1_len);
     errdefer allocator.free(hangul.s1);
-    for (0..stage_1_len) |i| hangul.s1[i] = try reader.readInt(u16, endian);
+    for (0..stage_1_len) |i| hangul.s1[i] = try reader.takeInt(u16, endian);
 
-    const stage_2_len: u16 = try reader.readInt(u16, endian);
+    const stage_2_len: u16 = try reader.takeInt(u16, endian);
     hangul.s2 = try allocator.alloc(u3, stage_2_len);
     errdefer allocator.free(hangul.s2);
-    for (0..stage_2_len) |i| hangul.s2[i] = @intCast(try reader.readInt(u8, endian));
+    for (0..stage_2_len) |i| hangul.s2[i] = @intCast(try reader.takeInt(u8, endian));
 
     return hangul;
 }

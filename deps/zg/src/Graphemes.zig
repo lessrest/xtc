@@ -8,7 +8,7 @@ s2: []u16 = undefined,
 s3: []u8 = undefined,
 
 const Graphemes = @This();
-const zstdembed = @import("zstdembed");
+// Uncompressed embed path
 
 pub fn init(allocator: Allocator) Allocator.Error!Graphemes {
     var graphemes = Graphemes{};
@@ -17,26 +17,27 @@ pub fn init(allocator: Allocator) Allocator.Error!Graphemes {
 }
 
 pub fn setup(graphemes: *Graphemes, allocator: Allocator) Allocator.Error!void {
-    var z = try zstdembed.open(allocator, @embedFile("gbp"));
-    defer z.deinit(allocator);
-    var reader = z.reader();
+    const bytes = @embedFile("gbp");
+    var r_val: std.Io.Reader = .fixed(bytes);
+    const reader = &r_val;
 
     const endian = builtin.cpu.arch.endian();
 
-    const s1_len: u16 = reader.readInt(u16, endian) catch unreachable;
+    const s1_len: u16 = reader.takeInt(u16, endian) catch unreachable;
     graphemes.s1 = try allocator.alloc(u16, s1_len);
     errdefer allocator.free(graphemes.s1);
-    for (0..s1_len) |i| graphemes.s1[i] = reader.readInt(u16, endian) catch unreachable;
+    for (0..s1_len) |i| graphemes.s1[i] = reader.takeInt(u16, endian) catch unreachable;
 
-    const s2_len: u16 = reader.readInt(u16, endian) catch unreachable;
+    const s2_len: u16 = reader.takeInt(u16, endian) catch unreachable;
     graphemes.s2 = try allocator.alloc(u16, s2_len);
     errdefer allocator.free(graphemes.s2);
-    for (0..s2_len) |i| graphemes.s2[i] = reader.readInt(u16, endian) catch unreachable;
+    for (0..s2_len) |i| graphemes.s2[i] = reader.takeInt(u16, endian) catch unreachable;
 
-    const s3_len: u16 = reader.readInt(u16, endian) catch unreachable;
+    const s3_len: u16 = reader.takeInt(u16, endian) catch unreachable;
     graphemes.s3 = try allocator.alloc(u8, s3_len);
     errdefer allocator.free(graphemes.s3);
-    _ = reader.readAll(graphemes.s3) catch unreachable;
+    const src = reader.take(@intCast(s3_len)) catch unreachable;
+    @memcpy(graphemes.s3, src);
 }
 
 pub fn deinit(graphemes: *const Graphemes, allocator: Allocator) void {
