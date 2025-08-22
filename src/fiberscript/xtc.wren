@@ -23,10 +23,6 @@ class Core {
 class Document {
   static root { Element.fromIndex(0) }
 
-  static print() {
-    return Core.call("printDocument")
-  }
-
   static openWindow() {
     return Core.call("openWindow")
   }
@@ -53,6 +49,10 @@ class Element {
 
   classes=(string) {
     return Core.call("updateClass", { "nodeId": index, "className": string })
+  }
+
+  print() {
+    return Core.call("printElement", { "nodeId": index })
   }
 }
 

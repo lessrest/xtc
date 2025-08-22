@@ -345,6 +345,35 @@ pub fn writeAsPlainText(
     }
 }
 
+pub fn writeSubRectAsPlainText(
+    self: *const Raster,
+    writer: anytype,
+    glyphs: *const GlyphTable,
+    x: usize,
+    y: usize,
+    w: usize,
+    h: usize,
+) !void {
+    const x1 = @min(self.width, x + w);
+    const y1 = @min(self.height, y + h);
+    var yy: usize = y;
+    const glyph_data = self.cells.items(.glyph);
+    while (yy < y1) : (yy += 1) {
+        var xx: usize = x;
+        while (xx < x1) : (xx += 1) {
+            const gid = glyph_data[yy * self.width + xx];
+            if (gid <= 255) {
+                try writer.writeByte(@as(u8, @intCast(gid)));
+            } else if (glyphs.getSlice(gid)) |bytes| {
+                try writer.writeAll(bytes);
+            } else {
+                try writer.writeByte('?');
+            }
+        }
+        try writer.writeByte('\n');
+    }
+}
+
 pub fn plainTextDump(
     self: *const Raster,
     allocator: std.mem.Allocator,

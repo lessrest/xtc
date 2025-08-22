@@ -7,6 +7,8 @@ const OutputHandler = @import("output.zig").OutputHandler;
 const syscalls = @import("syscalls.zig");
 const dom = @import("../dom.zig");
 const WindowMod = @import("../Window.zig");
+const layout = @import("../layout.zig");
+const Painter = @import("../Painter.zig").Painter;
 const TrackingAllocator = @import("../lib/TrackingAllocator.zig");
 
 const ansi = @import("ansi");
@@ -352,10 +354,9 @@ pub fn documentSyscalls(comptime EngineType: type, comptime Context: type) type 
             try context.window.?.renderAndPresent(context.document, 0, stdout_writer);
         }
 
-        pub fn printDocument(engine: *EngineType, context: *Context, fiber: Fiber, args: struct {}) anyerror!void {
+        pub fn printElement(engine: *EngineType, context: *Context, fiber: Fiber, args: struct { nodeId: u32 }) anyerror!void {
             _ = fiber; // autofix
             _ = engine;
-            _ = args;
             if (context.window == null) {
                 const w = try context.document.alloc.create(WindowMod.Window);
                 w.* = try WindowMod.Window.init(context.document.alloc, .{
@@ -364,9 +365,35 @@ pub fn documentSyscalls(comptime EngineType: type, comptime Context: type) type 
                 });
                 context.window = w;
             }
+            const w = context.window.?;
+            w.state.back.clear();
+            var box_tree = try layout.allocateBoxTreeFromDOM(context.document.alloc, context.document, 0);
+            defer box_tree.deinit();
+            var layout_engine = layout.init(context.document.alloc, w.unicode, w.trace);
+            try layout_engine.layoutSubtree(&box_tree, context.document, box_tree.getNodeMut(0), .{
+                .x = 0,
+                .y = 0,
+                .w = w.opts.width,
+                .h = w.opts.height,
+            });
+            var painter = Painter.init(context.document.alloc, w.unicode, w.trace);
+            defer painter.deinit();
+            try painter.computePaintCommands(context.document, &box_tree, w.glyphs);
+            try w.state.back.rasterizeDisplayList(context.document.alloc, w.glyphs, &painter);
+
+            var rect = layout.Rect{ .x = 0, .y = 0, .w = 0, .h = 0 };
+            var found = false;
+            for (box_tree.nodes.items) |node| {
+                if (node.data.dom_id == args.nodeId) {
+                    rect = node.data.rect;
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) return;
+
             const stdout_writer = std.io.getStdOut().writer();
-            try context.window.?.render(context.document, 0);
-            try context.window.?.writeFullRaster(stdout_writer);
+            try w.state.back.writeSubRectAsPlainText(stdout_writer, w.glyphs, rect.x, rect.y, rect.w, rect.h);
         }
 
         pub fn requestRender(engine: *EngineType, context: *Context, fiber: Fiber, args: struct {}) anyerror!void {
