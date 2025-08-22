@@ -81,8 +81,7 @@ pub fn eventLoop(engine: *Engine, sc: *SyscallContext) !void {
         frame_fibers: bool,
         key_waiters: bool,
         key_events: bool,
-        http_head_waiters: bool,
-        http_read_waiters: bool,
+        http_waiters: bool,
         http_requests: bool,
 
         fn capture(sctx: *SyscallContext) Self {
@@ -92,8 +91,7 @@ pub fn eventLoop(engine: *Engine, sc: *SyscallContext) !void {
                 .frame_fibers = sctx.frame_fibers.items.len > 0,
                 .key_waiters = sctx.key_waiters.items.len > 0,
                 .key_events = sctx.key_events.items.len > 0,
-                .http_head_waiters = sctx.http.hasHeadWaiters(),
-                .http_read_waiters = sctx.http.hasReadWaiters(),
+                .http_waiters = sctx.http.hasWaiters(),
                 .http_requests = sctx.http.hasRequests(),
             };
         }
@@ -104,13 +102,12 @@ pub fn eventLoop(engine: *Engine, sc: *SyscallContext) !void {
                 a.frame_fibers == b.frame_fibers and
                 a.key_waiters == b.key_waiters and
                 a.key_events == b.key_events and
-                a.http_head_waiters == b.http_head_waiters and
-                a.http_read_waiters == b.http_read_waiters and
+                a.http_waiters == b.http_waiters and
                 a.http_requests == b.http_requests;
         }
 
         fn anyActive(self: Self) bool {
-            return self.window or self.sleep_timers or self.frame_fibers or self.key_waiters or self.key_events or self.http_head_waiters or self.http_read_waiters or self.http_requests;
+            return self.window or self.sleep_timers or self.frame_fibers or self.key_waiters or self.key_events or self.http_waiters or self.http_requests;
         }
 
         fn debugPrint(self: Self) void {
@@ -124,8 +121,7 @@ pub fn eventLoop(engine: *Engine, sc: *SyscallContext) !void {
             if (self.frame_fibers) { _ = out.print(" frame_fibers", .{}) catch {}; any = true; }
             if (self.key_waiters) { _ = out.print(" key_waiters", .{}) catch {}; any = true; }
             if (self.key_events) { _ = out.print(" key_events", .{}) catch {}; any = true; }
-            if (self.http_head_waiters) { _ = out.print(" http_head_waiters", .{}) catch {}; any = true; }
-            if (self.http_read_waiters) { _ = out.print(" http_read_waiters", .{}) catch {}; any = true; }
+            if (self.http_waiters) { _ = out.print(" http_waiters", .{}) catch {}; any = true; }
             if (self.http_requests) { _ = out.print(" http_requests", .{}) catch {}; any = true; }
             if (!any) _ = out.print(" idle", .{}) catch {};
             _ = out.print("\n", .{}) catch {};
@@ -305,6 +301,13 @@ pub fn eventLoop(engine: *Engine, sc: *SyscallContext) !void {
                         else => {},
                     }
                 }
+            }
+            
+            // Process HTTP request completions 
+            for (events.completions) |completion| {
+                std.debug.print("HTTP completion id={} success={}\n", .{ completion.request_id, completion.success });
+                // Remove the completed request from active requests
+                _ = sc.http.base.requests.remove(completion.request_id);
             }
         }
 

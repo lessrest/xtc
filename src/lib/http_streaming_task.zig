@@ -54,6 +54,15 @@ pub fn HttpStreamingTask(comptime Fiber: type) type {
         }
         
         pub fn deinit(self: *Self) void {
+            // Clean up HTTP payloads before base cleanup to avoid double-free
+            self.base.delivery_mutex.lock();
+            for (self.base.pending_deliveries.items) |delivery| {
+                delivery.payload.deinit(self.base.allocator);
+            }
+            // Clear the deliveries so base.deinit doesn't try to process them
+            self.base.pending_deliveries.clearAndFree(self.base.allocator);
+            self.base.delivery_mutex.unlock();
+            
             // Cancel any active HTTP tasks before cleanup
             if (self.pom) |pom| {
                 std.debug.print("DEBUG: HttpStreamingTask.deinit() - http_scope={}\n", .{self.http_scope});
@@ -121,13 +130,8 @@ pub fn HttpStreamingTask(comptime Fiber: type) type {
             return self.base.requests.count() > 0;
         }
         
-        /// Check if there are any head waiters (compatibility)
-        pub fn hasHeadWaiters(self: *Self) bool {
-            return self.base.waiters.count() > 0;
-        }
-        
-        /// Check if there are any read waiters (compatibility)
-        pub fn hasReadWaiters(self: *Self) bool {
+        /// Check if there are any waiters
+        pub fn hasWaiters(self: *Self) bool {
             return self.base.waiters.count() > 0;
         }
         

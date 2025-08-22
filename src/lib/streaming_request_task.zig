@@ -74,7 +74,8 @@ pub fn StreamingRequestTask(comptime Payload: type, comptime Fiber: type) type {
             defer self.delivery_mutex.unlock();
             
             for (self.pending_deliveries.items) |delivery| {
-                // Let payload clean itself up if it has a deinit
+                // Note: Payload cleanup is the responsibility of the wrapper type
+                // (e.g., HttpStreamingTask should clean HttpPayload via its deinit method)
                 _ = delivery;
             }
             self.pending_deliveries.deinit(self.allocator);
