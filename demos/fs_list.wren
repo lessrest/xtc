@@ -1,13 +1,13 @@
-import "fs" for FS
+import "fs" for Path
 
 fun walk(path) {
-  for (name in FS.list(path)) {
-    var child = path + "/" + name
+  for (name in path.list()) {
+    var child = path.join(name)
     System.print(child)
-    if (FS.isDir(child)) {
+    if (child.isDir()) {
       walk(child)
     }
   }
 }
 
-walk(".")
+walk(Path.cwd())

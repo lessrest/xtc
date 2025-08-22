@@ -733,6 +733,24 @@ pub fn documentSyscalls(comptime EngineType: type, comptime Context: type) type 
             const stat = try std.fs.cwd().statFile(args.path);
             return stat.kind == .directory;
         }
+
+        pub fn exists(engine: *EngineType, context: *Context, fiber: Fiber, args: struct { path: []const u8 }) anyerror!bool {
+            _ = engine;
+            _ = fiber;
+            _ = context;
+            _ = std.fs.cwd().statFile(args.path) catch |err| switch (err) {
+                error.FileNotFound, error.NotDir => return false,
+                else => return err,
+            };
+            return true;
+        }
+
+        pub fn remove(engine: *EngineType, context: *Context, fiber: Fiber, args: struct { path: []const u8 }) anyerror!void {
+            _ = engine;
+            _ = fiber;
+            _ = context;
+            try std.fs.cwd().deleteTree(args.path);
+        }
     };
 }
 
