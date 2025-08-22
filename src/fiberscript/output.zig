@@ -32,9 +32,12 @@ pub const OutputHandler = struct {
     /// Captures the text in an internal buffer for later retrieval.
     pub fn writeFn(self: *OutputHandler, vm: *c.VM, text: [*:0]const u8) callconv(.C) void {
         const str = std.mem.span(text);
+        self.write(vm, str);
+    }
 
+    pub fn write(self: *OutputHandler, vm: *c.VM, text: []const u8) void {
         const allocator = self.buffer.allocator();
-        self.current_output.appendSlice(allocator, str) catch {
+        self.current_output.appendSlice(allocator, text) catch {
             // If buffer is full, abort the fiber with an error
             const message = "output buffer full";
             c.wrenEnsureSlots(vm, 1);

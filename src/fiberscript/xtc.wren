@@ -18,18 +18,6 @@ class Core {
         args["operation"] = name
         return syscall(args)
     }
-
-    static print(message) {
-        var request = {
-            "operation": "Core.print",
-            "message": message
-        }
-        ring.submit(request)
-        ring.flush()
-        ring.wait(1)
-        var completions = ring.reap(1)
-        return completions.isEmpty ? null : completions[0]["result"]
-    }
 }
 
 class Document {

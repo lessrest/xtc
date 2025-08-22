@@ -203,6 +203,10 @@ pub fn Engine(configuration: Configuration) type {
             self.output_handler.writeFn(vm, text);
         }
 
+        pub fn write(self: *Self, text: []const u8) void {
+            self.output_handler.write(self.vm, text);
+        }
+
         /// C callback wrapper for error handling.
         fn errorFn(
             vm: *c.VM,
@@ -290,6 +294,12 @@ const Pending = syscalls.Pending;
 
 pub fn documentSyscalls(comptime EngineType: type, comptime Context: type) type {
     return struct {
+        pub fn print(engine: *EngineType, context: *Context, fiber: Fiber, args: struct { message: []const u8 }) anyerror!void {
+            _ = fiber; // autofix
+            _ = context;
+            engine.write(args.message);
+        }
+
         pub fn createElement(engine: *EngineType, context: *Context, fiber: Fiber, args: struct { style: []const u8 }) anyerror!dom.DomNodeId {
             _ = engine;
             _ = fiber;
@@ -468,8 +478,8 @@ test "we can call Core.call" {
 
     engine.runTopLevel("main",
         \\import "xtc" for Core
-        \\Core.call("print", { "message": "hello" })
-        \\Core.call("print", { "message": "hello" })
+        \\Core.call("print", { "message": "hello\n" })
+        \\Core.call("print", { "message": "hello\n" })
     ) catch {
         try engine.croak();
     };
