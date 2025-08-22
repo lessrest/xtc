@@ -43,7 +43,7 @@ pub const Dom = struct {
             .alloc = alloc,
             .headers = .{},
             .styles = StyleTable.init(alloc),
-            .text_arena = std.ArrayList(u8).init(alloc),
+            .text_arena = std.ArrayList(u8){},
             .debug_ids = std.AutoHashMap(DomNodeId, []const u8).init(alloc),
             .dirty = false,
         };
@@ -66,7 +66,7 @@ pub const Dom = struct {
     pub fn deinit(self: *Dom) void {
         self.headers.deinit(self.alloc);
         self.styles.deinit();
-        self.text_arena.deinit();
+        self.text_arena.deinit(self.alloc);
         var it = self.debug_ids.iterator();
         while (it.next()) |kv| {
             self.alloc.free(kv.value_ptr.*);
@@ -101,7 +101,7 @@ pub const Dom = struct {
     pub fn addText(self: *Dom, utf8: []const u8) !DomNodeId {
         const style_id = try self.styles.intern(self.alloc, defaultStyleRow());
         const off: u32 = @intCast(self.text_arena.items.len);
-        try self.text_arena.appendSlice(utf8);
+        try self.text_arena.appendSlice(self.alloc, utf8);
         const len: u32 = @intCast(utf8.len);
         const idx = try self.headers.addOne(self.alloc);
         self.headers.set(idx, .{
@@ -137,7 +137,7 @@ pub const Dom = struct {
 
         // Append new text to arena
         const off = self.text_arena.items.len;
-        try self.text_arena.appendSlice(new_text);
+        try self.text_arena.appendSlice(self.alloc, new_text);
         const len = new_text.len;
 
         // Update the text node's offset and length

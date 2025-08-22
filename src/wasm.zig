@@ -158,7 +158,7 @@ fn initializeComponents(allocator: std.mem.Allocator) !Components {
     errdefer glyphs.deinit();
 
     const trace = try allocator.create(Trace);
-    trace.* = @import("ansi").nest.treeNest(allocator, std.io.getStdErr().writer());
+    trace.* = @import("ansi").nest.stderr(allocator);
     trace.setEnabled(false);
 
     return Components{
@@ -192,8 +192,11 @@ extern fn js_performance_now() f64;
 
 // Export hello function
 export fn xtc_hello() void {
-    const stdout = std.io.getStdOut().writer();
-    stdout.print("XTC WASM Live Session Ready!\n", .{}) catch return;
+    var out_buf: [256]u8 = undefined;
+    var out_state = std.fs.File.stdout().writer(&out_buf);
+    const out: *std.Io.Writer = &out_state.interface;
+    out.print("XTC WASM Live Session Ready!\n", .{}) catch return;
+    out.flush() catch {};
 }
 
 // Initialize a live session
@@ -207,8 +210,11 @@ export fn xtc_init_session(xml_ptr: [*]const u8, xml_len: usize, width: u32, hei
 
     // Create new live session
     global_live_session = initLiveSessionWasm(xml, width, height) catch |err| {
-        const stderr = std.io.getStdErr().writer();
+        var err_buf: [256]u8 = undefined;
+        var err_state = std.fs.File.stderr().writer(&err_buf);
+        const stderr: *std.Io.Writer = &err_state.interface;
         stderr.print("Init session error: {}\n", .{err}) catch {};
+        stderr.flush() catch {};
         return -1;
     };
 
@@ -219,8 +225,11 @@ export fn xtc_init_session(xml_ptr: [*]const u8, xml_len: usize, width: u32, hei
 export fn xtc_process_frame() c_int {
     if (global_live_session) |*session| {
         const needs_render = session.processFrame() catch |err| {
-            const stderr = std.io.getStdErr().writer();
+            var err_buf: [256]u8 = undefined;
+            var err_state = std.fs.File.stderr().writer(&err_buf);
+            const stderr: *std.Io.Writer = &err_state.interface;
             stderr.print("Process frame error: {}\n", .{err}) catch {};
+            stderr.flush() catch {};
             return -1;
         };
         return if (needs_render) 1 else 0;
@@ -232,8 +241,11 @@ export fn xtc_process_frame() c_int {
 export fn xtc_render_frame() c_int {
     if (global_live_session) |*session| {
         session.render() catch |err| {
-            const stderr = std.io.getStdErr().writer();
+            var err_buf: [256]u8 = undefined;
+            var err_state = std.fs.File.stderr().writer(&err_buf);
+            const stderr: *std.Io.Writer = &err_state.interface;
             stderr.print("Render frame error: {}\n", .{err}) catch {};
+            stderr.flush() catch {};
             return -1;
         };
         return 0; // Success
@@ -245,8 +257,11 @@ export fn xtc_render_frame() c_int {
 export fn xtc_keypress(key: u8) c_int {
     if (global_live_session) |*session| {
         session.handleKeypress(key) catch |err| {
-            const stderr = std.io.getStdErr().writer();
+            var err_buf: [256]u8 = undefined;
+            var err_state = std.fs.File.stderr().writer(&err_buf);
+            const stderr: *std.Io.Writer = &err_state.interface;
             stderr.print("Keypress error: {}\n", .{err}) catch {};
+            stderr.flush() catch {};
             return -1;
         };
         return 0; // Success
@@ -258,8 +273,11 @@ export fn xtc_keypress(key: u8) c_int {
 export fn xtc_resize(width: u32, height: u32) c_int {
     if (global_live_session) |*session| {
         session.handleResize(width, height) catch |err| {
-            const stderr = std.io.getStdErr().writer();
+            var err_buf: [256]u8 = undefined;
+            var err_state = std.fs.File.stderr().writer(&err_buf);
+            const stderr: *std.Io.Writer = &err_state.interface;
             stderr.print("Resize error: {}\n", .{err}) catch {};
+            stderr.flush() catch {};
             return -1;
         };
         return 0; // Success
@@ -281,8 +299,11 @@ export fn xtc_render(xml_ptr: [*]const u8, xml_len: usize, width: u32, height: u
 
     // Use the WASM rendering pipeline with present()
     renderXmlWasm(xml, width, height) catch |err| {
-        const stdout = std.io.getStdOut().writer();
-        stdout.print("Render error: {}\n", .{err}) catch return;
+    var outb: [256]u8 = undefined;
+    var outs = std.fs.File.stdout().writer(&outb);
+    const stdout: *std.Io.Writer = &outs.interface;
+    stdout.print("Render error: {}\n", .{err}) catch return;
+    stdout.flush() catch {};
     };
 }
 

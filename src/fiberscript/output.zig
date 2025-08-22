@@ -30,7 +30,7 @@ pub const OutputHandler = struct {
     ///
     /// This is called when Wren executes System.print() or other output functions.
     /// Captures the text in an internal buffer for later retrieval.
-    pub fn writeFn(self: *OutputHandler, vm: *c.VM, text: [*:0]const u8) callconv(.C) void {
+    pub fn writeFn(self: *OutputHandler, vm: *c.VM, text: [*:0]const u8) callconv(.c) void {
         const str = std.mem.span(text);
         self.write(vm, str);
     }

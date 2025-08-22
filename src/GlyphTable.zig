@@ -10,8 +10,8 @@ pub const GlyphId = u32; // 0..=255 self-map to single-byte ASCII
 const Span = struct { off: u32, len: u8 };
 
 alloc: std.mem.Allocator,
-map: std.StringArrayHashMap(GlyphId),
-arena: std.ArrayList(u8),
+    map: std.StringArrayHashMap(GlyphId),
+    arena: std.ArrayList(u8),
 spans: std.MultiArrayList(Span), // index => (off,len), id == index
 
 pub fn init(allocator: std.mem.Allocator) !*GlyphTable {
@@ -24,22 +24,22 @@ pub fn init(allocator: std.mem.Allocator) !*GlyphTable {
             allocator,
             std.array_hash_map.StringContext{},
         ),
-        .arena = std.ArrayList(u8).init(allocator),
+        .arena = std.ArrayList(u8){},
         .spans = std.MultiArrayList(Span).empty,
     };
 
     // Prepopulate ASCII 0x00..0xFF as self-mapped one-byte spans
     try gt.spans.ensureTotalCapacity(allocator, 256);
-    try gt.arena.ensureTotalCapacity(256);
+    try gt.arena.ensureTotalCapacity(allocator, 256);
     try gt.map.ensureTotalCapacity(256);
     errdefer gt.map.deinit();
-    errdefer gt.arena.deinit();
+    errdefer gt.arena.deinit(allocator);
     errdefer gt.spans.deinit(allocator);
 
     var ascii_i: usize = 0;
     while (ascii_i < 256) : (ascii_i += 1) {
         const off: u32 = @intCast(gt.arena.items.len);
-        try gt.arena.append(@as(u8, @intCast(ascii_i)));
+        try gt.arena.append(allocator, @as(u8, @intCast(ascii_i)));
         gt.spans.appendAssumeCapacity(.{ .off = off, .len = 1 });
         const key = gt.arena.items[@as(usize, off) .. @as(usize, off) + 1];
         gt.map.putAssumeCapacity(key, @as(GlyphId, @intCast(ascii_i)));
@@ -49,7 +49,7 @@ pub fn init(allocator: std.mem.Allocator) !*GlyphTable {
 
 pub fn deinit(self: *GlyphTable) void {
     self.map.deinit();
-    self.arena.deinit();
+    self.arena.deinit(self.alloc);
     self.spans.deinit(self.alloc);
     self.alloc.destroy(self);
 }
@@ -67,7 +67,7 @@ pub fn intern(self: *GlyphTable, allocator: std.mem.Allocator, bytes: []const u8
     if (bytes.len > std.math.maxInt(u8)) return error.GlyphTooLong;
 
     const off_u32: u32 = @intCast(self.arena.items.len);
-    try self.arena.appendSlice(bytes);
+    try self.arena.appendSlice(allocator, bytes);
     const len_u8: u8 = @intCast(bytes.len);
     try self.spans.append(allocator, .{ .off = off_u32, .len = len_u8 });
     const id: GlyphId = @intCast(self.spans.len - 1);

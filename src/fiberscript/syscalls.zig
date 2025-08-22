@@ -1,5 +1,9 @@
 const std = @import("std");
 
+comptime {
+    @setEvalBranchQuota(200000);
+}
+
 /// Marker type for syscalls that complete asynchronously.
 pub const Pending = struct {};
 
@@ -69,10 +73,11 @@ pub fn ResultUnion(comptime Syscalls: type) type {
             if (@typeInfo(return_type) == .error_union) {
                 return_type = @typeInfo(return_type).error_union.payload;
             }
-            const alignment = if (return_type == void) 0 else @alignOf(return_type);
+            const actual_type = if (return_type == void) u8 else return_type;
+            const alignment = @alignOf(actual_type);
             union_fields[idx] = .{
                 .name = decl.name,
-                .type = return_type,
+                .type = actual_type,
                 .alignment = alignment,
             };
             enum_fields[idx] = .{ .name = decl.name, .value = idx };
@@ -101,7 +106,7 @@ pub fn ResultUnion(comptime Syscalls: type) type {
 pub fn SyscallResult(comptime Syscalls: type) type {
     return union(enum) {
         immediate: ResultUnion(Syscalls),
-        pending: void,
+        pending: Pending,
     };
 }
 
@@ -201,7 +206,8 @@ pub fn pascalCase(comptime name: []const u8) []const u8 {
         name[0] - ('a' - 'A')
     else
         name[0];
-    return std.fmt.comptimePrint("{c}{s}", .{ first, name[1..] });
+    const head = [_]u8{first};
+    return head ++ name[1..];
 }
 
 /// Generate a dispatcher that bridges Wren fiber yields to syscall implementations.
@@ -210,6 +216,9 @@ pub fn generateDispatcher(
     comptime Engine: type,
     comptime Context: type,
 ) type {
+    comptime {
+        @setEvalBranchQuota(200000);
+    }
     return struct {
         const RequestType = RequestUnion(Syscalls);
         const ResultType = ResultUnion(Syscalls);
@@ -220,29 +229,32 @@ pub fn generateDispatcher(
 
         /// Process a single request from a yielding fiber
         pub fn dispatch(self: *@This(), request: RequestType, fiber: *c.Handle) !DispatchResult {
-            const decls = comptime std.meta.declarations(Syscalls);
             switch (request) {
                 inline else => |payload, tag| {
-                    inline for (decls) |decl| {
-                        const value = @field(Syscalls, decl.name);
-                        const value_type = @TypeOf(value);
-                        if (@typeInfo(value_type) == .@"fn" and comptime std.mem.eql(u8, @tagName(tag), decl.name)) {
-                            const fn_info = @typeInfo(value_type).@"fn";
-                            const ReturnType = fn_info.return_type.?;
-                            if (ReturnType == Pending) {
-                                try value(self.engine, self.context, fiber, payload);
-                                return .{ .pending = {} };
-                            } else if (ReturnType == void) {
-                                try value(self.engine, self.context, fiber, payload);
-                                return .{ .immediate = @unionInit(ResultType, decl.name, {}) };
-                            } else {
-                                const val = try value(self.engine, self.context, fiber, payload);
-                                return .{ .immediate = @unionInit(ResultType, decl.name, val) };
-                            }
+                    const name = @tagName(tag);
+                    const value = @field(Syscalls, name);
+                    const value_type = @TypeOf(value);
+                    if (@typeInfo(value_type) != .@"fn") return error.UnknownSyscall;
+                    const fn_info = @typeInfo(value_type).@"fn";
+                    const RawReturn = fn_info.return_type.?;
+                    const ReturnType = if (@typeInfo(RawReturn) == .error_union)
+                        @typeInfo(RawReturn).error_union.payload
+                    else
+                        RawReturn;
+                    if (ReturnType == Pending) {
+                        _ = try value(self.engine, self.context, fiber, payload);
+                        return .{ .pending = Pending{} };
+                    } else if (ReturnType == void) {
+                        try value(self.engine, self.context, fiber, payload);
+                        return .{ .immediate = @unionInit(ResultType, name, 0) };
+                    } else {
+                        const val = try value(self.engine, self.context, fiber, payload);
+                        if (ReturnType == void) {
+                            return .{ .immediate = @unionInit(ResultType, name, 0) };
+                        } else {
+                            return .{ .immediate = @unionInit(ResultType, name, val) };
                         }
                     }
-                    std.debug.print("unknown syscall: {any}\n", .{tag});
-                    return error.UnknownSyscall;
                 },
             }
         }
@@ -256,14 +268,15 @@ const testing = std.testing;
 const TestEngine = struct {};
 
 const TestContext = struct {
+    allocator: std.mem.Allocator,
     output_buffer: std.ArrayList(u8),
 
     pub fn init(allocator: std.mem.Allocator) TestContext {
-        return .{ .output_buffer = std.ArrayList(u8).init(allocator) };
+        return .{ .allocator = allocator, .output_buffer = std.ArrayList(u8){} };
     }
 
     pub fn deinit(self: *TestContext) void {
-        self.output_buffer.deinit();
+        self.output_buffer.deinit(self.allocator);
     }
 };
 
@@ -271,7 +284,7 @@ const TestSyscalls = struct {
     pub fn print(engine: *TestEngine, context: *TestContext, fiber: Fiber, payload: struct { message: []const u8 }) anyerror![]const u8 {
         _ = fiber; // autofix
         _ = engine;
-        try context.output_buffer.appendSlice(payload.message);
+        try context.output_buffer.appendSlice(context.allocator, payload.message);
         return payload.message;
     }
 

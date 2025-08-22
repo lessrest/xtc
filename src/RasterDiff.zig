@@ -233,12 +233,12 @@ test "raster diff iterator detects runs of changes with consistent colors" {
     back.setFg(2, 0, red);
     back.setFg(3, 0, red);
 
-    var runs = std.ArrayList(ChangeRun).init(al);
-    defer runs.deinit();
+    var runs = std.ArrayList(ChangeRun){};
+    defer runs.deinit(al);
 
     var iter = iterateChanges(&front, &back);
     while (iter.next()) |run| {
-        try runs.append(run);
+        try runs.append(al, run);
     }
 
     // Should have exactly one run covering positions 1-3
@@ -263,7 +263,7 @@ test "raster diff iterator detects runs of changes with consistent colors" {
     runs.clearRetainingCapacity();
     iter = iterateChanges(&front, &back);
     while (iter.next()) |r| {
-        try runs.append(r);
+        try runs.append(al, r);
     }
     try std.testing.expectEqual(@as(usize, 0), runs.items.len);
 }

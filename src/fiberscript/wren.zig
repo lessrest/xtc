@@ -535,7 +535,7 @@ fn Callback(comptime T: type) type {
                         .@"fn" = .{
                             .return_type = fn_info.return_type,
                             .params = fn_info.params,
-                            .calling_convention = .C,
+                            .calling_convention = .c,
                             .is_generic = false,
                             .is_var_args = false,
                         },

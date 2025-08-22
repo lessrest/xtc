@@ -296,13 +296,13 @@ pub fn Dank(comptime Writer: type) type {
         // Source block with box drawing borders
         pub fn sourceBlock(self: Self, code: []const u8, highlight_line: ?u64, highlight_col: ?u64, context_lines: u32) !void {
             var lines = std.mem.splitScalar(u8, code, '\n');
-            var line_buf = std.ArrayList([]const u8).init(self.allocator);
-            defer line_buf.deinit();
+            var line_buf = std.ArrayList([]const u8){};
+            defer line_buf.deinit(self.allocator);
             var longest_line: usize = 0;
 
             // Collect all lines
             while (lines.next()) |line| {
-                try line_buf.append(line);
+                try line_buf.append(self.allocator, line);
             }
 
             const total_lines = line_buf.items.len;

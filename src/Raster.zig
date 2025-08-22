@@ -379,8 +379,8 @@ pub fn plainTextDump(
     allocator: std.mem.Allocator,
     glyphs: *const GlyphTable,
 ) ![]u8 {
-    var buf = std.ArrayList(u8).init(allocator);
-    defer buf.deinit();
-    try self.writeAsPlainText(buf.writer(), glyphs);
-    return buf.toOwnedSlice();
+    var buf = std.ArrayList(u8){};
+    defer buf.deinit(allocator);
+    try self.writeAsPlainText(buf.writer(allocator), glyphs);
+    return buf.toOwnedSlice(allocator);
 }

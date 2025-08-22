@@ -1,11 +1,25 @@
-pub usingnamespace @import("AnsiWriter.zig");
-pub usingnamespace @import("TreePrinter.zig");
+// Zig 0.15: usingnamespace removed; expose modules explicitly
+pub const AnsiWriter = @import("AnsiWriter.zig");
+pub const TreePrinter = @import("TreePrinter.zig");
 pub const stdio = @import("stdio.zig");
 pub const nest = @import("treenest.zig");
 pub const dank = @import("dank.zig");
 pub const abort = @import("abort.zig");
 
-pub const FileTrace = nest.TreeNest(std.fs.File.Writer);
+pub const FileTrace = nest.TreeNest(*std.Io.Writer);
+
+// Shims to preserve previous usingnamespace API
+pub fn stdout() AnsiWriter.StdoutAnsiWriter {
+    return AnsiWriter.stdout();
+}
+
+pub fn arrayListWriter(list: *std.ArrayList(u8), allocator: std.mem.Allocator) AnsiWriter.ArrayListAnsiWriter {
+    return AnsiWriter.arrayListWriter(list, allocator);
+}
+
+pub fn arrayListWriterNoColor(list: *std.ArrayList(u8), allocator: std.mem.Allocator) AnsiWriter.ArrayListAnsiWriter {
+    return AnsiWriter.arrayListWriterNoColor(list, allocator);
+}
 
 pub fn stderrTrace(allocator: std.mem.Allocator) FileTrace {
     return nest.stderr(allocator);
@@ -30,10 +44,13 @@ pub const panic = struct {
         std.debug.lockStdErr();
         defer std.debug.unlockStdErr();
 
-        const stderr = std.io.getStdErr().writer();
+        var stderr_buf: [256]u8 = undefined;
+        var stderr_state = std.fs.File.stderr().writer(&stderr_buf);
+        const stderr: *std.Io.Writer = &stderr_state.interface;
         // _ = stderr.write("\x1b[0m\x1b[?25h\x1b[?1049l\n") catch {};
 
         _ = stderr.writeAll(msg) catch {};
+        _ = stderr.flush() catch {};
 
         nosuspend abort.do_abort(ra orelse @returnAddress()) catch {};
         std.posix.exit(1);
@@ -103,6 +120,10 @@ pub const panic = struct {
         call("integer overflow", null);
     }
 
+    pub fn integerOutOfBounds() noreturn {
+        call("integer out of bounds", null);
+    }
+
     pub fn shlOverflow() noreturn {
         call("left shift overflowed bits", null);
     }
@@ -141,6 +162,10 @@ pub const panic = struct {
 
     pub fn memcpyLenMismatch() noreturn {
         call("@memcpy arguments have non-equal lengths", null);
+    }
+
+    pub fn copyLenMismatch() noreturn {
+        call("copy arguments have non-equal lengths", null);
     }
 
     pub fn memcpyAlias() noreturn {

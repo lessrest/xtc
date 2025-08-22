@@ -104,10 +104,10 @@ pub fn layoutExample(xml_input: []const u8, want: []const u8) !void {
     const al = arena.allocator();
 
     const want_trim = std.mem.trim(u8, want, "\n");
-    var want_lines = std.ArrayList([]const u8).init(al);
+    var want_lines = std.ArrayList([]const u8){};
     var itw = std.mem.splitScalar(u8, want_trim, '\n');
     while (itw.next()) |line| {
-        try want_lines.append(line);
+        try want_lines.append(al, line);
     }
 
     try std.testing.expect(want_lines.items.len > 0);
@@ -123,9 +123,9 @@ pub fn layoutExample(xml_input: []const u8, want: []const u8) !void {
 
     const got = try renderMarkupToText(al, xml_input, width, height);
     const got_trim = std.mem.trim(u8, got, "\n");
-    var got_lines = std.ArrayList([]const u8).init(al);
+    var got_lines = std.ArrayList([]const u8){};
     var itg = std.mem.splitScalar(u8, got_trim, '\n');
-    while (itg.next()) |line| try got_lines.append(line);
+    while (itg.next()) |line| try got_lines.append(al, line);
 
     try std.testing.expectEqual(@as(usize, height), got_lines.items.len);
 

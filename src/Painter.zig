@@ -14,6 +14,7 @@ const rgba8 = paint.rgba8;
 const PaintOp = paint.PaintOp;
 
 pub const Painter = struct {
+    allocator: std.mem.Allocator,
     ops: std.ArrayList(PaintOp),
     unicode: *const Unicode,
     trace: *Trace,
@@ -24,7 +25,8 @@ pub const Painter = struct {
         trace: *Trace,
     ) Painter {
         return .{
-            .ops = std.ArrayList(PaintOp).init(allocator),
+            .allocator = allocator,
+            .ops = std.ArrayList(PaintOp){},
             .unicode = unicode,
             .trace = trace,
         };
@@ -33,16 +35,16 @@ pub const Painter = struct {
     pub fn deinit(self: *Painter) void {
         for (self.ops.items) |op| switch (op) {
             .GlyphRun => |gr| {
-                self.ops.allocator.free(gr.glyphs);
+                self.allocator.free(gr.glyphs);
             },
             else => {},
         };
-        self.ops.deinit();
+        self.ops.deinit(self.allocator);
         self.* = undefined;
     }
 
     pub fn push(self: *Painter, op: PaintOp) !void {
-        try self.ops.append(op);
+        try self.ops.append(self.allocator, op);
     }
 
     pub fn computePaintCommands(
@@ -388,8 +390,8 @@ pub const Painter = struct {
             .truncate_to_fit = truncate_to_fit,
         });
 
-        var glyph_ids = std.ArrayList(GlyphId).init(self.ops.allocator);
-        defer glyph_ids.deinit();
+        var glyph_ids = std.ArrayList(GlyphId){};
+        defer glyph_ids.deinit(self.allocator);
 
         var grapheme_iter = self.unicode.graphemeClusterIterator(text_bytes);
         var accumulated_width: usize = 0;
@@ -410,8 +412,8 @@ pub const Painter = struct {
             }
 
             accumulated_width += grapheme_width;
-            const glyph_id = try glyphs.intern(self.ops.allocator, grapheme_bytes);
-            try glyph_ids.append(glyph_id);
+            const glyph_id = try glyphs.intern(self.allocator, grapheme_bytes);
+            try glyph_ids.append(self.allocator, glyph_id);
         }
 
         self.trace.fields("glyph-run-stats", .{
@@ -425,7 +427,7 @@ pub const Painter = struct {
             return .{ .run = &[_]GlyphId{}, .width_cols = 0 };
         }
 
-        const final_run = try self.ops.allocator.alloc(GlyphId, glyph_ids.items.len);
+        const final_run = try self.allocator.alloc(GlyphId, glyph_ids.items.len);
         std.mem.copyForwards(GlyphId, final_run, glyph_ids.items);
 
         const final_width_cols: usize = if (truncate_to_fit)

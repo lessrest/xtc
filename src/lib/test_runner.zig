@@ -12,7 +12,7 @@ const BORDER = "=" ** 80;
 // use in custom panic handler
 var current_test: ?*TestCase = null;
 
-const Tree = treenest.TreeNest(std.fs.File.Writer);
+const Tree = treenest.TreeNest(*std.Io.Writer);
 const Dank = dank.Dank(std.fs.File.Writer);
 
 var current_tree: *Tree = undefined;
@@ -48,8 +48,8 @@ const TestCase = struct {
         timing.startTiming();
         defer _ = timing.endTiming(self.friendly_name);
 
-        var lines = std.ArrayList(stdio.Line).init(allocator);
-        defer lines.deinit();
+        var lines = std.ArrayList(stdio.Line){};
+        defer lines.deinit(allocator);
 
         const DebugAllocator = @TypeOf(std.testing.allocator_instance);
         std.testing.allocator_instance = DebugAllocator.init;
@@ -76,12 +76,12 @@ const TestCase = struct {
             if (@errorReturnTrace()) |trace| {
                 self.stack_trace = try copyStackTrace(allocator, trace.*);
             }
-            try failures.append(self);
+            try failures.append(allocator, self);
         }
 
         self.duration_ns = timing.endTiming(self.friendly_name);
 
-        self.output = try lines.toOwnedSlice();
+        self.output = try lines.toOwnedSlice(allocator);
 
         if (std.testing.allocator_instance.deinit() == .leak) {
             self.status = .leak;
@@ -128,6 +128,7 @@ fn copyStackTrace(allocator: Allocator, trace: std.builtin.StackTrace) !std.buil
 const Status = enum { pending, pass, fail, skip, leak };
 
 const TestGroup = struct {
+    allocator: Allocator,
     name: []const u8,
     path: []const u8,
     tests: std.ArrayList(TestCase),
@@ -136,30 +137,31 @@ const TestGroup = struct {
 
     fn init(allocator: Allocator, path: []const u8) TestGroup {
         return .{
+            .allocator = allocator,
             .name = std.fs.path.basename(path),
             .path = path,
-            .tests = std.ArrayList(TestCase).init(allocator),
-            .setup_funcs = std.ArrayList(*const fn () anyerror!void).init(allocator),
-            .teardown_funcs = std.ArrayList(*const fn () anyerror!void).init(allocator),
+            .tests = std.ArrayList(TestCase){},
+            .setup_funcs = std.ArrayList(*const fn () anyerror!void){},
+            .teardown_funcs = std.ArrayList(*const fn () anyerror!void){},
         };
     }
 
     fn deinit(self: *TestGroup) void {
-        self.tests.deinit();
-        self.setup_funcs.deinit();
-        self.teardown_funcs.deinit();
+        self.tests.deinit(self.allocator);
+        self.setup_funcs.deinit(self.allocator);
+        self.teardown_funcs.deinit(self.allocator);
     }
 
     fn addTest(self: *TestGroup, test_case: TestCase) !void {
-        try self.tests.append(test_case);
+        try self.tests.append(self.allocator, test_case);
     }
 
     fn addSetup(self: *TestGroup, func: *const fn () anyerror!void) !void {
-        try self.setup_funcs.append(func);
+        try self.setup_funcs.append(self.allocator, func);
     }
 
     fn addTeardown(self: *TestGroup, func: *const fn () anyerror!void) !void {
-        try self.teardown_funcs.append(func);
+        try self.teardown_funcs.append(self.allocator, func);
     }
 
     fn run(
@@ -277,10 +279,10 @@ const TestSuite = struct {
     fn init(allocator: Allocator) !TestSuite {
         return .{
             .allocator = allocator,
-            .groups = std.ArrayList(TestGroup).init(allocator),
+            .groups = std.ArrayList(TestGroup){},
             .env = Env.init(allocator),
             .slowest = SlowTracker.init(allocator, 5),
-            .failures = std.ArrayList(*TestCase).init(allocator),
+            .failures = std.ArrayList(*TestCase){},
         };
     }
 
@@ -288,10 +290,10 @@ const TestSuite = struct {
         for (self.groups.items) |*group| {
             group.deinit();
         }
-        self.groups.deinit();
+        self.groups.deinit(self.allocator);
         self.env.deinit(self.allocator);
         self.slowest.deinit();
-        self.failures.deinit();
+        self.failures.deinit(self.allocator);
     }
 
     fn buildFromTestFunctions(self: *TestSuite) !void {
@@ -313,7 +315,7 @@ const TestSuite = struct {
                 g
             else blk: {
                 const new_group = TestGroup.init(self.allocator, path);
-                try self.groups.append(new_group);
+                try self.groups.append(self.allocator, new_group);
                 const group_ptr = &self.groups.items[self.groups.items.len - 1];
                 try group_map.put(path, group_ptr);
                 break :blk group_ptr;
@@ -349,7 +351,9 @@ const TestSuite = struct {
     }
 
     fn run(self: *TestSuite) !void {
-        const stdout = std.io.getStdOut().writer();
+        var out_buf: [1024]u8 = undefined;
+        var out_state = std.fs.File.stdout().writer(&out_buf);
+        const stdout: *std.Io.Writer = &out_state.interface;
         var tree = treenest.treeNest(self.allocator, stdout);
         defer tree.deinit();
 

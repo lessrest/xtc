@@ -11,7 +11,7 @@ test "sleep syscall schedules timer" {
 
     var document = try dom.Dom.init(allocator);
     defer document.deinit();
-    var sc = SyscallContext{ .allocator = allocator, .document = document };
+    var sc = SyscallContext.init(allocator, document);
 
     var engine = try Engine.init(allocator, .{ .syscall_context = &sc });
     defer engine.deinit();
@@ -38,7 +38,7 @@ test "sleep resumes fiber" {
 
     var document = try dom.Dom.init(allocator);
     defer document.deinit();
-    var sc = SyscallContext{ .allocator = allocator, .document = document };
+    var sc = SyscallContext.init(allocator, document);
 
     var engine = try Engine.init(allocator, .{ .syscall_context = &sc });
     defer engine.deinit();

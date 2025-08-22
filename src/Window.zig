@@ -40,7 +40,7 @@ pub const Window = struct {
         errdefer glyphs.deinit();
 
         const trace = try allocator.create(Trace);
-        trace.* = @import("ansi").nest.treeNest(allocator, std.io.getStdErr().writer());
+        trace.* = @import("ansi").nest.stderr(allocator);
         trace.setEnabled(false);
 
         // Rasters
@@ -72,6 +72,7 @@ pub const Window = struct {
             ansi_writer.exitAlternateScreen() catch {};
             ansi_writer.resetStyle() catch {};
             ansi_writer.showCursor() catch {};
+            _ = ansi_writer.writer.interface.flush() catch {};
         }
     }
 
@@ -109,10 +110,10 @@ pub const Window = struct {
     }
 
     pub fn present(self: *Window, writer: anytype) !void {
-        var buffer = std.ArrayList(u8).init(self.allocator);
-        defer buffer.deinit();
+        var buffer = std.ArrayList(u8){};
+        defer buffer.deinit(self.allocator);
 
-        var ansi_writer = ansi.arrayListWriter(&buffer);
+        var ansi_writer = ansi.arrayListWriter(&buffer, self.allocator);
         try ansi_writer.resetStyle();
 
         if (self.state.needs_clear) {
@@ -139,6 +140,9 @@ pub const Window = struct {
 
         try ansi_writer.resetStyle();
         try writer.writeAll(buffer.items);
+        if (@TypeOf(writer) == *std.Io.Writer) {
+            try writer.flush();
+        }
         std.mem.swap(Raster, &self.state.front, &self.state.back);
     }
 

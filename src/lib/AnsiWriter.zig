@@ -31,6 +31,22 @@ pub fn AnsiWriter(comptime WriterType: type) type {
         writer: WriterType,
         no_color: bool = false,
 
+        inline fn writeAllGeneric(self: *Self, bytes: []const u8) !void {
+            if (comptime @hasField(WriterType, "interface")) {
+                try (&self.writer.interface).writeAll(bytes);
+            } else {
+                try self.writer.writeAll(bytes);
+            }
+        }
+
+        inline fn printGeneric(self: *Self, comptime fmt: []const u8, args: anytype) !void {
+            if (comptime @hasField(WriterType, "interface")) {
+                try (&self.writer.interface).print(fmt, args);
+            } else {
+                try self.writer.print(fmt, args);
+            }
+        }
+
         pub fn init(writer: WriterType) Self {
             return .{ .writer = writer, .no_color = false };
         }
@@ -45,62 +61,62 @@ pub fn AnsiWriter(comptime WriterType: type) type {
 
         // Screen buffer management
         pub fn enterAlternateScreen(self: *Self) !void {
-            try self.writer.writeAll("\x1b[?1049h");
+            try self.writeAllGeneric("\x1b[?1049h");
         }
 
         pub fn exitAlternateScreen(self: *Self) !void {
-            try self.writer.writeAll("\x1b[?1049l");
+            try self.writeAllGeneric("\x1b[?1049l");
         }
 
         pub fn clearScreen(self: *Self) !void {
-            try self.writer.writeAll("\x1b[2J");
+            try self.writeAllGeneric("\x1b[2J");
         }
 
         pub fn moveCursorHome(self: *Self) !void {
-            try self.writer.writeAll("\x1b[H");
+            try self.writeAllGeneric("\x1b[H");
         }
 
         // Cursor management
         pub fn hideCursor(self: *Self) !void {
-            try self.writer.writeAll("\x1b[?25l");
+            try self.writeAllGeneric("\x1b[?25l");
         }
 
         pub fn showCursor(self: *Self) !void {
-            try self.writer.writeAll("\x1b[?25h");
+            try self.writeAllGeneric("\x1b[?25h");
         }
 
         pub fn moveCursor(self: *Self, row: usize, col: usize) !void {
-            try self.writer.print("\x1b[{d};{d}H", .{ row, col });
+            try self.printGeneric("\x1b[{d};{d}H", .{ row, col });
         }
 
         // Style and color management
         pub fn resetStyle(self: *Self) !void {
             if (!self.no_color) {
-                try self.writer.writeAll("\x1b[0m");
+                try self.writeAllGeneric("\x1b[0m");
             }
         }
 
         pub fn setBold(self: *Self) !void {
             if (!self.no_color) {
-                try self.writer.writeAll("\x1b[1m");
+                try self.writeAllGeneric("\x1b[1m");
             }
         }
 
         pub fn resetBold(self: *Self) !void {
             if (!self.no_color) {
-                try self.writer.writeAll("\x1b[22m");
+                try self.writeAllGeneric("\x1b[22m");
             }
         }
 
         pub fn setForegroundRgb(self: *Self, r: u8, g: u8, b: u8) !void {
             if (!self.no_color) {
-                try self.writer.print("\x1b[38;2;{d};{d};{d}m", .{ r, g, b });
+                try self.printGeneric("\x1b[38;2;{d};{d};{d}m", .{ r, g, b });
             }
         }
 
         pub fn setBackgroundRgb(self: *Self, r: u8, g: u8, b: u8) !void {
             if (!self.no_color) {
-                try self.writer.print("\x1b[48;2;{d};{d};{d}m", .{ r, g, b });
+                try self.printGeneric("\x1b[48;2;{d};{d};{d}m", .{ r, g, b });
             }
         }
 
@@ -114,13 +130,13 @@ pub fn AnsiWriter(comptime WriterType: type) type {
 
         pub fn resetForeground(self: *Self) !void {
             if (!self.no_color) {
-                try self.writer.writeAll("\x1b[39m");
+                try self.writeAllGeneric("\x1b[39m");
             }
         }
 
         pub fn resetBackground(self: *Self) !void {
             if (!self.no_color) {
-                try self.writer.writeAll("\x1b[49m");
+                try self.writeAllGeneric("\x1b[49m");
             }
         }
 
@@ -140,24 +156,28 @@ pub fn AnsiWriter(comptime WriterType: type) type {
 
         // Direct writer access for other content
         pub fn write(self: *Self, bytes: []const u8) !usize {
-            return self.writer.write(bytes);
+            if (comptime @hasField(WriterType, "interface")) {
+                return (&self.writer.interface).write(bytes);
+            } else {
+                return self.writer.write(bytes);
+            }
         }
 
         pub fn writeAll(self: *Self, bytes: []const u8) !void {
-            try self.writer.writeAll(bytes);
+            try self.writeAllGeneric(bytes);
         }
 
         pub fn print(self: *Self, comptime format: []const u8, args: anytype) !void {
-            try self.writer.print(format, args);
+            try self.printGeneric(format, args);
         }
 
         // Helper to write glyph IDs using a glyph table
         pub fn writeGlyphs(self: *Self, glyphs: []const GlyphId, glyph_table: anytype) !void {
             for (glyphs) |gid| {
                 if (glyph_table.getSlice(gid)) |bytes| {
-                    try self.writeAll(bytes);
+                    try self.writeAllGeneric(bytes);
                 } else {
-                    try self.writeAll("?");
+                    try self.writeAllGeneric("?");
                 }
             }
         }
@@ -165,20 +185,20 @@ pub fn AnsiWriter(comptime WriterType: type) type {
         // Convenience methods for styled text writing
         pub fn writeBold(self: *Self, text: []const u8) !void {
             try self.setBold();
-            try self.writeAll(text);
+            try self.writeAllGeneric(text);
             try self.resetStyle();
         }
 
         pub fn writeColoredText(self: *Self, text: []const u8, r: u8, g: u8, b: u8) !void {
             try self.setForegroundRgb(r, g, b);
-            try self.writeAll(text);
+            try self.writeAllGeneric(text);
             try self.resetStyle();
         }
 
         pub fn writeBoldColored(self: *Self, text: []const u8, r: u8, g: u8, b: u8) !void {
             try self.setBold();
             try self.setForegroundRgb(r, g, b);
-            try self.writeAll(text);
+            try self.writeAllGeneric(text);
             try self.resetStyle();
         }
     };
@@ -188,26 +208,39 @@ pub fn AnsiWriter(comptime WriterType: type) type {
 pub const StdoutAnsiWriter = AnsiWriter(std.fs.File.Writer);
 pub const ArrayListAnsiWriter = AnsiWriter(std.ArrayList(u8).Writer);
 
+// Global stdout writer state for 0.15. Avoids stack-buffer lifetime bugs.
+var g_stdout_buf: [4096]u8 = undefined;
+var g_stdout_state: std.fs.File.Writer = undefined;
+var g_stdout_inited: bool = false;
+
+fn ensureStdout() void {
+    if (!g_stdout_inited) {
+        g_stdout_state = std.fs.File.stdout().writer(&g_stdout_buf);
+        g_stdout_inited = true;
+    }
+}
+
 /// Convenience function to create an ANSI writer from stdout
 pub fn stdout() StdoutAnsiWriter {
-    return StdoutAnsiWriter.init(std.io.getStdOut().writer());
+    ensureStdout();
+    return StdoutAnsiWriter.init(g_stdout_state);
 }
 
 /// Convenience function to create an ANSI writer from an ArrayList
-pub fn arrayListWriter(list: *std.ArrayList(u8)) ArrayListAnsiWriter {
-    return ArrayListAnsiWriter.init(list.writer());
+pub fn arrayListWriter(list: *std.ArrayList(u8), allocator: std.mem.Allocator) ArrayListAnsiWriter {
+    return ArrayListAnsiWriter.init(list.writer(allocator));
 }
 
 /// Convenience function to create a no-color ANSI writer from an ArrayList
-pub fn arrayListWriterNoColor(list: *std.ArrayList(u8)) ArrayListAnsiWriter {
-    return ArrayListAnsiWriter.initNoColor(list.writer());
+pub fn arrayListWriterNoColor(list: *std.ArrayList(u8), allocator: std.mem.Allocator) ArrayListAnsiWriter {
+    return ArrayListAnsiWriter.initNoColor(list.writer(allocator));
 }
 
 test "ansi writer basic operations" {
     var buffer = std.ArrayList(u8).init(std.testing.allocator);
     defer buffer.deinit();
 
-    var ansi = arrayListWriter(&buffer);
+    var ansi = arrayListWriter(&buffer, std.testing.allocator);
 
     try ansi.resetStyle();
     try ansi.moveCursor(10, 20);
@@ -222,7 +255,7 @@ test "ansi writer terminal setup and teardown" {
     var buffer = std.ArrayList(u8).init(std.testing.allocator);
     defer buffer.deinit();
 
-    var ansi = arrayListWriter(&buffer);
+    var ansi = arrayListWriter(&buffer, std.testing.allocator);
 
     try ansi.initializeTerminal();
     try ansi.writeAll("Content");

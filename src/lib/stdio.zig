@@ -213,11 +213,22 @@ test "CaptureContext threaded basic usage" {
         try ctx.beginCapture();
         errdefer ctx.endCapture() catch unreachable;
 
-        try std.io.getStdOut().writer().print("a\n", .{});
-        try std.io.getStdOut().writer().print("b\n", .{});
-
-        try std.io.getStdErr().writer().print("1\n", .{});
-        try std.io.getStdErr().writer().print("2\n", .{});
+        {
+            var b: [64]u8 = undefined;
+            var s = std.fs.File.stdout().writer(&b);
+            const w: *std.Io.Writer = &s.interface;
+            try w.print("a\n", .{});
+            try w.print("b\n", .{});
+            try w.flush();
+        }
+        {
+            var b: [64]u8 = undefined;
+            var s = std.fs.File.stderr().writer(&b);
+            const w: *std.Io.Writer = &s.interface;
+            try w.print("1\n", .{});
+            try w.print("2\n", .{});
+            try w.flush();
+        }
 
         // End capture to ensure threads flush
         try ctx.endCapture();
@@ -284,7 +295,19 @@ test "capture output from call" {
 }
 
 fn foo() error{Uh}!u32 {
-    std.io.getStdOut().writer().print("a\n", .{}) catch return error.Uh;
-    std.io.getStdErr().writer().print("b\n", .{}) catch return error.Uh;
+    {
+        var b: [64]u8 = undefined;
+        var s = std.fs.File.stdout().writer(&b);
+        const w: *std.Io.Writer = &s.interface;
+        w.print("a\n", .{}) catch return error.Uh;
+        w.flush() catch return error.Uh;
+    }
+    {
+        var b: [64]u8 = undefined;
+        var s = std.fs.File.stderr().writer(&b);
+        const w: *std.Io.Writer = &s.interface;
+        w.print("b\n", .{}) catch return error.Uh;
+        w.flush() catch return error.Uh;
+    }
     return 42;
 }

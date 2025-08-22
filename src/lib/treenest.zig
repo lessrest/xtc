@@ -1,22 +1,40 @@
 const std = @import("std");
 const dank = @import("dank.zig");
 
+// Global, long-lived stdout/stderr writer buffers for 0.15's new I/O API.
+// This avoids returning writers that reference stack memory.
+var g_stderr_buf: [4096]u8 = undefined;
+var g_stdout_buf: [4096]u8 = undefined;
+var g_stderr_state: std.fs.File.Writer = undefined;
+var g_stdout_state: std.fs.File.Writer = undefined;
+var g_stdio_inited: bool = false;
+
+fn ensureStdIo() void {
+    if (!g_stdio_inited) {
+        g_stderr_state = std.fs.File.stderr().writer(&g_stderr_buf);
+        g_stdout_state = std.fs.File.stdout().writer(&g_stdout_buf);
+        g_stdio_inited = true;
+    }
+}
+
 pub fn treeNest(allocator: std.mem.Allocator, writer: anytype) TreeNest(@TypeOf(writer)) {
     return TreeNest(@TypeOf(writer)).init(allocator, writer);
 }
 
-pub fn silent(allocator: std.mem.Allocator) TreeNest(std.fs.File.Writer) {
+pub fn silent(allocator: std.mem.Allocator) TreeNest(*std.Io.Writer) {
     var stderr_nest = stderr(allocator);
     stderr_nest.enabled = false;
     return stderr_nest;
 }
 
-pub fn stderr(allocator: std.mem.Allocator) TreeNest(std.fs.File.Writer) {
-    return treeNest(allocator, std.io.getStdErr().writer());
+pub fn stderr(allocator: std.mem.Allocator) TreeNest(*std.Io.Writer) {
+    ensureStdIo();
+    return treeNest(allocator, &g_stderr_state.interface);
 }
 
-pub fn stdout(allocator: std.mem.Allocator) TreeNest(std.fs.File.Writer) {
-    return treeNest(allocator, std.io.getStdOut().writer());
+pub fn stdout(allocator: std.mem.Allocator) TreeNest(*std.Io.Writer) {
+    ensureStdIo();
+    return treeNest(allocator, &g_stdout_state.interface);
 }
 
 pub const Color = struct {
@@ -213,12 +231,12 @@ pub fn TreeNest(comptime Writer: type) type {
             return .{
                 .writer = writer,
                 .allocator = allocator,
-                .stack = std.ArrayList(Level).init(allocator),
+                .stack = std.ArrayList(Level){},
             };
         }
 
         pub fn deinit(self: *Self) void {
-            self.stack.deinit();
+            self.stack.deinit(self.allocator);
         }
 
         pub fn dk(self: *Self) dank.Dank(Writer) {
@@ -275,7 +293,7 @@ pub fn TreeNest(comptime Writer: type) type {
             if (!self.enabled) return;
 
             // Always push to stack and increment depth
-            self.stack.append(.{ .has_more = true }) catch return;
+            self.stack.append(self.allocator, .{ .has_more = true }) catch return;
             self.depth += 1;
         }
 
@@ -331,7 +349,7 @@ pub fn TreeNest(comptime Writer: type) type {
             switch (@typeInfo(ValueType)) {
                 .int => self.writer.print("{d}", .{value}) catch return self,
                 .float => self.writer.print("{d:.2}", .{value}) catch return self,
-                .bool => self.writer.print("{}", .{value}) catch return self,
+                .bool => self.writer.print("{any}", .{value}) catch return self,
                 .pointer => |ptr_info| {
                     if (ptr_info.size == .slice and ptr_info.child == u8) {
                         self.writer.print("\"{s}\"", .{value}) catch return self;
@@ -356,7 +374,7 @@ pub fn TreeNest(comptime Writer: type) type {
                 },
                 .@"struct" => {
                     if (std.meta.hasMethod(ValueType, "format")) {
-                        self.writer.print("{}", .{value}) catch return self;
+                        self.writer.print("{any}", .{value}) catch return self;
                     } else {
                         self.writer.print("{any}", .{value}) catch return self;
                     }
@@ -400,7 +418,7 @@ pub fn TreeNest(comptime Writer: type) type {
                 switch (@typeInfo(ValueType)) {
                     .int => self.writer.print("{d}", .{value}) catch return,
                     .float => self.writer.print("{d:.2}", .{value}) catch return,
-                    .bool => self.writer.print("{}", .{value}) catch return,
+                    .bool => self.writer.print("{any}", .{value}) catch return,
                     .pointer => |ptr_info| {
                         if (ptr_info.size == .slice and ptr_info.child == u8) {
                             self.writer.print("{s}", .{value}) catch return;
@@ -420,7 +438,7 @@ pub fn TreeNest(comptime Writer: type) type {
                     .@"enum" => self.writer.print("{s}", .{@tagName(value)}) catch return,
                     .@"struct" => {
                         if (std.meta.hasMethod(ValueType, "format")) {
-                            self.writer.print("{}", .{value}) catch return;
+                            self.writer.print("{any}", .{value}) catch return;
                         } else {
                             self.writer.print("{any}", .{value}) catch return;
                         }

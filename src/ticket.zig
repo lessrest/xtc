@@ -193,7 +193,9 @@ pub fn main() !void {
     const wy: [8]u8 = [_]u8{ 0xde, 0xad, 0xbe, 0xef, 0x12, 0x34, 0x56, 0x78 };
     const w12 = Wy64Ticket12.encode(&wy);
 
-    const out = std.io.getStdOut().writer();
+    var buf: [512]u8 = undefined;
+    var state = std.fs.File.stdout().writer(&buf);
+    const out: *std.Io.Writer = &state.interface;
     try out.print("SHA256/13ch : {s}\n", .{t16});
     try out.print("SHA256/15ch : {s}\n", .{t20});
     try out.print("WY64 /10ch : {s}\n", .{w12});

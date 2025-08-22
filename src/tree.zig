@@ -60,16 +60,19 @@ pub fn ContiguousTree(comptime NodeData: type) type {
 
         /// Callback function type for BFS construction - this is just for documentation
         /// The actual callback functions are passed as comptime parameters to constructBFS
+        // Fields
+        allocator: std.mem.Allocator,
         nodes: std.ArrayList(Node),
 
         pub fn init(allocator: std.mem.Allocator) Self {
             return .{
-                .nodes = std.ArrayList(Node).init(allocator),
+                .allocator = allocator,
+                .nodes = std.ArrayList(Node){},
             };
         }
 
         pub fn deinit(self: *Self) void {
-            self.nodes.deinit();
+            self.nodes.deinit(self.allocator);
             self.* = undefined;
         }
 
@@ -130,18 +133,18 @@ pub fn ContiguousTree(comptime NodeData: type) type {
             self.nodes.clearRetainingCapacity();
 
             const QueueItem = struct { id: IdType, tree_idx: NodeIndex };
-            var queue = std.ArrayList(QueueItem).init(self.nodes.allocator);
-            defer queue.deinit();
+            var queue = std.ArrayList(QueueItem){};
+            defer queue.deinit(self.allocator);
 
             // Create root node
             const root_data = context.createData(root_id);
-            try self.nodes.append(.{
+            try self.nodes.append(self.allocator, .{
                 .data = root_data,
                 .first_child = INVALID_INDEX,
                 .child_count = 0,
                 .parent_index = INVALID_INDEX,
             });
-            try queue.append(.{ .id = root_id, .tree_idx = 0 });
+            try queue.append(self.allocator, .{ .id = root_id, .tree_idx = 0 });
 
             var queue_index: usize = 0;
             while (queue_index < queue.items.len) : (queue_index += 1) {
@@ -158,13 +161,13 @@ pub fn ContiguousTree(comptime NodeData: type) type {
                     const child_id = context.getChild(current.id, child_index);
                     const child_data = context.createData(child_id);
                     const child_tree_idx: NodeIndex = @intCast(self.nodes.items.len);
-                    try self.nodes.append(.{
+                    try self.nodes.append(self.allocator, .{
                         .data = child_data,
                         .first_child = INVALID_INDEX,
                         .child_count = 0,
                         .parent_index = current.tree_idx,
                     });
-                    try queue.append(.{ .id = child_id, .tree_idx = child_tree_idx });
+                    try queue.append(self.allocator, .{ .id = child_id, .tree_idx = child_tree_idx });
                 }
 
                 // Update parent to point to its children

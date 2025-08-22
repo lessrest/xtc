@@ -122,17 +122,18 @@ fn hashStyleRow(row: *const StyleRow, seed: u64) u64 {
 }
 
 pub const StyleTable = struct {
+    alloc: std.mem.Allocator,
     cols: std.ArrayList(StyleRow),
     row_hash: std.ArrayList(u64),
     map: std.AutoHashMap(u64, u32),
 
     pub fn init(alloc: std.mem.Allocator) StyleTable {
-        return .{ .cols = std.ArrayList(StyleRow).init(alloc), .row_hash = std.ArrayList(u64).init(alloc), .map = std.AutoHashMap(u64, u32).init(alloc) };
+        return .{ .alloc = alloc, .cols = std.ArrayList(StyleRow){}, .row_hash = std.ArrayList(u64){}, .map = std.AutoHashMap(u64, u32).init(alloc) };
     }
 
     pub fn deinit(self: *StyleTable) void {
-        self.cols.deinit();
-        self.row_hash.deinit();
+        self.cols.deinit(self.alloc);
+        self.row_hash.deinit(self.alloc);
         self.map.deinit();
         self.* = undefined;
     }
@@ -143,14 +144,14 @@ pub const StyleTable = struct {
     }
 
     pub fn intern(self: *StyleTable, alloc: std.mem.Allocator, row: StyleRow) !u32 {
-        _ = alloc; // ArrayList carries its own allocator
+        _ = alloc; // allocator stored on self
         const h = hashStyleRow(&row, 0);
         if (self.map.get(h)) |id| {
             if (self.equalsAt(id, &row)) return id;
         }
-        try self.cols.append(row);
+        try self.cols.append(self.alloc, row);
         const id: u32 = @intCast(self.cols.items.len - 1);
-        try self.row_hash.append(h);
+        try self.row_hash.append(self.alloc, h);
         try self.map.put(h, id);
         return id;
     }

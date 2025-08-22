@@ -58,7 +58,7 @@ pub const ErrorHandler = struct {
         module_ptr: ?[*:0]const u8,
         line: c_int,
         message_ptr: ?[*:0]const u8,
-    ) callconv(.C) void {
+    ) callconv(.c) void {
         const allocator = self.buffer.allocator();
 
         const message = if (message_ptr) |m| std.mem.span(m) else "";

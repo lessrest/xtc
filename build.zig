@@ -10,10 +10,12 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/lib/libansi.zig"),
     });
 
+    // In Zig 0.15, a module may not import files above its root directory.
+    // Point the wren module at a src-level root so vm.zig can import siblings.
     const wren = b.addModule("wren", .{
         .target = target,
         .optimize = optimize,
-        .root_source_file = b.path("src/fiberscript/vm.zig"),
+        .root_source_file = b.path("src/wren_root.zig"),
     });
 
     wren.addImport("ansi", ansi);
@@ -54,20 +56,23 @@ pub fn build(b: *std.Build) void {
     libwren.linkLibC();
 
     // Create WASM-specific Wren library
-    const libwren_wasm = b.addStaticLibrary(.{
-        .name = "wren-wasm",
+    const libwren_wasm_mod = b.createModule(.{
         .target = b.resolveTargetQuery(.{
             .cpu_arch = .wasm32,
             .os_tag = .wasi,
         }),
         .optimize = optimize,
-        .strip = false,
+    });
+    const libwren_wasm = b.addLibrary(.{
+        .name = "wren-wasm",
+        .linkage = .static,
+        .root_module = libwren_wasm_mod,
     });
 
-    libwren_wasm.addIncludePath(b.path("deps/wren/src/include"));
-    libwren_wasm.addIncludePath(b.path("deps/wren/src/vm"));
-    libwren_wasm.addIncludePath(b.path("deps/wren/src/optional"));
-    libwren_wasm.addCSourceFiles(.{
+    libwren_wasm_mod.addIncludePath(b.path("deps/wren/src/include"));
+    libwren_wasm_mod.addIncludePath(b.path("deps/wren/src/vm"));
+    libwren_wasm_mod.addIncludePath(b.path("deps/wren/src/optional"));
+    libwren_wasm_mod.addCSourceFiles(.{
         .files = &.{
             "deps/wren/src/vm/wren_compiler.c",
             "deps/wren/src/vm/wren_core.c",
@@ -88,7 +93,6 @@ pub fn build(b: *std.Build) void {
             "-O3",
         },
     });
-
     libwren_wasm.linkLibC();
 
     const xtc = b.addModule("xtc", .{
@@ -143,8 +147,7 @@ pub fn build(b: *std.Build) void {
     b.step("test", "Run unit tests").dependOn(&run_unit_tests.step);
 
     // WASM build target using WASI for stdout access
-    const wasm_exe = b.addExecutable(.{
-        .name = "xtc",
+    const wasm_mod = b.createModule(.{
         .root_source_file = b.path("src/wasm.zig"),
         .target = b.resolveTargetQuery(.{
             .cpu_arch = .wasm32,
@@ -152,6 +155,7 @@ pub fn build(b: *std.Build) void {
         }),
         .optimize = .ReleaseFast,
     });
+    const wasm_exe = b.addExecutable(.{ .name = "xtc", .root_module = wasm_mod });
 
     // Disable entry and export specific functions like Wisp
     wasm_exe.entry = .disabled;
@@ -169,13 +173,13 @@ pub fn build(b: *std.Build) void {
     };
 
     // Link dependencies for WASI
-    wasm_exe.root_module.addImport("ansi", ansi);
-    wasm_exe.root_module.addImport("Graphemes", zg.module("Graphemes"));
-    wasm_exe.root_module.addImport("DisplayWidth", zg.module("DisplayWidth"));
-    wasm_exe.root_module.addImport("Words", zg.module("Words"));
+    wasm_mod.addImport("ansi", ansi);
+    wasm_mod.addImport("Graphemes", zg.module("Graphemes"));
+    wasm_mod.addImport("DisplayWidth", zg.module("DisplayWidth"));
+    wasm_mod.addImport("Words", zg.module("Words"));
 
     // Link WASM-specific Wren library
-    wasm_exe.linkLibrary(libwren_wasm);
+    wasm_mod.linkLibrary(libwren_wasm);
 
     const wasm_step = b.step("wasm", "Build WASM library");
     wasm_step.dependOn(&b.addInstallArtifact(wasm_exe, .{}).step);

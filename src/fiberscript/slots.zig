@@ -144,7 +144,7 @@ pub const SlotBuilder = struct {
             bool => c.wrenSetSlotBool(self.vm, slot, value),
             f64 => c.wrenSetSlotDouble(self.vm, slot, value),
             comptime_int => c.wrenSetSlotDouble(self.vm, slot, @floatFromInt(value)),
-            u32 => c.wrenSetSlotDouble(self.vm, slot, @floatFromInt(value)),
+            u8, i8, u16, i16, u32, i32, usize, isize => c.wrenSetSlotDouble(self.vm, slot, @floatFromInt(value)),
             []const u8 => {
                 const cstr = try self.allocator.dupeZ(u8, value);
                 defer self.allocator.free(cstr);
