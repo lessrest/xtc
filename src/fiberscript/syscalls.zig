@@ -150,6 +150,23 @@ pub fn generateResultSetter(comptime Syscalls: type) type {
     };
 }
 
+pub fn generateResultFreer(comptime Syscalls: type, comptime Context: type) type {
+    const ResultType = ResultUnion(Syscalls);
+    return struct {
+        pub fn free(context: *Context, result: ResultType) void {
+            switch (result) {
+                inline else => |payload, tag| {
+                    _ = tag;
+                    const PayloadType = @TypeOf(payload);
+                    if (PayloadType == []const u8 or PayloadType == []u8) {
+                        context.allocator.free(@constCast(payload));
+                    }
+                },
+            }
+        }
+    };
+}
+
 /// Generate Wren source code defining foreign classes for each syscall payload.
 pub fn generateWrenModule(comptime Syscalls: type) []const u8 {
     const Request = RequestUnion(Syscalls);

@@ -347,10 +347,12 @@ pub fn Engine(configuration: Configuration) type {
             var work = self.slots();
             const result = try self.dispatcher.dispatch(request, fiber);
             const setter = syscalls.generateResultSetter(SyscallsType);
+            const freer = syscalls.generateResultFreer(SyscallsType, SyscallContext);
             switch (result) {
                 .immediate => |x| {
                     defer c.wrenReleaseHandle(self.vm, fiber);
                     try setter.set(&work, 0, x);
+                    freer.free(self.syscall_context, x);
                 },
                 .pending => {
                     _ = work.set(0, fiber);
@@ -435,6 +437,7 @@ pub fn Engine(configuration: Configuration) type {
 
         fn bind(self: *Self) !void {
             try self.runTopLevel("xtc", @embedFile("xtc.wren"));
+            try self.runTopLevel("fs", @embedFile("fs.wren"));
         }
 
         pub fn takeOutput(self: *Self, allocator: std.mem.Allocator) ![]const u8 {
@@ -689,6 +692,46 @@ pub fn documentSyscalls(comptime EngineType: type, comptime Context: type) type 
             if (context.window) |w| {
                 try w.setViewport(context.viewport_width, context.viewport_height);
             }
+        }
+
+        pub fn readFile(engine: *EngineType, context: *Context, fiber: Fiber, args: struct { path: []const u8 }) anyerror![]const u8 {
+            _ = engine;
+            _ = fiber;
+            return try std.fs.cwd().readFileAlloc(context.allocator, args.path, std.math.maxInt(usize));
+        }
+
+        pub fn writeFile(engine: *EngineType, context: *Context, fiber: Fiber, args: struct { path: []const u8, data: []const u8 }) anyerror!void {
+            _ = engine;
+            _ = context;
+            _ = fiber;
+            try std.fs.cwd().writeFile(.{ .sub_path = args.path, .data = args.data });
+        }
+
+        pub fn readDir(engine: *EngineType, context: *Context, fiber: Fiber, args: struct { path: []const u8 }) anyerror![]const u8 {
+            _ = engine;
+            _ = fiber;
+            var dir = try std.fs.cwd().openDir(args.path, .{ .iterate = true });
+            defer dir.close();
+            var list = std.ArrayList(u8).init(context.allocator);
+            var first = true;
+            var it = dir.iterate();
+            while (try it.next()) |entry| {
+                if (first) {
+                    first = false;
+                } else {
+                    try list.append('\n');
+                }
+                try list.appendSlice(entry.name);
+            }
+            return list.toOwnedSlice();
+        }
+
+        pub fn isDir(engine: *EngineType, context: *Context, fiber: Fiber, args: struct { path: []const u8 }) anyerror!bool {
+            _ = engine;
+            _ = fiber;
+            _ = context;
+            const stat = try std.fs.cwd().statFile(args.path);
+            return stat.kind == .directory;
         }
     };
 }
