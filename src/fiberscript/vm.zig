@@ -1,11 +1,19 @@
 const std = @import("std");
 
+comptime {
+    @setEvalBranchQuota(200000);
+}
+
 const c = @import("wren.zig");
 const ErrorHandler = @import("error_handler.zig").ErrorHandler;
 const slots_api = @import("slots.zig");
 const OutputHandler = @import("output.zig").OutputHandler;
 const syscalls = @import("syscalls.zig");
 const dom = @import("../dom.zig");
+const http_streaming_task = @import("../lib/http_streaming_task.zig");
+const pom = @import("../pom.zig");
+const Pom = pom.Pom;
+const TaskId = pom.TaskId;
 const WindowMod = @import("../Window.zig");
 const layout = @import("../layout.zig");
 const Painter = @import("../Painter.zig").Painter;
@@ -39,16 +47,17 @@ pub fn Engine(configuration: Configuration) type {
         const SyscallModuleSource: [:0]const u8 = syscalls.generateWrenModule(SyscallsType) ++ "\x00";
 
         const SubmissionBatch = struct {
+            allocator: std.mem.Allocator,
             requests: std.ArrayList(Request),
 
             pub fn init(allocator: std.mem.Allocator, capacity: usize) SubmissionBatch {
-                var list = std.ArrayList(Request).init(allocator);
-                list.ensureTotalCapacity(capacity) catch {};
-                return .{ .requests = list };
+                var list = std.ArrayList(Request){};
+                list.ensureTotalCapacity(allocator, capacity) catch {};
+                return .{ .allocator = allocator, .requests = list };
             }
 
             pub fn deinit(self: *SubmissionBatch) void {
-                self.requests.deinit();
+                self.requests.deinit(self.allocator);
             }
         };
 
@@ -144,7 +153,7 @@ pub fn Engine(configuration: Configuration) type {
             memory: ?*anyopaque,
             new_size: usize,
             user_data: *anyopaque,
-        ) callconv(.C) ?*anyopaque {
+        ) callconv(.c) ?*anyopaque {
             const self: *Self = @ptrCast(@alignCast(user_data));
             var tracked = TrackingAllocator.create(self.allocator);
 
@@ -174,7 +183,7 @@ pub fn Engine(configuration: Configuration) type {
             className: [*:0]const u8,
             isStatic: bool,
             method: [*:0]const u8,
-        ) callconv(.C) c.ForeignMethodFn {
+        ) callconv(.c) c.ForeignMethodFn {
             _ = vm; // autofix
             if (std.mem.eql(u8, std.mem.span(module), "xtc")) {
                 if (std.mem.eql(u8, std.mem.span(className), "Core") and isStatic) {
@@ -205,14 +214,14 @@ pub fn Engine(configuration: Configuration) type {
             vm: *c.VM,
             module: [*:0]const u8,
             className: [*:0]const u8,
-        ) callconv(.C) c.ForeignClassMethods {
+        ) callconv(.c) c.ForeignClassMethods {
             _ = vm; // autofix
             var methods = c.ForeignClassMethods{};
             if (!std.mem.eql(u8, std.mem.span(module), "syscall")) return methods;
 
             if (std.mem.eql(u8, std.mem.span(className), "SubmissionBatch")) {
                 const Alloc = struct {
-                    pub fn allocate(vm_ptr: *c.VM) callconv(.C) void {
+                    pub fn allocate(vm_ptr: *c.VM) callconv(.c) void {
                         const self = getSelf(vm_ptr);
                         const capacity = @as(usize, @intFromFloat(c.wrenGetSlotDouble(vm_ptr, 1)));
                         const sb_ptr = c.wrenSetSlotNewForeign(vm_ptr, 0, 0, @sizeOf(SubmissionBatch));
@@ -221,7 +230,7 @@ pub fn Engine(configuration: Configuration) type {
                     }
                 };
                 const Final = struct {
-                    pub fn finalize(data: ?*anyopaque) callconv(.C) void {
+                    pub fn finalize(data: ?*anyopaque) callconv(.c) void {
                         const sb = @as(*SubmissionBatch, @ptrCast(@alignCast(data.?)));
                         sb.deinit();
                     }
@@ -231,7 +240,7 @@ pub fn Engine(configuration: Configuration) type {
                 return methods;
             } else if (std.mem.eql(u8, std.mem.span(className), "CompletionBatch")) {
                 const Alloc = struct {
-                    pub fn allocate(vm_ptr: *c.VM) callconv(.C) void {
+                    pub fn allocate(vm_ptr: *c.VM) callconv(.c) void {
                         const cb_ptr = c.wrenSetSlotNewForeign(vm_ptr, 0, 0, @sizeOf(CompletionBatch));
                         const cb = @as(*CompletionBatch, @ptrCast(@alignCast(cb_ptr)));
                         cb.* = CompletionBatch{};
@@ -246,7 +255,7 @@ pub fn Engine(configuration: Configuration) type {
                 if (std.mem.eql(u8, std.mem.span(className), class_name)) {
                     const PayloadType = field.type;
                     const Alloc = struct {
-                        pub fn allocate(vm_ptr: *c.VM) callconv(.C) void {
+                        pub fn allocate(vm_ptr: *c.VM) callconv(.c) void {
                             const req_ptr = c.wrenSetSlotNewForeign(vm_ptr, 0, 0, @sizeOf(Request));
                             const req = @as(*Request, @ptrCast(@alignCast(req_ptr)));
                             var payload: PayloadType = undefined;
@@ -275,7 +284,7 @@ pub fn Engine(configuration: Configuration) type {
             return methods;
         }
 
-        fn loadModuleFn(vm: *c.VM, name: [*:0]const u8) callconv(.C) c.LoadModuleResult {
+        fn loadModuleFn(vm: *c.VM, name: [*:0]const u8) callconv(.c) c.LoadModuleResult {
             _ = vm; // autofix
             if (std.mem.eql(u8, std.mem.span(name), "syscall")) {
                 return c.LoadModuleResult{ .source = SyscallModuleSource.ptr };
@@ -283,7 +292,7 @@ pub fn Engine(configuration: Configuration) type {
             return c.LoadModuleResult{};
         }
 
-        fn foreignSyscall(ptr: *c.VM) callconv(.C) void {
+        fn foreignSyscall(ptr: *c.VM) callconv(.c) void {
             var ctx: *Self = @ptrCast(@alignCast(c.wrenGetUserData(ptr)));
             var work = ctx.slots();
             const fiber = work.get(1, *c.Handle) catch {
@@ -296,7 +305,7 @@ pub fn Engine(configuration: Configuration) type {
             };
         }
 
-        fn foreignSubmitBatch(ptr: *c.VM) callconv(.C) void {
+        fn foreignSubmitBatch(ptr: *c.VM) callconv(.c) void {
             var ctx: *Self = @ptrCast(@alignCast(c.wrenGetUserData(ptr)));
             var work = ctx.slots();
             const fiber = work.get(1, *c.Handle) catch {
@@ -314,36 +323,36 @@ pub fn Engine(configuration: Configuration) type {
             c.wrenReleaseHandle(ptr, fiber);
         }
 
-        fn submissionBatchAdd(ptr: *c.VM) callconv(.C) void {
+        fn submissionBatchAdd(ptr: *c.VM) callconv(.c) void {
             const batch_ptr = c.wrenGetSlotForeign(ptr, 0);
             const req_ptr = c.wrenGetSlotForeign(ptr, 1);
             var batch = @as(*SubmissionBatch, @ptrCast(@alignCast(batch_ptr)));
             const req = @as(*Request, @ptrCast(@alignCast(req_ptr))).*;
-            batch.requests.append(req) catch {};
+            batch.requests.append(batch.allocator, req) catch {};
             c.wrenSetSlotNull(ptr, 0);
         }
 
-        fn completionBatchWait(ptr: *c.VM) callconv(.C) void {
+        fn completionBatchWait(ptr: *c.VM) callconv(.c) void {
             const comp_ptr = c.wrenGetSlotForeign(ptr, 0);
             const comp = @as(*CompletionBatch, @ptrCast(@alignCast(comp_ptr)));
             const n = @as(usize, @intFromFloat(c.wrenGetSlotDouble(ptr, 1)));
             while (comp.completed < n) {
-                std.time.sleep(std.time.ns_per_ms);
+                std.Thread.sleep(std.time.ns_per_ms);
             }
             c.wrenSetSlotNull(ptr, 0);
         }
 
-        fn completionBatchWaitAll(ptr: *c.VM) callconv(.C) void {
+        fn completionBatchWaitAll(ptr: *c.VM) callconv(.c) void {
             const comp_ptr = c.wrenGetSlotForeign(ptr, 0);
             const comp = @as(*CompletionBatch, @ptrCast(@alignCast(comp_ptr)));
             while (comp.completed < comp.expected) {
-                std.time.sleep(std.time.ns_per_ms);
+                std.Thread.sleep(std.time.ns_per_ms);
             }
             c.wrenSetSlotNull(ptr, 0);
         }
 
         pub fn syscall(self: *Self, fiber: *c.Handle, request: Request) !void {
-            std.debug.print("syscall: {d} {s}\n", .{ fiber, @tagName(request) });
+            std.debug.print("syscall: {any} {s}\n", .{ fiber, @tagName(request) });
             var work = self.slots();
             const result = try self.dispatcher.dispatch(request, fiber);
             const setter = syscalls.generateResultSetter(SyscallsType);
@@ -380,7 +389,7 @@ pub fn Engine(configuration: Configuration) type {
         }
 
         /// C callback wrapper for output handling.
-        fn writeFn(vm: *c.VM, text: [*:0]const u8) callconv(.C) void {
+        fn writeFn(vm: *c.VM, text: [*:0]const u8) callconv(.c) void {
             const self = getSelf(vm);
             self.output_handler.writeFn(vm, text);
         }
@@ -396,7 +405,7 @@ pub fn Engine(configuration: Configuration) type {
             module_ptr: ?[*:0]const u8,
             line: c_int,
             message_ptr: ?[*:0]const u8,
-        ) callconv(.C) void {
+        ) callconv(.c) void {
             const self = getSelf(vm);
             self.error_handler.errorFn(error_type, module_ptr, line, message_ptr);
         }
@@ -427,9 +436,17 @@ pub fn Engine(configuration: Configuration) type {
             switch (outcome) {
                 .success => {},
                 .compile_error => {
+                    std.debug.print("\n=== WREN COMPILATION ERROR ===\n", .{});
+                    std.debug.print("Module: {s}\n", .{module_name});
+                    std.debug.print("Source code:\n{s}\n", .{source});
+                    std.debug.print("===============================\n\n", .{});
                     return error.CompilationError;
                 },
                 .runtime_error => {
+                    std.debug.print("\n=== WREN RUNTIME ERROR ===\n", .{});
+                    std.debug.print("Module: {s}\n", .{module_name});
+                    std.debug.print("Source code:\n{s}\n", .{source});
+                    std.debug.print("==========================\n\n", .{});
                     return error.RuntimeError;
                 },
             }
@@ -439,6 +456,7 @@ pub fn Engine(configuration: Configuration) type {
             try self.runTopLevel("xtc", @embedFile("xtc.wren"));
             try self.runTopLevel("dom", @embedFile("dom.wren"));
             try self.runTopLevel("fs", @embedFile("fs.wren"));
+            try self.runTopLevel("http", @embedFile("http.wren"));
         }
 
         pub fn takeOutput(self: *Self, allocator: std.mem.Allocator) ![]const u8 {
@@ -462,9 +480,19 @@ pub const SyscallContext = struct {
         fiber: *c.Handle,
         deadline_ms: u64,
     };
+    const HttpTask = http_streaming_task.HttpStreamingTask(*c.Handle);
 
     allocator: std.mem.Allocator,
     document: *dom.Dom,
+    
+    // Structured task hierarchy (Phase 1: Optional)
+    task_tree: ?*Pom = null,
+    system_scope: TaskId = 0,      // Root system supervisor
+    vm_scope: TaskId = 0,          // Wren VM scope  
+    user_scope: TaskId = 0,        // User script scope
+    background_scope: TaskId = 0,  // Background tasks scope
+    
+    // Legacy fields (TODO: migrate to task tree)
     window: ?*WindowMod.Window = null,
     viewport_width: usize = 80,
     viewport_height: usize = 24,
@@ -472,8 +500,65 @@ pub const SyscallContext = struct {
     sleep_timers: std.ArrayListUnmanaged(Timer) = .{},
     key_events: std.ArrayListUnmanaged(u8) = .{},
     key_waiters: std.ArrayListUnmanaged(*c.Handle) = .{},
+    http: HttpTask = undefined,
+
+    pub fn init(allocator: std.mem.Allocator, document: *dom.Dom) SyscallContext {
+        // Phase 2: Re-enable POM and fix the recursion issue
+        const task_tree = Pom.init(allocator) catch null;
+        var system_scope: TaskId = 0;
+        var vm_scope: TaskId = 0;
+        var user_scope: TaskId = 0;
+        var background_scope: TaskId = 0;
+        
+        if (task_tree) |pomPtr| {
+            // Create supervision tree
+            system_scope = pomPtr.createScope(Pom.NullId, "system", .one_for_all) catch 0;
+            if (system_scope != 0) {
+                vm_scope = pomPtr.createScope(system_scope, "wren_vm", .fail_fast) catch 0;
+                user_scope = pomPtr.createScope(vm_scope, "user_scripts", .fail_fast) catch 0;
+                background_scope = pomPtr.createScope(system_scope, "background", .ignore) catch 0;
+            }
+        }
+        
+        const sc = SyscallContext{
+            .allocator = allocator,
+            .document = document,
+            .task_tree = task_tree,
+            .system_scope = system_scope,
+            .vm_scope = vm_scope,
+            .user_scope = user_scope,
+            .background_scope = background_scope,
+            .window = null,
+            .viewport_width = 80,
+            .viewport_height = 24,
+            .frame_fibers = .{},
+            .sleep_timers = .{},
+            .key_events = .{},
+            .key_waiters = .{},
+            .http = HttpTask.initWithPom(allocator, task_tree, background_scope) catch HttpTask.init(allocator),
+        };
+        return sc;
+    }
 
     pub fn deinit(self: *SyscallContext) void {
+        std.debug.print("DEBUG: SyscallContext.deinit() START\n", .{});
+        
+        // CRITICAL: Clean up HTTP first, THEN POM
+        std.debug.print("DEBUG: Cleaning up HTTP\n", .{});
+        self.http.deinit();
+        
+        // Phase 1: Optional structured cleanup
+        if (self.task_tree) |pomPtr| {
+            std.debug.print("DEBUG: SyscallContext.deinit() - system_scope={}\n", .{self.system_scope});
+            if (self.system_scope != 0) {
+                std.debug.print("DEBUG: About to cancel system scope\n", .{});
+                pomPtr.cancelTask(self.system_scope);  // Cancel all tasks
+            }
+            pomPtr.joinAllThreads();               // Wait for threads  
+            pomPtr.deinit();                       // Clean up POM
+        }
+        
+        // Legacy cleanup (keep for now)
         if (self.window) |w| {
             w.deinit();
             self.allocator.destroy(w);
@@ -481,6 +566,27 @@ pub const SyscallContext = struct {
         self.sleep_timers.deinit(self.allocator);
         self.key_events.deinit(self.allocator);
         self.key_waiters.deinit(self.allocator);
+        // self.http.deinit();  // Already done above
+    }
+    
+    /// Create a new request scope for structured HTTP operations
+    pub fn createRequestScope(self: *SyscallContext, name: []const u8) !TaskId {
+        if (self.task_tree) |pomPtr| {
+            return pomPtr.createScope(self.user_scope, name, .fail_fast);
+        }
+        return 0; // Fallback if no POM
+    }
+    
+    /// Handle graceful shutdown (Ctrl+C)
+    pub fn handleShutdown(self: *SyscallContext) void {
+        std.log.info("Initiating graceful shutdown...");
+        
+        if (self.task_tree) |pomPtr| {
+            // Shutdown in phases by supervision policy
+            pomPtr.cancelTask(self.background_scope);  // Cancel background first
+            pomPtr.cancelTask(self.user_scope);        // Then user operations
+            // system_scope will be cancelled in deinit()
+        }
     }
 };
 const Fiber = *c.Handle;
@@ -543,8 +649,11 @@ pub fn documentSyscalls(comptime EngineType: type, comptime Context: type) type 
                 });
                 context.window = w;
             }
-            const stdout_writer = std.io.getStdOut().writer();
-            try context.window.?.renderAndPresent(context.document, 0, stdout_writer);
+            var out_buf: [2048]u8 = undefined;
+            var out_state = std.fs.File.stdout().writer(&out_buf);
+            const out: *std.Io.Writer = &out_state.interface;
+            try context.window.?.renderAndPresent(context.document, 0, out);
+            try out.flush();
         }
 
         pub fn closeWindow(engine: *EngineType, context: *Context, fiber: Fiber, args: struct {}) anyerror!void {
@@ -617,8 +726,11 @@ pub fn documentSyscalls(comptime EngineType: type, comptime Context: type) type 
             }
             if (!found) return;
 
-            const stdout_writer = std.io.getStdOut().writer();
-            try w.state.back.writeSubRectAsPlainText(stdout_writer, w.glyphs, rect.x, rect.y, rect.w, rect.h);
+            var out_buf2: [2048]u8 = undefined;
+            var out_state2 = std.fs.File.stdout().writer(&out_buf2);
+            const out2: *std.Io.Writer = &out_state2.interface;
+            try w.state.back.writeSubRectAsPlainText(out2, w.glyphs, rect.x, rect.y, rect.w, rect.h);
+            try out2.flush();
         }
 
         pub fn requestRender(engine: *EngineType, context: *Context, fiber: Fiber, args: struct {}) anyerror!void {
@@ -626,8 +738,11 @@ pub fn documentSyscalls(comptime EngineType: type, comptime Context: type) type 
             _ = engine;
             _ = args;
             if (context.window) |w| {
-                const stdout_writer = std.io.getStdOut().writer();
-                try w.renderAndPresent(context.document, 0, stdout_writer);
+                var out_buf3: [2048]u8 = undefined;
+                var out_state3 = std.fs.File.stdout().writer(&out_buf3);
+                const out3: *std.Io.Writer = &out_state3.interface;
+                try w.renderAndPresent(context.document, 0, out3);
+                try out3.flush();
             }
         }
 
@@ -713,18 +828,18 @@ pub fn documentSyscalls(comptime EngineType: type, comptime Context: type) type 
             _ = fiber;
             var dir = try std.fs.cwd().openDir(args.path, .{ .iterate = true });
             defer dir.close();
-            var list = std.ArrayList(u8).init(context.allocator);
+            var list = std.ArrayList(u8){};
             var first = true;
             var it = dir.iterate();
             while (try it.next()) |entry| {
                 if (first) {
                     first = false;
                 } else {
-                    try list.append('\n');
+                    try list.append(context.allocator, '\n');
                 }
-                try list.appendSlice(entry.name);
+                try list.appendSlice(context.allocator, entry.name);
             }
-            return list.toOwnedSlice();
+            return list.toOwnedSlice(context.allocator);
         }
 
         pub fn isDir(engine: *EngineType, context: *Context, fiber: Fiber, args: struct { path: []const u8 }) anyerror!bool {
@@ -752,6 +867,38 @@ pub fn documentSyscalls(comptime EngineType: type, comptime Context: type) type 
             _ = context;
             try std.fs.cwd().deleteTree(args.path);
         }
+
+        // --- HTTP streaming syscalls ---
+        pub fn httpOpen(engine: *EngineType, context: *Context, fiber: Fiber, args: struct { url: []const u8, method: []const u8 = "GET", timeoutMs: f64 }) anyerror!Pending {
+            _ = engine;
+            
+            // Phase 1: Keep existing logic, add optional POM tracking
+            const id = try context.http.openRequest(args.url, args.method);
+            const to_ms: u64 = @intFromFloat(args.timeoutMs);
+            
+            // Optional: Create structured scope for tracking (doesn't break anything)
+            if (context.task_tree != null) {
+                const request_name = try std.fmt.allocPrint(context.allocator, "http_{s}", .{args.url});
+                defer context.allocator.free(request_name);
+                _ = context.createRequestScope(request_name) catch 0; // Ignore errors for now
+            }
+            
+            try context.http.awaitPayload(id, fiber, to_ms);
+            return syscalls.Pending{};
+        }
+
+        pub fn httpRead(engine: *EngineType, context: *Context, fiber: Fiber, args: struct { id: u32, timeoutMs: f64 }) anyerror!Pending {
+            _ = engine;
+            const to_ms: u64 = @intFromFloat(args.timeoutMs);
+            try context.http.awaitPayload(args.id, fiber, to_ms);
+            return syscalls.Pending{};
+        }
+
+        pub fn httpCancel(engine: *EngineType, context: *Context, fiber: Fiber, args: struct { id: u32 }) anyerror!void {
+            _ = engine;
+            _ = fiber;
+            context.http.cancel(args.id);
+        }
     };
 }
 
@@ -759,7 +906,7 @@ test "we can create and destroy a VM" {
     const allocator = std.testing.allocator;
     var document = try dom.Dom.init(allocator);
     defer document.deinit();
-    var sc = SyscallContext{ .allocator = allocator, .document = document };
+    var sc = SyscallContext.init(allocator, document);
 
     var vm = try Engine(.{}).init(allocator, .{ .syscall_context = &sc });
     defer vm.deinit();
@@ -776,7 +923,7 @@ test "we can run a simple script" {
 
     var document = try dom.Dom.init(allocator);
     defer document.deinit();
-    var sc = SyscallContext{ .allocator = allocator, .document = document };
+    var sc = SyscallContext.init(allocator, document);
 
     var engine = try Engine(.{}).init(allocator, .{ .syscall_context = &sc });
     defer engine.deinit();
@@ -797,7 +944,7 @@ test "we can call Core.call" {
 
     var document = try dom.Dom.init(allocator);
     defer document.deinit();
-    var sc = SyscallContext{ .allocator = allocator, .document = document };
+    var sc = SyscallContext.init(allocator, document);
 
     var engine = try Engine(.{}).init(allocator, .{ .syscall_context = &sc });
     defer engine.deinit();
@@ -823,7 +970,7 @@ test "can submit syscall batch" {
 
     var document = try dom.Dom.init(allocator);
     defer document.deinit();
-    var sc = SyscallContext{ .allocator = allocator, .document = document };
+    var sc = SyscallContext.init(allocator, document);
 
     var engine = try Engine(.{}).init(allocator, .{ .syscall_context = &sc });
     defer engine.deinit();
@@ -877,7 +1024,7 @@ test "slots API - simple method call" {
 
     var document = try dom.Dom.init(allocator);
     defer document.deinit();
-    var sc = SyscallContext{ .allocator = allocator, .document = document };
+    var sc = SyscallContext.init(allocator, document);
 
     var engine = try Engine(.{}).init(allocator, .{ .syscall_context = &sc });
     defer engine.deinit();
@@ -913,7 +1060,7 @@ test "slots API - working with strings" {
 
     var document = try dom.Dom.init(allocator);
     defer document.deinit();
-    var sc = SyscallContext{ .allocator = allocator, .document = document };
+    var sc = SyscallContext.init(allocator, document);
 
     var engine = try Engine(.{}).init(allocator, .{ .syscall_context = &sc });
     defer engine.deinit();
@@ -942,7 +1089,7 @@ test "slots API - list operations" {
 
     var document = try dom.Dom.init(allocator);
     defer document.deinit();
-    var sc = SyscallContext{ .allocator = allocator, .document = document };
+    var sc = SyscallContext.init(allocator, document);
 
     var engine = try Engine(.{}).init(allocator, .{ .syscall_context = &sc });
     defer engine.deinit();

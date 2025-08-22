@@ -25,7 +25,9 @@ pub fn main() !void {
 
     const allocator = gpa.allocator();
 
-    var stderr = std.io.getStdErr().writer();
+    var err_buf: [512]u8 = undefined;
+    var err_state = std.fs.File.stderr().writer(&err_buf);
+    const stderr: *std.Io.Writer = &err_state.interface;
 
     var args = try std.process.argsWithAllocator(allocator);
     defer args.deinit();
@@ -36,11 +38,13 @@ pub fn main() !void {
     if (args.next()) |arg| {
         if (std.mem.eql(u8, arg, "-v") or std.mem.eql(u8, arg, "--version")) {
             try stderr.print("{s} v{s}\n", .{ program, version });
+            try stderr.flush();
             return;
         }
 
         if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
             try stderr.print("Usage: {s} <file>\n", .{program});
+            try stderr.flush();
             return;
         }
 
@@ -50,18 +54,100 @@ pub fn main() !void {
     }
 
     try stderr.print("Usage: {s} <file>\n", .{program});
+    try stderr.flush();
     return error.Usage;
 }
 
 pub fn eventLoop(engine: *Engine, sc: *SyscallContext) !void {
     const frame_ns: u64 = std.time.ns_per_s / 60;
     var next_frame = std.time.nanoTimestamp();
+    const start_ts = next_frame;
 
-    const stdin_file = std.io.getStdIn();
+    // Optional watchdog controlled by env var XTC_WATCHDOG_SECS
+    var watchdog_ns: ?u64 = null;
+    if (std.process.getEnvVarOwned(engine.allocator, "XTC_WATCHDOG_SECS")) |val| {
+        defer engine.allocator.free(val);
+        const secs = std.fmt.parseInt(u64, val, 10) catch 0;
+        if (secs > 0) watchdog_ns = secs * std.time.ns_per_s;
+    } else |_| {}
+
+    const stdin_file = std.fs.File.stdin();
     const handle = stdin_file.handle;
+
+    const ActivityState = struct {
+        const Self = @This();
+        window: bool,
+        sleep_timers: bool,
+        frame_fibers: bool,
+        key_waiters: bool,
+        key_events: bool,
+        http_head_waiters: bool,
+        http_read_waiters: bool,
+        http_requests: bool,
+
+        fn capture(sctx: *SyscallContext) Self {
+            return .{
+                .window = sctx.window != null,
+                .sleep_timers = sctx.sleep_timers.items.len > 0,
+                .frame_fibers = sctx.frame_fibers.items.len > 0,
+                .key_waiters = sctx.key_waiters.items.len > 0,
+                .key_events = sctx.key_events.items.len > 0,
+                .http_head_waiters = sctx.http.hasHeadWaiters(),
+                .http_read_waiters = sctx.http.hasReadWaiters(),
+                .http_requests = sctx.http.hasRequests(),
+            };
+        }
+
+        fn equals(a: Self, b: Self) bool {
+            return a.window == b.window and
+                a.sleep_timers == b.sleep_timers and
+                a.frame_fibers == b.frame_fibers and
+                a.key_waiters == b.key_waiters and
+                a.key_events == b.key_events and
+                a.http_head_waiters == b.http_head_waiters and
+                a.http_read_waiters == b.http_read_waiters and
+                a.http_requests == b.http_requests;
+        }
+
+        fn anyActive(self: Self) bool {
+            return self.window or self.sleep_timers or self.frame_fibers or self.key_waiters or self.key_events or self.http_head_waiters or self.http_read_waiters or self.http_requests;
+        }
+
+        fn debugPrint(self: Self) void {
+            var buf: [2048]u8 = undefined;
+            var out_state = std.fs.File.stdout().writer(&buf);
+            const out: *std.Io.Writer = &out_state.interface;
+            _ = out.print("EventLoop activity:", .{}) catch {};
+            var any = false;
+            if (self.window) { _ = out.print(" window", .{}) catch {}; any = true; }
+            if (self.sleep_timers) { _ = out.print(" sleep_timers", .{}) catch {}; any = true; }
+            if (self.frame_fibers) { _ = out.print(" frame_fibers", .{}) catch {}; any = true; }
+            if (self.key_waiters) { _ = out.print(" key_waiters", .{}) catch {}; any = true; }
+            if (self.key_events) { _ = out.print(" key_events", .{}) catch {}; any = true; }
+            if (self.http_head_waiters) { _ = out.print(" http_head_waiters", .{}) catch {}; any = true; }
+            if (self.http_read_waiters) { _ = out.print(" http_read_waiters", .{}) catch {}; any = true; }
+            if (self.http_requests) { _ = out.print(" http_requests", .{}) catch {}; any = true; }
+            if (!any) _ = out.print(" idle", .{}) catch {};
+            _ = out.print("\n", .{}) catch {};
+            out.flush() catch {};
+        }
+    };
+
+    var prev_activity: ?ActivityState = null;
 
     while (true) {
         const now = std.time.nanoTimestamp();
+
+        if (watchdog_ns) |limit| {
+            if (now - start_ts >= limit) {
+                var b: [128]u8 = undefined;
+                var w = std.fs.File.stdout().writer(&b);
+                const out: *std.Io.Writer = &w.interface;
+                _ = out.print("EventLoop: watchdog timeout after {}s\n", .{limit / std.time.ns_per_s}) catch {};
+                out.flush() catch {};
+                break;
+            }
+        }
 
         if (sc.sleep_timers.items.len > 0) {
             var index: usize = 0;
@@ -118,6 +204,124 @@ pub fn eventLoop(engine: *Engine, sc: *SyscallContext) !void {
             c.wrenReleaseHandle(engine.vm, fiber);
         }
 
+        // Process HTTP timeouts then events
+        {
+            // Fire timeouts for head waiters
+            const now_ms: u64 = @intCast(@divTrunc(now, std.time.ns_per_ms));
+            var hit_timeout = true;
+            while (hit_timeout) {
+                hit_timeout = false;
+                var it0 = sc.http.base.waiters.iterator();
+                while (it0.next()) |e0| {
+                    const id0 = e0.key_ptr.*;
+                    const w0 = e0.value_ptr.*;
+                    if (w0.timeout_deadline_ms <= now_ms) {
+                        // Remove and cancel the request, then resume fiber with error
+                        if (sc.http.base.waiters.fetchRemove(id0)) |rem| {
+                            sc.http.cancel(id0);
+                            const fiber = rem.value.fiber;
+                            var builder = engine.slots();
+                            _ = builder.set(0, fiber);
+                            c.wrenEnsureSlots(engine.vm, 2);
+                            c.wrenSetSlotNewMap(engine.vm, 1);
+                            try builder.mapSet(1, "type", "error");
+                            try builder.mapSet(1, "id", id0);
+                            try builder.mapSet(1, "message", "timeout");
+                            try builder.call("call(_)").checkSuccess();
+                            c.wrenReleaseHandle(engine.vm, fiber);
+                            hit_timeout = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // Fire timeouts for read waiters (treat as end-of-stream)
+            var hit_timeout2 = true;
+            while (hit_timeout2) {
+                hit_timeout2 = false;
+                var it1 = sc.http.base.waiters.iterator();
+                while (it1.next()) |e1| {
+                    const id1 = e1.key_ptr.*;
+                    const w1 = e1.value_ptr.*;
+                    if (w1.timeout_deadline_ms <= now_ms) {
+                        if (sc.http.base.waiters.fetchRemove(id1)) |rem| {
+                            const fiber = rem.value.fiber;
+                            var builder = engine.slots();
+                            _ = builder.set(0, fiber);
+                            _ = builder.set(1, "");
+                            try builder.call("transfer(_)").checkSuccess();
+                            c.wrenReleaseHandle(engine.vm, fiber);
+                            hit_timeout2 = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            const events = sc.http.processEvents();
+            
+            // Process deliveries
+            for (events.deliveries) |delivery| {
+                if (sc.http.removeWaiter(delivery.request_id)) |fiber| {
+                    var builder = engine.slots();
+                    _ = builder.set(0, fiber);
+                    
+                    switch (delivery.payload) {
+                        .head => |h| {
+                            std.debug.print("HTTP head id={} status={}\n", .{ delivery.request_id, h.status });
+                            c.wrenEnsureSlots(engine.vm, 2);
+                            c.wrenSetSlotNewMap(engine.vm, 1);
+                            try builder.mapSet(1, "type", "head");
+                            try builder.mapSet(1, "id", delivery.request_id);
+                            try builder.mapSet(1, "status", h.status);
+                        },
+                        .data => |chunk| {
+                            std.debug.print("HTTP data id={} size={}\n", .{ delivery.request_id, chunk.len });
+                            _ = builder.set(1, chunk);
+                            defer sc.allocator.free(chunk);
+                        },
+                        .end => {
+                            std.debug.print("HTTP end id={}\n", .{delivery.request_id});
+                            _ = builder.set(1, "");
+                        },
+                        .@"error" => |msg| {
+                            std.debug.print("HTTP error id={} msg={s}\n", .{ delivery.request_id, msg });
+                            c.wrenEnsureSlots(engine.vm, 2);
+                            c.wrenSetSlotNewMap(engine.vm, 1);
+                            try builder.mapSet(1, "type", "error");
+                            try builder.mapSet(1, "message", msg);
+                            defer sc.allocator.free(msg);
+                        },
+                    }
+                    
+                    try builder.call("transfer(_)").checkSuccess();
+                    c.wrenReleaseHandle(engine.vm, fiber);
+                } else {
+                    // No waiter - clean up any allocated payload
+                    switch (delivery.payload) {
+                        .data => |chunk| sc.allocator.free(chunk),
+                        .@"error" => |msg| sc.allocator.free(msg),
+                        else => {},
+                    }
+                }
+            }
+        }
+
+        // Check for HTTP timeouts
+        {
+            const timed_out_fibers = try sc.http.checkTimeouts(sc.allocator);
+            defer sc.allocator.free(timed_out_fibers);
+            
+            for (timed_out_fibers) |fiber| {
+                var builder = engine.slots();
+                _ = builder.set(0, fiber);
+                _ = builder.set(1, ""); // Empty response for timeout
+                try builder.call("transfer(_)").checkSuccess();
+                c.wrenReleaseHandle(engine.vm, fiber);
+            }
+        }
+
         if (now >= next_frame) {
             if (sc.frame_fibers.items.len > 0) {
                 var i: usize = sc.frame_fibers.items.len;
@@ -129,22 +333,34 @@ pub fn eventLoop(engine: *Engine, sc: *SyscallContext) !void {
                 }
             }
             if (sc.window) |w| {
-                const stdout_writer = std.io.getStdOut().writer();
-                try w.renderAndPresent(sc.document, 0, stdout_writer);
+                var out_buf: [2048]u8 = undefined;
+                var out_state = std.fs.File.stdout().writer(&out_buf);
+                const out: *std.Io.Writer = &out_state.interface;
+                try w.renderAndPresent(sc.document, 0, out);
+                try out.flush();
             }
             next_frame += frame_ns;
         }
 
-        if (sc.window == null and sc.sleep_timers.items.len == 0 and sc.frame_fibers.items.len == 0 and sc.key_waiters.items.len == 0 and sc.key_events.items.len == 0) {
-            break;
+        // Compute activity state and log changes
+        const activity = ActivityState.capture(sc);
+        if (prev_activity) |prev| {
+            if (!ActivityState.equals(prev, activity)) activity.debugPrint();
+        } else {
+            activity.debugPrint();
         }
+        prev_activity = activity;
 
-        std.time.sleep(std.time.ns_per_ms);
+        if (!activity.anyActive()) break;
+
+        std.Thread.sleep(std.time.ns_per_ms);
     }
 }
 
 fn run_script(allocator: std.mem.Allocator, name: []const u8) !void {
-    var stderr = std.io.getStdErr().writer();
+    var err_buf2: [512]u8 = undefined;
+    var err_state2 = std.fs.File.stderr().writer(&err_buf2);
+    const stderr: *std.Io.Writer = &err_state2.interface;
 
     const file = try std.fs.cwd().openFile(name, .{});
     defer file.close();
@@ -154,7 +370,7 @@ fn run_script(allocator: std.mem.Allocator, name: []const u8) !void {
 
     var document = try dom.Dom.init(allocator);
     defer document.deinit();
-    var sc = SyscallContext{ .allocator = allocator, .document = document };
+    var sc = SyscallContext.init(allocator, document);
 
     const engine = try Engine.init(allocator, .{ .syscall_context = &sc });
     defer engine.deinit();
@@ -166,4 +382,5 @@ fn run_script(allocator: std.mem.Allocator, name: []const u8) !void {
     const output = try engine.takeOutput(allocator);
     defer allocator.free(output);
     try stderr.print("{s}", .{output});
+    try stderr.flush();
 }
