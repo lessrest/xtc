@@ -8,7 +8,7 @@ Status: active research; the surface may change.
 
 ## Quick Start
 
-- Dependencies: Zig 0.14.x and a Unix‑like terminal. To bootstrap toolchains
+- Dependencies: Zig 0.15.1 and a Unix‑like terminal. To bootstrap toolchains
   locally, run `./scripts/setup.sh`.
 
 ### Build and Test

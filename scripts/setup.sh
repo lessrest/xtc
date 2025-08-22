@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # Setup script for xtc
-# - Ensures Zig 0.14.1 is available (downloads portable build)
+# - Ensures Zig 0.15.1 is available (downloads portable build)
 # - When run as root: installs globally to /usr/local/bin
 # - When run as regular user: installs locally and adds vendor/zig to PATH via ~/.bashrc
 # - Ensures git submodules are initialized (depth 1)
@@ -9,8 +9,7 @@
 
 set -euo pipefail
 
-REQUIRED_ZIG_VERSION="0.14.1"
-ZIG_TARBALL_URL="https://ziglang.org/download/${REQUIRED_ZIG_VERSION}/zig-x86_64-linux-${REQUIRED_ZIG_VERSION}.tar.xz"
+REQUIRED_ZIG_VERSION="0.15.1"
 
 # Check if running as root
 IS_ROOT=0
@@ -35,108 +34,81 @@ else
   info() { echo -e "[setup] $*"; }
 fi
 mkdir -p "$INSTALL_DIR"
+mkdir -p "$INSTALL_DIR/bin"
 
 warn() { echo -e "[setup] WARNING: $*" >&2; }
 die()  { echo -e "[setup] ERROR: $*" >&2; exit 1; }
 
-have_required_zig=0
-if command -v zig >/dev/null 2>&1; then
-  zig_ver="$(zig version 2>/dev/null || echo "")"
-  if [[ "$zig_ver" == "$REQUIRED_ZIG_VERSION" ]]; then
-    have_required_zig=1
-    info "Found system zig $zig_ver on PATH"
-  else
-    info "Found zig $zig_ver on PATH, but need $REQUIRED_ZIG_VERSION"
-  fi
-else
-  info "zig not found on PATH"
-fi
-
-# Download/extract Zig if needed
-if [[ "$have_required_zig" -ne 1 ]]; then
-  tarball_name="zig-x86_64-linux-${REQUIRED_ZIG_VERSION}.tar.xz"
-  tarball_path="$INSTALL_DIR/$tarball_name"
-  extracted_dir_name="zig-x86_64-linux-${REQUIRED_ZIG_VERSION}"
-  extracted_dir_path="$INSTALL_DIR/$extracted_dir_name"
-  
+install_zig_version() {
+  local ver="$1"
+  local url="https://ziglang.org/download/${ver}/zig-x86_64-linux-${ver}.tar.xz"
+  local tarball_name="zig-x86_64-linux-${ver}.tar.xz"
+  local tarball_path="$INSTALL_DIR/$tarball_name"
+  local extracted_dir_name="zig-x86_64-linux-${ver}"
+  local extracted_dir_path="$INSTALL_DIR/$extracted_dir_name"
+  local version_link="$INSTALL_DIR/zig-${ver}"
+  local version_bin_link
   if [[ $IS_ROOT -eq 1 ]]; then
-    target_link_version="$INSTALL_DIR/zig-${REQUIRED_ZIG_VERSION}"
-    target_link_latest="$INSTALL_DIR/bin/zig"
-    # Ensure /usr/local/bin exists
-    mkdir -p "$INSTALL_DIR/bin"
+    version_bin_link="$INSTALL_DIR/bin/zig-${ver}"
   else
-    target_link_version="$INSTALL_DIR/zig-${REQUIRED_ZIG_VERSION}"
-    target_link_latest="$INSTALL_DIR/zig"
+    version_bin_link="$INSTALL_DIR/bin/zig-${ver}"
   fi
 
   if [[ ! -d "$extracted_dir_path" ]]; then
-    info "Fetching Zig ${REQUIRED_ZIG_VERSION} portable toolchain..."
+    info "Fetching Zig ${ver} portable toolchain..."
     if command -v curl >/dev/null 2>&1; then
-      curl -L --fail --retry 3 -o "$tarball_path" "$ZIG_TARBALL_URL"
+      curl -L --fail --retry 3 -o "$tarball_path" "$url"
     elif command -v wget >/dev/null 2>&1; then
-      wget -O "$tarball_path" "$ZIG_TARBALL_URL"
+      wget -O "$tarball_path" "$url"
     else
-      die "Neither curl nor wget is available to download $ZIG_TARBALL_URL"
+      die "Neither curl nor wget is available to download $url"
     fi
-
     info "Extracting $tarball_name into $INSTALL_DIR"
     tar -xJf "$tarball_path" -C "$INSTALL_DIR"
   else
-    info "Zig archive already extracted at $extracted_dir_path"
+    info "Zig ${ver} archive already extracted"
   fi
 
-  # Create/refresh symlinks for stable paths
-  ln -sfn "$extracted_dir_path" "$target_link_version"
-  
-  if [[ $IS_ROOT -eq 1 ]]; then
-    # For root, create a symlink from /usr/local/bin/zig to the actual binary
-    ln -sfn "$extracted_dir_path/zig" "$target_link_latest"
-    info "Global Zig installed at $target_link_latest (-> $(readlink -f "$target_link_latest"))"
-  else
-    ln -sfn "$target_link_version" "$target_link_latest"
-    info "Local Zig available at $target_link_latest (-> $(readlink -f "$target_link_latest"))"
-  fi
+  ln -sfn "$extracted_dir_path" "$version_link"
+  ln -sfn "$version_link/zig" "$version_bin_link"
+  info "Linked $version_bin_link -> $(readlink -f "$version_bin_link")"
 
-  # Add to PATH via ~/.bashrc if missing (skip for root since /usr/local/bin should be in PATH)
-  if [[ $IS_ROOT -eq 0 ]]; then
-    abs_vendor_zig="$target_link_latest"
-    bashrc="$HOME/.bashrc"
-    export_line="export PATH=\"$abs_vendor_zig:\$PATH\""
-    if [[ -f "$bashrc" ]] && grep -Fq "$abs_vendor_zig" "$bashrc"; then
-      info "~/.bashrc already contains vendor Zig path"
-    else
-      info "Adding vendor Zig path to ~/.bashrc"
-      {
-        echo ""
-        echo "# Added by xtc/scripts/setup.sh on $(date +%F)"
-        echo "$export_line"
-      } >> "$bashrc"
-      info "To use immediately in current shell: source \"$bashrc\" or export PATH=\"$abs_vendor_zig:\$PATH\""
-    fi
-  else
-    info "Running as root - Zig installed globally, /usr/local/bin should already be in PATH"
+  # Verify
+  if [[ ! -x "$version_bin_link" ]]; then
+    die "Zig ${ver} binary not found at $version_bin_link"
   fi
+  local reported
+  reported="$($version_bin_link version 2>/dev/null || true)"
+  if [[ "$reported" != "$ver" ]]; then
+    die "Zig reported '$reported', expected '$ver' at $version_bin_link"
+  fi
+  info "Verified zig-$ver runs successfully"
+}
 
-  # Verify the newly installed Zig runs and reports the expected version
-  if [[ $IS_ROOT -eq 1 ]]; then
-    zig_bin="$target_link_latest"
+# Ensure required zig and extra zig are installed side-by-side
+install_zig_version "$REQUIRED_ZIG_VERSION"
+
+# Maintain a default 'zig' symlink to REQUIRED_ZIG_VERSION
+ln -sfn "$INSTALL_DIR/bin/zig-${REQUIRED_ZIG_VERSION}" "$INSTALL_DIR/bin/zig"
+info "Default zig -> $(readlink -f "$INSTALL_DIR/bin/zig")"
+
+# Add vendor/bin (or /usr/local/bin) to PATH via ~/.bashrc for local install
+if [[ $IS_ROOT -eq 0 ]]; then
+  bashrc="$HOME/.bashrc"
+  export_line="export PATH=\"$INSTALL_DIR/bin:\$PATH\""
+  if [[ -f "$bashrc" ]] && grep -Fq "$INSTALL_DIR/bin" "$bashrc"; then
+    info "~/.bashrc already contains vendor bin path"
   else
-    zig_bin="$target_link_latest/zig"
+    info "Adding vendor bin path to ~/.bashrc"
+    {
+      echo ""
+      echo "# Added by xtc/scripts/setup.sh on $(date +%F)"
+      echo "$export_line"
+    } >> "$bashrc"
+    info "To use immediately: export PATH=\"$INSTALL_DIR/bin:\$PATH\""
   fi
-  
-  if [[ ! -x "$zig_bin" ]]; then
-    die "Zig binary not found or not executable at $zig_bin"
-  fi
-  installed_ver="$($zig_bin version 2>/dev/null || true)"
-  if [[ "$installed_ver" != "$REQUIRED_ZIG_VERSION" ]]; then
-    die "Zig reported version '$installed_ver', expected '$REQUIRED_ZIG_VERSION'"
-  fi
-  
-  if [[ $IS_ROOT -eq 1 ]]; then
-    info "Verified global zig $installed_ver runs successfully"
-  else
-    info "Verified vendor zig $installed_ver runs successfully"
-  fi
+else
+  info "Running as root - /usr/local/bin already on PATH"
 fi
 
 # Ensure vendor dir is gitignored (only for local installations)
@@ -204,18 +176,8 @@ else
   info "Found bun on PATH ($(command -v bun))"
 fi
 
-# Perform an initial build to warm caches and verify the toolchain
+# Perform an initial build to warm caches and verify the default toolchain
 zig_bin="$(command -v zig 2>/dev/null || true)"
-if [[ -z "$zig_bin" ]]; then
-  if [[ $IS_ROOT -eq 1 ]]; then
-    zig_candidate="/usr/local/bin/zig"
-  else
-    zig_candidate="$REPO_ROOT/vendor/zig/zig"
-  fi
-  if [[ -x "$zig_candidate" ]]; then
-    zig_bin="$zig_candidate"
-  fi
-fi
 if [[ -n "$zig_bin" ]]; then
   info "Running initial zig build"
   (cd "$REPO_ROOT" && TERM=dumb ZIG_NO_PROGRESS=1 "$zig_bin" build --summary new)

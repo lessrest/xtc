@@ -5,7 +5,7 @@
     .dependencies = .{
         .zg = .{ .path = "deps/zg" },
     },
-    .minimum_zig_version = "0.14.1",
+    .minimum_zig_version = "0.15.1",
     .paths = .{
         "build.zig",
         "build.zig.zon",

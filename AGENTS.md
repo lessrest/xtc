@@ -15,7 +15,7 @@
 
 ## Coding Style
 
-- Target Zig 0.14.x. Format with `zig fmt` before committing.
+- Target Zig 0.15.1. Format with `zig fmt` before committing.
 - Prefer small, focused modules and clear names; keep helpers in `src/lib/` when shared.
 - Keep diffs tight and avoid drive‑by refactors in unrelated areas.
 - For Wren code, avoid single-line control flow like `if (...) return x`; use braces and newlines for all blocks.
