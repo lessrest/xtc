@@ -18,6 +18,10 @@ class Core {
         args["operation"] = name
         return syscall(args)
     }
+
+    static sleep(seconds) {
+        return call("sleep", { "seconds": seconds })
+    }
 }
 
 class Document {

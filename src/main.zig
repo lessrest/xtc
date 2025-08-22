@@ -3,6 +3,7 @@ const ansi = @import("ansi");
 
 const vm = @import("fiberscript/vm.zig");
 const dom = @import("dom.zig");
+const c = @import("fiberscript/wren.zig");
 
 const Engine = vm.Engine(.{});
 const SyscallContext = vm.SyscallContext;
@@ -51,6 +52,29 @@ pub fn main() !void {
     return error.Usage;
 }
 
+pub fn driveTimers(engine: *Engine, sc: *SyscallContext) !void {
+    while (sc.sleep_timers.items.len > 0) {
+        var index: usize = 0;
+        var earliest = sc.sleep_timers.items[0].deadline_ms;
+        var i: usize = 1;
+        while (i < sc.sleep_timers.items.len) : (i += 1) {
+            const t = sc.sleep_timers.items[i];
+            if (t.deadline_ms < earliest) {
+                earliest = t.deadline_ms;
+                index = i;
+            }
+        }
+        const now: u64 = @intCast(std.time.milliTimestamp());
+        if (earliest > now) {
+            std.time.sleep((earliest - now) * std.time.ns_per_ms);
+        }
+        const timer = sc.sleep_timers.swapRemove(index);
+        var builder = engine.slots();
+        try builder.set(0, timer.fiber).call("call()").checkSuccess();
+        c.wrenReleaseHandle(engine.vm, timer.fiber);
+    }
+}
+
 fn run_script(allocator: std.mem.Allocator, name: []const u8) !void {
     var stderr = std.io.getStdErr().writer();
 
@@ -69,6 +93,7 @@ fn run_script(allocator: std.mem.Allocator, name: []const u8) !void {
 
     defer engine.croak() catch {};
     try engine.runTopLevel(name, script);
+    try driveTimers(engine, &sc);
 
     const output = try engine.takeOutput(allocator);
     defer allocator.free(output);
