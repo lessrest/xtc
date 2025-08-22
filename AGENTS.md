@@ -9,8 +9,8 @@
 ## Build, Test, Develop
 
 - Bootstrap: `./scripts/setup.sh` installs the expected Zig and Bun if needed and runs an initial `zig build`.
-- Build: `ZIG_NO_PROGRESS=1 zig build --summary new` for a clean, non-interactive log (`ZIG_NO_PROGRESS` disables the progress bar). `ZIG_NO_PROGRESS=1 make` maps to this.
-- Test: `ZIG_NO_PROGRESS=1 zig build test --summary new` runs inline + integration tests. `ZIG_NO_PROGRESS=1 make test` maps to this.
+- Build: `TERM=dumb ZIG_NO_PROGRESS=1 zig build --summary new` for a clean, non-interactive log (`TERM=dumb` and `ZIG_NO_PROGRESS` disable terminal control sequences). `ZIG_NO_PROGRESS=1 make` maps to this.
+- Test: `TERM=dumb ZIG_NO_PROGRESS=1 zig build test --summary new` runs inline + integration tests. `ZIG_NO_PROGRESS=1 make test` maps to this.
 - Run: after building, use `zig-out/bin/xtc` (see `--help` and `README.md` for flags and examples).
 
 ## Coding Style
@@ -18,6 +18,7 @@
 - Target Zig 0.14.x. Format with `zig fmt` before committing.
 - Prefer small, focused modules and clear names; keep helpers in `src/lib/` when shared.
 - Keep diffs tight and avoid drive‑by refactors in unrelated areas.
+- For Wren code, avoid single-line control flow like `if (...) return x`; use braces and newlines for all blocks.
 
 ## Testing
 
