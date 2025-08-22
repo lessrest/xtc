@@ -15,6 +15,7 @@ pub const panic = ansi.panic;
 comptime {
     _ = @import("test/flex.test.zig");
     _ = @import("test/element_print.test.zig");
+    _ = @import("test/fs.test.zig");
     _ = @import("fiberscript/vm.zig");
 }
 

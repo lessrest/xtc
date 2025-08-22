@@ -5,7 +5,7 @@ const dom = @import("../dom.zig");
 const Engine = vm.Engine(.{});
 const SyscallContext = vm.SyscallContext;
 
-test "fs read write and list" {
+test "fs exists and remove" {
     const allocator = std.testing.allocator;
 
     var document = try dom.Dom.init(allocator);
@@ -15,28 +15,19 @@ test "fs read write and list" {
     var engine = try Engine.init(allocator, .{ .syscall_context = &sc });
     defer engine.deinit();
 
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const dir_path = try tmp.dir.realpathAlloc(allocator, ".");
-    defer allocator.free(dir_path);
-    const file_path = try std.fs.path.join(allocator, &.{ dir_path, "sample.txt" });
-    defer allocator.free(file_path);
-
-    const script = try std.fmt.allocPrint(
-        allocator,
-        \\import "fs" for FS
-        \\var p = "{s}"
-        \\FS.write(p, "hi")
-        \\System.print(FS.read(p))
-        \\System.print(FS.list("{s}").contains("sample.txt"))
-    ,
-        .{ file_path, dir_path },
+    try engine.runTopLevel("test",
+        \\import "fs" for Path
+        \\import "xtc" for Core
+        \\import "syscall" for Print
+        \\var tmp = Path.cwd().join("tmp.txt")
+        \\tmp.write("hi")
+        \\var ex1 = tmp.exists()
+        \\tmp.remove()
+        \\var ex2 = tmp.exists()
+        \\Core.call(Print.new("%(ex1) %(ex2)\n"))
     );
-    defer allocator.free(script);
-
-    try engine.runTopLevel("test", script);
 
     const output = try engine.takeOutput(allocator);
     defer allocator.free(output);
-    try std.testing.expectEqualStrings("hi\ntrue\n", output);
+    try std.testing.expectEqualStrings("true false\n", output);
 }

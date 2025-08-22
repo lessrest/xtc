@@ -1,24 +1,47 @@
 import "xtc" for Core
-import "syscall" for ReadFile, WriteFile, ReadDir, IsDir
+import "syscall" for ReadFile, WriteFile, ReadDir, IsDir, Exists, Remove
 
-class FS {
-  static read(path) {
-    return Core.call(ReadFile.new(path))
+class Path {
+  construct new(path) {
+    _path = path
   }
 
-  static write(path, data) {
-    return Core.call(WriteFile.new(path, data))
+  static cwd() {
+    return Path.new(".")
   }
 
-  static list(path) {
-    var result = Core.call(ReadDir.new(path))
+  join(child) {
+    var sep = _path.endsWith("/") ? "" : "/"
+    return Path.new(_path + sep + child)
+  }
+
+  read() {
+    return Core.call(ReadFile.new(_path))
+  }
+
+  write(data) {
+    return Core.call(WriteFile.new(_path, data))
+  }
+
+  list() {
+    var result = Core.call(ReadDir.new(_path))
     if (result == "") {
       return []
     }
     return result.split("\n")
   }
 
-  static isDir(path) {
-    return Core.call(IsDir.new(path))
+  isDir() {
+    return Core.call(IsDir.new(_path))
   }
+
+  exists() {
+    return Core.call(Exists.new(_path))
+  }
+
+  remove() {
+    return Core.call(Remove.new(_path))
+  }
+
+  toString() { _path }
 }

@@ -1,3 +1,4 @@
-import "fs" for FS
+import "fs" for Path
 
-System.print(FS.read("README.md"))
+var readme = Path.cwd().join("README.md")
+System.print(readme.read())
