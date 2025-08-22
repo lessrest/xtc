@@ -167,6 +167,14 @@ pub fn generateWrenModule(comptime Syscalls: type) []const u8 {
         source = source ++ ") {}\n";
         source = source ++ "}\n";
     }
+    source = source ++ "foreign class SubmissionBatch {\n";
+    source = source ++ "  construct new(capacity) {}\n";
+    source = source ++ "  foreign add(request)\n";
+    source = source ++ "}\n";
+    source = source ++ "foreign class CompletionBatch {\n";
+    source = source ++ "  foreign wait(n)\n";
+    source = source ++ "  foreign waitAll()\n";
+    source = source ++ "}\n";
     return source;
 }
 
