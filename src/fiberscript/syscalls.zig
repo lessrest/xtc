@@ -150,6 +150,35 @@ pub fn generateResultSetter(comptime Syscalls: type) type {
     };
 }
 
+/// Generate Wren source code defining foreign classes for each syscall payload.
+pub fn generateWrenModule(comptime Syscalls: type) []const u8 {
+    const Request = RequestUnion(Syscalls);
+    comptime var source: []const u8 = "";
+    inline for (@typeInfo(Request).@"union".fields) |field| {
+        const Payload = field.type;
+        const class_name = pascalCase(field.name);
+        source = source ++ "foreign class " ++ class_name ++ " {\n";
+        source = source ++ "  construct new(";
+        const params = std.meta.fields(Payload);
+        inline for (params, 0..) |pf, idx| {
+            if (idx != 0) source = source ++ ", ";
+            source = source ++ pf.name;
+        }
+        source = source ++ ") {}\n";
+        source = source ++ "}\n";
+    }
+    return source;
+}
+
+pub fn pascalCase(comptime name: []const u8) []const u8 {
+    if (name.len == 0) return "";
+    const first = if (name[0] >= 'a' and name[0] <= 'z')
+        name[0] - ('a' - 'A')
+    else
+        name[0];
+    return std.fmt.comptimePrint("{c}{s}", .{ first, name[1..] });
+}
+
 /// Generate a dispatcher that bridges Wren fiber yields to syscall implementations.
 pub fn generateDispatcher(
     comptime Syscalls: type,
