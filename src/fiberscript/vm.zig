@@ -38,6 +38,25 @@ pub fn Engine(configuration: Configuration) type {
         const Dispatcher = syscalls.generateDispatcher(SyscallsType, Self, SyscallContext);
         const SyscallModuleSource: [:0]const u8 = syscalls.generateWrenModule(SyscallsType) ++ "\x00";
 
+        const SubmissionBatch = struct {
+            requests: std.ArrayList(Request),
+
+            pub fn init(allocator: std.mem.Allocator, capacity: usize) SubmissionBatch {
+                var list = std.ArrayList(Request).init(allocator);
+                list.ensureTotalCapacity(capacity) catch {};
+                return .{ .requests = list };
+            }
+
+            pub fn deinit(self: *SubmissionBatch) void {
+                self.requests.deinit();
+            }
+        };
+
+        const CompletionBatch = struct {
+            expected: usize = 0,
+            completed: usize = 0,
+        };
+
         pub const Options = struct {
             output_buffer_size: usize = 1024 * 32,
             error_buffer_size: usize = 1024 * 32,
@@ -157,12 +176,24 @@ pub fn Engine(configuration: Configuration) type {
             method: [*:0]const u8,
         ) callconv(.C) c.ForeignMethodFn {
             _ = vm; // autofix
-            if (!isStatic) return null;
-
             if (std.mem.eql(u8, std.mem.span(module), "xtc")) {
-                if (std.mem.eql(u8, std.mem.span(className), "Core")) {
+                if (std.mem.eql(u8, std.mem.span(className), "Core") and isStatic) {
                     if (std.mem.eql(u8, std.mem.span(method), "syscall(_,_)")) {
                         return &foreignSyscall;
+                    } else if (std.mem.eql(u8, std.mem.span(method), "submitBatch(_,_)")) {
+                        return &foreignSubmitBatch;
+                    }
+                }
+            } else if (std.mem.eql(u8, std.mem.span(module), "syscall")) {
+                if (std.mem.eql(u8, std.mem.span(className), "SubmissionBatch") and !isStatic) {
+                    if (std.mem.eql(u8, std.mem.span(method), "add(_)")) {
+                        return &submissionBatchAdd;
+                    }
+                } else if (std.mem.eql(u8, std.mem.span(className), "CompletionBatch") and !isStatic) {
+                    if (std.mem.eql(u8, std.mem.span(method), "wait(_)")) {
+                        return &completionBatchWait;
+                    } else if (std.mem.eql(u8, std.mem.span(method), "waitAll()")) {
+                        return &completionBatchWaitAll;
                     }
                 }
             }
@@ -178,6 +209,37 @@ pub fn Engine(configuration: Configuration) type {
             _ = vm; // autofix
             var methods = c.ForeignClassMethods{};
             if (!std.mem.eql(u8, std.mem.span(module), "syscall")) return methods;
+
+            if (std.mem.eql(u8, std.mem.span(className), "SubmissionBatch")) {
+                const Alloc = struct {
+                    pub fn allocate(vm_ptr: *c.VM) callconv(.C) void {
+                        const self = getSelf(vm_ptr);
+                        const capacity = @as(usize, @intFromFloat(c.wrenGetSlotDouble(vm_ptr, 1)));
+                        const sb_ptr = c.wrenSetSlotNewForeign(vm_ptr, 0, 0, @sizeOf(SubmissionBatch));
+                        const sb = @as(*SubmissionBatch, @ptrCast(@alignCast(sb_ptr)));
+                        sb.* = SubmissionBatch.init(self.allocator, capacity);
+                    }
+                };
+                const Final = struct {
+                    pub fn finalize(data: ?*anyopaque) callconv(.C) void {
+                        const sb = @as(*SubmissionBatch, @ptrCast(@alignCast(data.?)));
+                        sb.deinit();
+                    }
+                };
+                methods.allocate = Alloc.allocate;
+                methods.finalize = Final.finalize;
+                return methods;
+            } else if (std.mem.eql(u8, std.mem.span(className), "CompletionBatch")) {
+                const Alloc = struct {
+                    pub fn allocate(vm_ptr: *c.VM) callconv(.C) void {
+                        const cb_ptr = c.wrenSetSlotNewForeign(vm_ptr, 0, 0, @sizeOf(CompletionBatch));
+                        const cb = @as(*CompletionBatch, @ptrCast(@alignCast(cb_ptr)));
+                        cb.* = CompletionBatch{};
+                    }
+                };
+                methods.allocate = Alloc.allocate;
+                return methods;
+            }
 
             inline for (@typeInfo(Request).@"union".fields) |field| {
                 const class_name = syscalls.pascalCase(field.name);
@@ -234,6 +296,52 @@ pub fn Engine(configuration: Configuration) type {
             };
         }
 
+        fn foreignSubmitBatch(ptr: *c.VM) callconv(.C) void {
+            var ctx: *Self = @ptrCast(@alignCast(c.wrenGetUserData(ptr)));
+            var work = ctx.slots();
+            const fiber = work.get(1, *c.Handle) catch {
+                std.debug.panic("expected fiber", .{});
+            };
+            const batch_ptr = c.wrenGetSlotForeign(ptr, 2);
+            const batch = @as(*SubmissionBatch, @ptrCast(@alignCast(batch_ptr)));
+            c.wrenGetVariable(ptr, "syscall", "CompletionBatch", 0);
+            const completion_ptr = c.wrenSetSlotNewForeign(ptr, 0, 0, @sizeOf(CompletionBatch));
+            const completion = @as(*CompletionBatch, @ptrCast(@alignCast(completion_ptr)));
+            completion.* = CompletionBatch{};
+            ctx.submitBatch(fiber, batch, completion) catch {
+                std.debug.panic("failed to submit batch", .{});
+            };
+            c.wrenReleaseHandle(ptr, fiber);
+        }
+
+        fn submissionBatchAdd(ptr: *c.VM) callconv(.C) void {
+            const batch_ptr = c.wrenGetSlotForeign(ptr, 0);
+            const req_ptr = c.wrenGetSlotForeign(ptr, 1);
+            var batch = @as(*SubmissionBatch, @ptrCast(@alignCast(batch_ptr)));
+            const req = @as(*Request, @ptrCast(@alignCast(req_ptr))).*;
+            batch.requests.append(req) catch {};
+            c.wrenSetSlotNull(ptr, 0);
+        }
+
+        fn completionBatchWait(ptr: *c.VM) callconv(.C) void {
+            const comp_ptr = c.wrenGetSlotForeign(ptr, 0);
+            const comp = @as(*CompletionBatch, @ptrCast(@alignCast(comp_ptr)));
+            const n = @as(usize, @intFromFloat(c.wrenGetSlotDouble(ptr, 1)));
+            while (comp.completed < n) {
+                std.time.sleep(std.time.ns_per_ms);
+            }
+            c.wrenSetSlotNull(ptr, 0);
+        }
+
+        fn completionBatchWaitAll(ptr: *c.VM) callconv(.C) void {
+            const comp_ptr = c.wrenGetSlotForeign(ptr, 0);
+            const comp = @as(*CompletionBatch, @ptrCast(@alignCast(comp_ptr)));
+            while (comp.completed < comp.expected) {
+                std.time.sleep(std.time.ns_per_ms);
+            }
+            c.wrenSetSlotNull(ptr, 0);
+        }
+
         pub fn syscall(self: *Self, fiber: *c.Handle, request: Request) !void {
             std.debug.print("syscall: {d} {s}\n", .{ fiber, @tagName(request) });
             var work = self.slots();
@@ -248,6 +356,25 @@ pub fn Engine(configuration: Configuration) type {
                     _ = work.set(0, fiber);
                 },
             }
+        }
+
+        pub fn submitBatch(
+            self: *Self,
+            fiber: *c.Handle,
+            batch: *SubmissionBatch,
+            completion: *CompletionBatch,
+        ) !void {
+            completion.expected = batch.requests.items.len;
+            for (batch.requests.items) |req| {
+                const result = try self.dispatcher.dispatch(req, fiber);
+                switch (result) {
+                    .immediate => {
+                        completion.completed += 1;
+                    },
+                    .pending => {},
+                }
+            }
+            batch.requests.clearRetainingCapacity();
         }
 
         /// C callback wrapper for output handling.
@@ -626,6 +753,35 @@ test "we can call Core.call" {
     defer allocator.free(output);
 
     try std.testing.expectEqualStrings(output, "hello\nhello\n");
+    try std.testing.expect(engine.takeError() == .none);
+}
+
+test "can submit syscall batch" {
+    const allocator = std.testing.allocator;
+
+    var document = try dom.Dom.init(allocator);
+    defer document.deinit();
+    var sc = SyscallContext{ .allocator = allocator, .document = document };
+
+    var engine = try Engine(.{}).init(allocator, .{ .syscall_context = &sc });
+    defer engine.deinit();
+
+    engine.runTopLevel("main",
+        \\import "xtc" for Core
+        \\import "syscall" for Print, SubmissionBatch
+        \\var batch = SubmissionBatch.new(2)
+        \\batch.add(Print.new("A"))
+        \\batch.add(Print.new("B"))
+        \\var cb = Core.submit(batch)
+        \\cb.waitAll()
+    ) catch {
+        try engine.croak();
+    };
+
+    const output = try engine.takeOutput(allocator);
+    defer allocator.free(output);
+
+    try std.testing.expectEqualStrings("AB", output);
     try std.testing.expect(engine.takeError() == .none);
 }
 
