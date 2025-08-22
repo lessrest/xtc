@@ -36,7 +36,7 @@ pub fn Engine(configuration: Configuration) type {
         const SyscallsType = configuration.Syscalls(Self, SyscallContext);
         const Request = syscalls.RequestUnion(SyscallsType);
         const Dispatcher = syscalls.generateDispatcher(SyscallsType, Self, SyscallContext);
-        const SlotParser = syscalls.generateSlotParser(Request, SyscallsType);
+        const SyscallModuleSource: [:0]const u8 = syscalls.generateWrenModule(SyscallsType) ++ "\x00";
 
         pub const Options = struct {
             output_buffer_size: usize = 1024 * 32,
@@ -83,6 +83,8 @@ pub fn Engine(configuration: Configuration) type {
             vmconf.errorFn = errorFn;
             vmconf.userData = self;
             vmconf.bindForeignMethodFn = bindForeignMethodFn;
+            vmconf.bindForeignClassFn = bindForeignClassFn;
+            vmconf.loadModuleFn = loadModuleFn;
 
             if (c.wrenNewVM(&vmconf)) |vm| {
                 self.vm = vm;
@@ -168,16 +170,65 @@ pub fn Engine(configuration: Configuration) type {
             return null;
         }
 
+        fn bindForeignClassFn(
+            vm: *c.VM,
+            module: [*:0]const u8,
+            className: [*:0]const u8,
+        ) callconv(.C) c.ForeignClassMethods {
+            _ = vm; // autofix
+            var methods = c.ForeignClassMethods{};
+            if (!std.mem.eql(u8, std.mem.span(module), "syscall")) return methods;
+
+            inline for (@typeInfo(Request).@"union".fields) |field| {
+                const class_name = syscalls.pascalCase(field.name);
+                if (std.mem.eql(u8, std.mem.span(className), class_name)) {
+                    const PayloadType = field.type;
+                    const Alloc = struct {
+                        pub fn allocate(vm_ptr: *c.VM) callconv(.C) void {
+                            const req_ptr = c.wrenSetSlotNewForeign(vm_ptr, 0, 0, @sizeOf(Request));
+                            const req = @as(*Request, @ptrCast(@alignCast(req_ptr)));
+                            var payload: PayloadType = undefined;
+                            inline for (std.meta.fields(PayloadType), 0..) |pf, idx| {
+                                const slot_index: c_int = @as(c_int, @intCast(idx + 1));
+                                if (pf.type == []const u8) {
+                                    var len: c_int = 0;
+                                    const ptr = c.wrenGetSlotBytes(vm_ptr, slot_index, &len);
+                                    @field(payload, pf.name) = ptr[0..@as(usize, @intCast(len))];
+                                } else if (pf.type == u32) {
+                                    @field(payload, pf.name) = @as(u32, @intFromFloat(c.wrenGetSlotDouble(vm_ptr, slot_index)));
+                                } else if (pf.type == f64) {
+                                    @field(payload, pf.name) = c.wrenGetSlotDouble(vm_ptr, slot_index);
+                                } else {
+                                    @compileError("unsupported field type");
+                                }
+                            }
+                            req.* = @unionInit(Request, field.name, payload);
+                        }
+                    };
+                    methods.allocate = Alloc.allocate;
+                    return methods;
+                }
+            }
+
+            return methods;
+        }
+
+        fn loadModuleFn(vm: *c.VM, name: [*:0]const u8) callconv(.C) c.LoadModuleResult {
+            _ = vm; // autofix
+            if (std.mem.eql(u8, std.mem.span(name), "syscall")) {
+                return c.LoadModuleResult{ .source = SyscallModuleSource.ptr };
+            }
+            return c.LoadModuleResult{};
+        }
+
         fn foreignSyscall(ptr: *c.VM) callconv(.C) void {
             var ctx: *Self = @ptrCast(@alignCast(c.wrenGetUserData(ptr)));
             var work = ctx.slots();
             const fiber = work.get(1, *c.Handle) catch {
                 std.debug.panic("expected fiber", .{});
             };
-            var slot_map = work.slotMap(2);
-            const request = SlotParser.parseRequest(&slot_map) catch {
-                std.debug.panic("expected request", .{});
-            };
+            const req_ptr = c.wrenGetSlotForeign(ptr, 2);
+            const request = @as(*Request, @ptrCast(@alignCast(req_ptr))).*;
             ctx.syscall(fiber, request) catch {
                 std.debug.panic("failed to schedule fiber", .{});
             };
@@ -564,8 +615,9 @@ test "we can call Core.call" {
 
     engine.runTopLevel("main",
         \\import "xtc" for Core
-        \\Core.call("print", { "message": "hello\n" })
-        \\Core.call("print", { "message": "hello\n" })
+        \\import "syscall" for Print
+        \\Core.call(Print.new("hello\n"))
+        \\Core.call(Print.new("hello\n"))
     ) catch {
         try engine.croak();
     };
