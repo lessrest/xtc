@@ -8,9 +8,9 @@
 
 ## Build, Test, Develop
 
-- Bootstrap: `./scripts/setup.sh` installs the expected Zig and Bun if needed.
-- Build: `zig build --summary new` for a persistent progress view. `make` maps to this.
-- Test: `zig build test --summary new` runs inline + integration tests. `make test` maps to this.
+- Bootstrap: `./scripts/setup.sh` installs the expected Zig and Bun if needed and runs an initial `zig build`.
+- Build: `ZIG_NO_PROGRESS=1 zig build --summary new` for a clean, non-interactive log (`ZIG_NO_PROGRESS` disables the progress bar). `ZIG_NO_PROGRESS=1 make` maps to this.
+- Test: `ZIG_NO_PROGRESS=1 zig build test --summary new` runs inline + integration tests. `ZIG_NO_PROGRESS=1 make test` maps to this.
 - Run: after building, use `zig-out/bin/xtc` (see `--help` and `README.md` for flags and examples).
 
 ## Coding Style
