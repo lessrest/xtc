@@ -48,11 +48,9 @@ fn setupImpl(casefold: *CaseFolding, allocator: Allocator) Allocator.Error!void 
 }
 
 inline fn setupImplInner(casefold: *CaseFolding, allocator: Allocator) !void {
-    const decompressor = compress.flate.inflate.decompressor;
-    const in_bytes = @embedFile("fold");
-    var in_fbs = std.io.fixedBufferStream(in_bytes);
-    var in_decomp = decompressor(.raw, in_fbs.reader());
-    var reader = in_decomp.reader();
+    var z = try zstdembed.open(allocator, @embedFile("fold"));
+    defer z.deinit(allocator);
+    var reader = z.reader();
 
     const endian = builtin.cpu.arch.endian();
 
@@ -322,9 +320,8 @@ const std = @import("std");
 const builtin = @import("builtin");
 const mem = std.mem;
 const testing = std.testing;
+const zstdembed = @import("zstdembed");
 const Allocator = mem.Allocator;
 
 const ascii = @import("ascii");
 const Normalize = @import("Normalize");
-
-const compress = std.compress;

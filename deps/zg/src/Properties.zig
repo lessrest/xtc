@@ -25,14 +25,12 @@ pub fn setup(props: *Properties, allocator: Allocator) Allocator.Error!void {
 }
 
 inline fn setupInner(props: *Properties, allocator: Allocator) !void {
-    const decompressor = compress.flate.inflate.decompressor;
     const endian = builtin.cpu.arch.endian();
 
     // Process DerivedCoreProperties.txt
-    const core_bytes = @embedFile("core_props");
-    var core_fbs = std.io.fixedBufferStream(core_bytes);
-    var core_decomp = decompressor(.raw, core_fbs.reader());
-    var core_reader = core_decomp.reader();
+    var core_z = try zstdembed.open(allocator, @embedFile("core_props"));
+    defer core_z.deinit(allocator);
+    var core_reader = core_z.reader();
 
     const core_stage_1_len: u16 = try core_reader.readInt(u16, endian);
     props.core_s1 = try allocator.alloc(u16, core_stage_1_len);
@@ -45,10 +43,9 @@ inline fn setupInner(props: *Properties, allocator: Allocator) !void {
     _ = try core_reader.readAll(props.core_s2);
 
     // Process PropList.txt
-    const props_bytes = @embedFile("props");
-    var props_fbs = std.io.fixedBufferStream(props_bytes);
-    var props_decomp = decompressor(.raw, props_fbs.reader());
-    var props_reader = props_decomp.reader();
+    var props_z = try zstdembed.open(allocator, @embedFile("props"));
+    defer props_z.deinit(allocator);
+    var props_reader = props_z.reader();
 
     const stage_1_len: u16 = try props_reader.readInt(u16, endian);
     props.props_s1 = try allocator.alloc(u16, stage_1_len);
@@ -61,10 +58,9 @@ inline fn setupInner(props: *Properties, allocator: Allocator) !void {
     _ = try props_reader.readAll(props.props_s2);
 
     // Process DerivedNumericType.txt
-    const num_bytes = @embedFile("numeric");
-    var num_fbs = std.io.fixedBufferStream(num_bytes);
-    var num_decomp = decompressor(.raw, num_fbs.reader());
-    var num_reader = num_decomp.reader();
+    var num_z = try zstdembed.open(allocator, @embedFile("numeric"));
+    defer num_z.deinit(allocator);
+    var num_reader = num_z.reader();
 
     const num_stage_1_len: u16 = try num_reader.readInt(u16, endian);
     props.num_s1 = try allocator.alloc(u16, num_stage_1_len);
@@ -180,7 +176,7 @@ test "Allocation failure" {
 
 const std = @import("std");
 const builtin = @import("builtin");
-const compress = std.compress;
 const mem = std.mem;
 const Allocator = mem.Allocator;
 const testing = std.testing;
+const zstdembed = @import("zstdembed");

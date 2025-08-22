@@ -117,11 +117,9 @@ pub fn main() !void {
     _ = args_iter.skip();
     const output_path = args_iter.next() orelse @panic("No output file arg!");
 
-    const compressor = std.compress.flate.deflate.compressor;
     var out_file = try std.fs.cwd().createFile(output_path, .{});
     defer out_file.close();
-    var out_comp = try compressor(.raw, out_file.writer(), .{ .level = .best });
-    const writer = out_comp.writer();
+    const writer = out_file.writer();
 
     const endian = builtin.cpu.arch.endian();
     try writer.writeInt(u16, @intCast(stage1.items.len), endian);
@@ -130,5 +128,5 @@ pub fn main() !void {
     try writer.writeInt(u16, @intCast(stage2.items.len), endian);
     for (stage2.items) |i| try writer.writeInt(u8, i, endian);
 
-    try out_comp.flush();
+    try out_file.sync();
 }

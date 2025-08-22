@@ -22,7 +22,6 @@ pub fn setup(case: *LetterCasing, allocator: Allocator) Allocator.Error!void {
 }
 
 inline fn setupInner(self: *LetterCasing, allocator: mem.Allocator) !void {
-    const decompressor = compress.flate.inflate.decompressor;
     const endian = builtin.cpu.arch.endian();
 
     self.case_map = try allocator.alloc([2]u21, 0x110000);
@@ -35,9 +34,9 @@ inline fn setupInner(self: *LetterCasing, allocator: mem.Allocator) !void {
 
     // Uppercase
     const upper_bytes = @embedFile("upper");
-    var upper_fbs = std.io.fixedBufferStream(upper_bytes);
-    var upper_decomp = decompressor(.raw, upper_fbs.reader());
-    var upper_reader = upper_decomp.reader();
+    var upper_z = try zstdembed.open(allocator, @embedFile("upper"));
+    defer upper_z.deinit(allocator);
+    var upper_reader = upper_z.reader();
 
     while (true) {
         const cp = try upper_reader.readInt(i24, endian);
@@ -48,9 +47,9 @@ inline fn setupInner(self: *LetterCasing, allocator: mem.Allocator) !void {
 
     // Lowercase
     const lower_bytes = @embedFile("lower");
-    var lower_fbs = std.io.fixedBufferStream(lower_bytes);
-    var lower_decomp = decompressor(.raw, lower_fbs.reader());
-    var lower_reader = lower_decomp.reader();
+    var lower_z = try zstdembed.open(allocator, @embedFile("lower"));
+    defer lower_z.deinit(allocator);
+    var lower_reader = lower_z.reader();
 
     while (true) {
         const cp = try lower_reader.readInt(i24, endian);
@@ -61,9 +60,9 @@ inline fn setupInner(self: *LetterCasing, allocator: mem.Allocator) !void {
 
     // Case properties
     const cp_bytes = @embedFile("case_prop");
-    var cp_fbs = std.io.fixedBufferStream(cp_bytes);
-    var cp_decomp = decompressor(.raw, cp_fbs.reader());
-    var cp_reader = cp_decomp.reader();
+    var cp_z = try zstdembed.open(allocator, @embedFile("case_prop"));
+    defer cp_z.deinit(allocator);
+    var cp_reader = cp_z.reader();
 
     const stage_1_len: u16 = try cp_reader.readInt(u16, endian);
     self.prop_s1 = try allocator.alloc(u16, stage_1_len);
@@ -214,8 +213,8 @@ test "Allocation failure" {
 
 const std = @import("std");
 const builtin = @import("builtin");
-const compress = std.compress;
 const mem = std.mem;
 const Allocator = std.mem.Allocator;
 const testing = std.testing;
+const zstdembed = @import("zstdembed");
 const unicode = std.unicode;

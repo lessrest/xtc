@@ -8,6 +8,7 @@ s2: []u16 = undefined,
 s3: []u8 = undefined,
 
 const Graphemes = @This();
+const zstdembed = @import("zstdembed");
 
 pub fn init(allocator: Allocator) Allocator.Error!Graphemes {
     var graphemes = Graphemes{};
@@ -16,11 +17,9 @@ pub fn init(allocator: Allocator) Allocator.Error!Graphemes {
 }
 
 pub fn setup(graphemes: *Graphemes, allocator: Allocator) Allocator.Error!void {
-    const decompressor = compress.flate.inflate.decompressor;
-    const in_bytes = @embedFile("gbp");
-    var in_fbs = std.io.fixedBufferStream(in_bytes);
-    var in_decomp = decompressor(.raw, in_fbs.reader());
-    var reader = in_decomp.reader();
+    var z = try zstdembed.open(allocator, @embedFile("gbp"));
+    defer z.deinit(allocator);
+    var reader = z.reader();
 
     const endian = builtin.cpu.arch.endian();
 
@@ -674,7 +673,6 @@ const builtin = @import("builtin");
 const assert = std.debug.assert;
 const mem = std.mem;
 const Allocator = mem.Allocator;
-const compress = std.compress;
 const unicode = std.unicode;
 
 const code_point = @import("code_point");

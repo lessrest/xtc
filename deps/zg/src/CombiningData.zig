@@ -6,11 +6,9 @@ s2: []u8 = undefined,
 const CombiningData = @This();
 
 pub fn init(allocator: mem.Allocator) !CombiningData {
-    const decompressor = compress.flate.inflate.decompressor;
-    const in_bytes = @embedFile("ccc");
-    var in_fbs = std.io.fixedBufferStream(in_bytes);
-    var in_decomp = decompressor(.raw, in_fbs.reader());
-    var reader = in_decomp.reader();
+    var z = try zstdembed.open(allocator, @embedFile("ccc"));
+    defer z.deinit(allocator);
+    var reader = z.reader();
 
     const endian = builtin.cpu.arch.endian();
 
@@ -46,5 +44,5 @@ pub fn isStarter(cbdata: CombiningData, cp: u21) bool {
 
 const std = @import("std");
 const builtin = @import("builtin");
-const compress = std.compress;
 const mem = std.mem;
+const zstdembed = @import("zstdembed");

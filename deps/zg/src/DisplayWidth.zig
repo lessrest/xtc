@@ -39,11 +39,9 @@ pub fn setupWithGraphemes(dw: *DisplayWidth, allocator: Allocator, graphemes: Gr
 
 // Sets up the DisplayWidthData, leaving the GraphemeData undefined.
 pub fn setup(dw: *DisplayWidth, allocator: Allocator) Allocator.Error!void {
-    const decompressor = compress.flate.inflate.decompressor;
-    const in_bytes = @embedFile("dwp");
-    var in_fbs = std.io.fixedBufferStream(in_bytes);
-    var in_decomp = decompressor(.raw, in_fbs.reader());
-    var reader = in_decomp.reader();
+    var z = try zstdembed.open(allocator, @embedFile("dwp"));
+    defer z.deinit(allocator);
+    var reader = z.reader();
 
     const endian = builtin.cpu.arch.endian();
 
@@ -461,11 +459,11 @@ const std = @import("std");
 const builtin = @import("builtin");
 const options = @import("options");
 const ArrayList = std.ArrayList;
-const compress = std.compress;
 const mem = std.mem;
 const Allocator = mem.Allocator;
 const simd = std.simd;
 const testing = std.testing;
+const zstdembed = @import("zstdembed");
 
 const ascii = @import("ascii");
 const CodePointIterator = @import("code_point").Iterator;
