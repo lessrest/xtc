@@ -36,6 +36,16 @@ class Document {
   }
 }
 
+class Window {
+  static nextEvent(type) {
+    return Core.call("nextEvent", { "eventType": type })
+  }
+
+  static close() {
+    return Core.call("closeWindow")
+  }
+}
+
 class Element {
   index { _index }
 

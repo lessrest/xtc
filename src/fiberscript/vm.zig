@@ -288,6 +288,8 @@ pub const SyscallContext = struct {
     viewport_height: usize = 24,
     frame_fibers: std.ArrayListUnmanaged(*c.Handle) = .{},
     sleep_timers: std.ArrayListUnmanaged(Timer) = .{},
+    key_events: std.ArrayListUnmanaged(u8) = .{},
+    key_waiters: std.ArrayListUnmanaged(*c.Handle) = .{},
 
     pub fn deinit(self: *SyscallContext) void {
         if (self.window) |w| {
@@ -295,6 +297,8 @@ pub const SyscallContext = struct {
             self.allocator.destroy(w);
         }
         self.sleep_timers.deinit(self.allocator);
+        self.key_events.deinit(self.allocator);
+        self.key_waiters.deinit(self.allocator);
     }
 };
 const Fiber = *c.Handle;
@@ -359,6 +363,38 @@ pub fn documentSyscalls(comptime EngineType: type, comptime Context: type) type 
             }
             const stdout_writer = std.io.getStdOut().writer();
             try context.window.?.renderAndPresent(context.document, 0, stdout_writer);
+        }
+
+        pub fn closeWindow(engine: *EngineType, context: *Context, fiber: Fiber, args: struct {}) anyerror!void {
+            _ = fiber; // autofix
+            _ = args;
+            if (context.window) |w| {
+                w.deinit();
+                context.document.alloc.destroy(w);
+                context.window = null;
+            }
+
+            var i: usize = context.frame_fibers.items.len;
+            while (i > 0) : (i -= 1) {
+                const f = context.frame_fibers.items[i - 1];
+                c.wrenReleaseHandle(engine.vm, f);
+            }
+            context.frame_fibers.clearRetainingCapacity();
+
+            i = context.key_waiters.items.len;
+            while (i > 0) : (i -= 1) {
+                const f = context.key_waiters.items[i - 1];
+                c.wrenReleaseHandle(engine.vm, f);
+            }
+            context.key_waiters.clearRetainingCapacity();
+            context.key_events.clearRetainingCapacity();
+
+            i = context.sleep_timers.items.len;
+            while (i > 0) : (i -= 1) {
+                const t = context.sleep_timers.items[i - 1];
+                c.wrenReleaseHandle(engine.vm, t.fiber);
+            }
+            context.sleep_timers.clearRetainingCapacity();
         }
 
         pub fn printElement(engine: *EngineType, context: *Context, fiber: Fiber, args: struct { nodeId: u32 }) anyerror!void {
@@ -434,6 +470,13 @@ pub fn documentSyscalls(comptime EngineType: type, comptime Context: type) type 
             const delay_ms = @as(i64, @intFromFloat(args.seconds * 1000.0));
             const deadline: u64 = @intCast(now_ms + delay_ms);
             try context.sleep_timers.append(context.allocator, .{ .fiber = fiber, .deadline_ms = deadline });
+            return syscalls.Pending{};
+        }
+
+        pub fn nextEvent(engine: *EngineType, context: *Context, fiber: Fiber, args: struct { eventType: []const u8 }) anyerror!Pending {
+            _ = engine;
+            _ = args;
+            try context.key_waiters.append(context.allocator, fiber);
             return syscalls.Pending{};
         }
 

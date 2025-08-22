@@ -64,7 +64,7 @@ pub const SlotBuilder = struct {
         defer self.allocator.free(cstr);
         try self.ensureSlots(slot + 3);
         _ = self.set(slot + 1, cstr);
-        try self.set(slot + 2, value);
+        _ = self.set(slot + 2, value);
         c.wrenSetMapValue(self.vm, slot, slot + 1, slot + 2);
     }
 
