@@ -159,4 +159,19 @@ else
   info "Found bun on PATH ($(command -v bun))"
 fi
 
+# Perform an initial build to warm caches and verify the toolchain
+zig_bin="$(command -v zig 2>/dev/null || true)"
+if [[ -z "$zig_bin" ]]; then
+  zig_candidate="$VENDOR_DIR/zig/zig"
+  if [[ -x "$zig_candidate" ]]; then
+    zig_bin="$zig_candidate"
+  fi
+fi
+if [[ -n "$zig_bin" ]]; then
+  info "Running initial zig build"
+  (cd "$REPO_ROOT" && ZIG_NO_PROGRESS=1 "$zig_bin" build --summary new)
+else
+  warn "zig not found; skipping initial build"
+fi
+
 info "Setup complete."
