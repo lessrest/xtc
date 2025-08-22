@@ -31,6 +31,12 @@ pub const Painter = struct {
     }
 
     pub fn deinit(self: *Painter) void {
+        for (self.ops.items) |op| switch (op) {
+            .GlyphRun => |gr| {
+                self.ops.allocator.free(gr.glyphs);
+            },
+            else => {},
+        };
         self.ops.deinit();
         self.* = undefined;
     }

@@ -18,6 +18,7 @@ pub const State = struct {
     front: Raster,
     back: Raster,
     needs_clear: bool = true,
+    needs_tty_restore: bool = false,
 };
 
 pub const Window = struct {
@@ -66,6 +67,12 @@ pub const Window = struct {
         self.trace.deinit();
         self.allocator.destroy(self.trace);
         self.allocator.destroy(self.unicode);
+        if (self.state.needs_tty_restore) {
+            var ansi_writer = ansi.stdout();
+            ansi_writer.exitAlternateScreen() catch {};
+            ansi_writer.resetStyle() catch {};
+            ansi_writer.showCursor() catch {};
+        }
     }
 
     pub fn setViewport(self: *Window, width: usize, height: usize) !void {
@@ -93,7 +100,8 @@ pub const Window = struct {
             .h = @intCast(self.opts.height),
         });
 
-        var painter = Painter.init(self.allocator, self.unicode, self.trace);
+        var painter: Painter = Painter.init(self.allocator, self.unicode, self.trace);
+
         defer painter.deinit();
         try painter.computePaintCommands(document, &tree, self.glyphs);
 
@@ -110,6 +118,7 @@ pub const Window = struct {
         if (self.state.needs_clear) {
             try ansi_writer.initializeTerminal();
             self.state.needs_clear = false;
+            self.state.needs_tty_restore = true;
         }
 
         var diff_iter = RasterDiff.iterateChanges(&self.state.front, &self.state.back);

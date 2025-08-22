@@ -53,7 +53,7 @@ pub const SlotBuilder = struct {
         const cstr = try self.allocator.dupeZ(u8, name);
         defer self.allocator.free(cstr);
 
-        try self.ensureSlots(slot + 2);
+        try self.ensureSlots(slot + 3);
         _ = self.set(slot + 1, cstr);
         c.wrenGetMapValue(self.vm, slot, slot + 1, slot + 2);
         return self.get(slot + 2, T);
@@ -62,7 +62,7 @@ pub const SlotBuilder = struct {
     pub fn mapSet(self: *SlotBuilder, slot: c_int, name: []const u8, value: anytype) !void {
         const cstr = try self.allocator.dupeZ(u8, name);
         defer self.allocator.free(cstr);
-        try self.ensureSlots(slot + 2);
+        try self.ensureSlots(slot + 3);
         _ = self.set(slot + 1, cstr);
         try self.set(slot + 2, value);
         c.wrenSetMapValue(self.vm, slot, slot + 1, slot + 2);

@@ -3,6 +3,9 @@ const std = @import("std");
 /// Marker type for syscalls that complete asynchronously.
 pub const Pending = struct {};
 
+const c = @import("wren.zig");
+const Fiber = *c.Handle;
+
 /// Generate a Request union from a syscalls implementation struct.
 pub fn RequestUnion(comptime Syscalls: type) type {
     const decls = std.meta.declarations(Syscalls);
@@ -19,7 +22,7 @@ pub fn RequestUnion(comptime Syscalls: type) type {
         const value_type = @TypeOf(value);
         if (@typeInfo(value_type) == .@"fn") {
             const fn_info = @typeInfo(value_type).@"fn";
-            const PayloadType = fn_info.params[2].type.?;
+            const PayloadType = fn_info.params[3].type.?;
             union_fields[idx] = .{
                 .name = decl.name,
                 .type = PayloadType,
@@ -112,7 +115,7 @@ pub fn generateSlotParser(comptime Request: type, comptime Syscalls: type) type 
                 const value = @field(Syscalls, decl.name);
                 const value_type = @TypeOf(value);
                 if (@typeInfo(value_type) == .@"fn" and std.mem.eql(u8, operation, decl.name)) {
-                    const PayloadType = @typeInfo(value_type).@"fn".params[2].type.?;
+                    const PayloadType = @typeInfo(value_type).@"fn".params[3].type.?;
                     const payload_fields = std.meta.fields(PayloadType);
                     var payload: PayloadType = undefined;
                     inline for (payload_fields) |pf| {
@@ -126,8 +129,29 @@ pub fn generateSlotParser(comptime Request: type, comptime Syscalls: type) type 
     };
 }
 
-/// Generate a trampoline dispatcher that bridges Wren fiber yields to syscall implementations.
-pub fn generateTrampoline(
+pub fn generateResultSetter(comptime Syscalls: type) type {
+    const ResultType = ResultUnion(Syscalls);
+    return struct {
+        pub fn set(
+            work: *@import("slots.zig").SlotBuilder,
+            index: c_int,
+            result: ResultType,
+        ) !void {
+            inline for (@typeInfo(ResultType).@"union".fields) |field| {
+                if (field.type != Pending) {
+                    if (std.mem.eql(u8, field.name, @tagName(result))) {
+                        _ = work.set(index, @field(result, field.name));
+                        return;
+                    }
+                }
+            }
+            return error.InvalidResult;
+        }
+    };
+}
+
+/// Generate a dispatcher that bridges Wren fiber yields to syscall implementations.
+pub fn generateDispatcher(
     comptime Syscalls: type,
     comptime Engine: type,
     comptime Context: type,
@@ -141,7 +165,7 @@ pub fn generateTrampoline(
         context: *Context,
 
         /// Process a single request from a yielding fiber
-        pub fn dispatch(self: *@This(), request: RequestType) !DispatchResult {
+        pub fn dispatch(self: *@This(), request: RequestType, fiber: *c.Handle) !DispatchResult {
             const decls = comptime std.meta.declarations(Syscalls);
             switch (request) {
                 inline else => |payload, tag| {
@@ -152,13 +176,13 @@ pub fn generateTrampoline(
                             const fn_info = @typeInfo(value_type).@"fn";
                             const ReturnType = fn_info.return_type.?;
                             if (ReturnType == Pending) {
-                                try value(self.engine, self.context, payload);
+                                try value(self.engine, self.context, fiber, payload);
                                 return .{ .pending = {} };
                             } else if (ReturnType == void) {
-                                try value(self.engine, self.context, payload);
+                                try value(self.engine, self.context, fiber, payload);
                                 return .{ .immediate = @unionInit(ResultType, decl.name, {}) };
                             } else {
-                                const val = try value(self.engine, self.context, payload);
+                                const val = try value(self.engine, self.context, fiber, payload);
                                 return .{ .immediate = @unionInit(ResultType, decl.name, val) };
                             }
                         }
@@ -190,28 +214,30 @@ const TestContext = struct {
 };
 
 const TestSyscalls = struct {
-    pub fn print(engine: *TestEngine, context: *TestContext, payload: struct { message: []const u8 }) anyerror![]const u8 {
+    pub fn print(engine: *TestEngine, context: *TestContext, fiber: Fiber, payload: struct { message: []const u8 }) anyerror![]const u8 {
+        _ = fiber; // autofix
         _ = engine;
         try context.output_buffer.appendSlice(payload.message);
         return payload.message;
     }
 
-    pub fn sleep(engine: *TestEngine, context: *TestContext, payload: struct { duration_ms: u64 }) anyerror!void {
+    pub fn sleep(engine: *TestEngine, context: *TestContext, fiber: Fiber, payload: struct { duration_ms: u64 }) anyerror!void {
         _ = engine;
         _ = context;
         _ = payload;
+        _ = fiber;
     }
 };
 
 test "can generate trampoline dispatcher" {
-    const Trampoline = generateTrampoline(TestSyscalls, TestEngine, TestContext);
+    const Dispatcher = generateDispatcher(TestSyscalls, TestEngine, TestContext);
     var engine = TestEngine{};
     var context = TestContext.init(testing.allocator);
     defer context.deinit();
-
-    var trampoline = Trampoline{ .engine = &engine, .context = &context };
-    const request = Trampoline.RequestType{ .print = .{ .message = "hello" } };
-    const result = try trampoline.dispatch(request);
+    const fiber: Fiber = undefined;
+    var dispatcher = Dispatcher{ .engine = &engine, .context = &context };
+    const request = Dispatcher.RequestType{ .print = .{ .message = "hello" } };
+    const result = try dispatcher.dispatch(request, fiber);
     switch (result) {
         .immediate => |im| switch (im) {
             .print => |msg| try testing.expectEqualStrings("hello", msg),

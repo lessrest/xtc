@@ -24,8 +24,8 @@ pub fn Engine(configuration: Configuration) type {
         allocator: std.mem.Allocator,
         output_handler: OutputHandler,
         error_handler: ErrorHandler,
-        fiber_queue: std.ArrayList(*c.Handle),
-        trampoliner: Trampoline,
+        syscalls: std.AutoArrayHashMap(*c.Handle, Request),
+        dispatcher: Dispatcher,
         syscall_context: *SyscallContext,
         vm: *c.VM,
 
@@ -33,7 +33,7 @@ pub fn Engine(configuration: Configuration) type {
 
         const SyscallsType = configuration.Syscalls(Self, SyscallContext);
         const Request = syscalls.RequestUnion(SyscallsType);
-        const Trampoline = syscalls.generateTrampoline(SyscallsType, Self, SyscallContext);
+        const Dispatcher = syscalls.generateDispatcher(SyscallsType, Self, SyscallContext);
         const SlotParser = syscalls.generateSlotParser(Request, SyscallsType);
 
         pub const Options = struct {
@@ -67,10 +67,11 @@ pub fn Engine(configuration: Configuration) type {
             );
             errdefer self.error_handler.deinit(allocator);
 
-            self.fiber_queue = std.ArrayList(*c.Handle).init(allocator);
+            self.syscalls = std.AutoArrayHashMap(*c.Handle, Request).init(allocator);
+            errdefer self.syscalls.deinit();
 
             self.syscall_context = options.syscall_context;
-            self.trampoliner = Trampoline{ .engine = self, .context = self.syscall_context };
+            self.dispatcher = Dispatcher{ .engine = self, .context = self.syscall_context };
 
             var vmconf = c.Configuration{};
             c.wrenInitConfiguration(&vmconf);
@@ -83,25 +84,27 @@ pub fn Engine(configuration: Configuration) type {
 
             if (c.wrenNewVM(&vmconf)) |vm| {
                 self.vm = vm;
-                try self.bind();
             } else {
-                self.fiber_queue.deinit();
-                self.error_handler.deinit(allocator);
-                self.output_handler.deinit(allocator);
                 return error.FailedToCreateVM;
             }
+
+            errdefer c.wrenFreeVM(self.vm);
+            errdefer self.croak() catch {};
+
+            try self.bind();
         }
 
         pub fn deinit(self: *Self) void {
-            for (self.fiber_queue.items) |fiber| {
+            for (self.syscalls.keys()) |fiber| {
                 c.wrenReleaseHandle(self.vm, fiber);
             }
 
-            c.wrenFreeVM(self.vm);
-
-            self.fiber_queue.deinit();
+            self.syscalls.deinit();
             self.error_handler.deinit(self.allocator);
             self.output_handler.deinit(self.allocator);
+            self.syscall_context.deinit();
+
+            c.wrenFreeVM(self.vm);
 
             self.allocator.destroy(self);
         }
@@ -154,16 +157,8 @@ pub fn Engine(configuration: Configuration) type {
 
             if (std.mem.eql(u8, std.mem.span(module), "xtc")) {
                 if (std.mem.eql(u8, std.mem.span(className), "Core")) {
-                    if (std.mem.eql(u8, std.mem.span(method), "scheduleImmediately(_)")) {
-                        return &(struct {
-                            fn callback(ptr: *c.VM) callconv(.C) void {
-                                var ctx: *Self = @ptrCast(@alignCast(c.wrenGetUserData(ptr)));
-                                var work = slots_api.SlotBuilder.init(ptr, ctx.allocator);
-                                const fiber = work.get(1, *c.Handle) catch std.debug.panic("expected fiber", .{});
-                                ctx.scheduleImmediately(fiber) catch std.debug.panic("failed to schedule fiber", .{});
-                                _ = work.set(0, void{});
-                            }
-                        }).callback;
+                    if (std.mem.eql(u8, std.mem.span(method), "syscall(_,_)")) {
+                        return &foreignSyscall;
                     }
                 }
             }
@@ -171,69 +166,34 @@ pub fn Engine(configuration: Configuration) type {
             return null;
         }
 
-        pub fn scheduleImmediately(self: *Self, fiber: *c.Handle) !void {
-            try self.fiber_queue.append(fiber);
-            std.debug.print("scheduled fiber: {any}\n", .{fiber});
+        fn foreignSyscall(ptr: *c.VM) callconv(.C) void {
+            var ctx: *Self = @ptrCast(@alignCast(c.wrenGetUserData(ptr)));
+            var work = ctx.slots();
+            const fiber = work.get(1, *c.Handle) catch {
+                std.debug.panic("expected fiber", .{});
+            };
+            var slot_map = work.slotMap(2);
+            const request = SlotParser.parseRequest(&slot_map) catch {
+                std.debug.panic("expected request", .{});
+            };
+            ctx.syscall(fiber, request) catch {
+                std.debug.panic("failed to schedule fiber", .{});
+            };
         }
 
-        pub fn trampoline(self: *Self, vm: *c.VM) !void {
-            var work = slots_api.SlotBuilder.init(vm, self.allocator);
-            std.debug.print("first round of trampoline\n", .{});
-            var steps: usize = 0;
-
-            errdefer self.croak() catch {};
-
-            while (steps < 16) : (steps += 1) {
-                if (self.fiber_queue.items.len == 0) {
-                    std.debug.print("trampoline: no fibers to run\n", .{});
-                    return;
-                }
-
-                const fiber = self.fiber_queue.orderedRemove(0);
-
-                defer c.wrenReleaseHandle(vm, fiber);
-
-                std.debug.print("trampoline: running fiber: {any}\n", .{fiber});
-                try work.set(0, fiber).call("call()").checkSuccess();
-
-                if (work.countSlots() < 2) {
-                    std.debug.print("trampoline: no slots, {}\n", .{steps});
-                    return;
-                }
-
-                var slot_map = work.slotMap(0);
-                var request = try SlotParser.parseRequest(&slot_map);
-                std.debug.print("trampoline: {any} {any}\n", .{ fiber, request });
-
-                while (true) {
-                    const dispatch_result = try self.trampoliner.dispatch(request);
-                    switch (dispatch_result) {
-                        .immediate => |result| {
-                            _ = work.set(0, fiber);
-                            switch (result) {
-                                inline else => |value| {
-                                    if (@TypeOf(value) == void) {
-                                        _ = work.set(1, {});
-                                    } else {
-                                        _ = work.set(1, value);
-                                    }
-                                },
-                            }
-                            _ = work.call("call(_)");
-
-                            if (work.countSlots() < 2) {
-                                c.wrenReleaseHandle(vm, fiber);
-                                break;
-                            }
-
-                            slot_map = work.slotMap(0);
-                            request = try SlotParser.parseRequest(&slot_map);
-                            std.debug.print("trampoline: {any} {any}\n", .{ fiber, request });
-                            continue;
-                        },
-                        .pending => break,
-                    }
-                }
+        pub fn syscall(self: *Self, fiber: *c.Handle, request: Request) !void {
+            std.debug.print("syscall: {d} {s}\n", .{ fiber, @tagName(request) });
+            var work = self.slots();
+            const result = try self.dispatcher.dispatch(request, fiber);
+            const setter = syscalls.generateResultSetter(SyscallsType);
+            switch (result) {
+                .immediate => |x| {
+                    defer c.wrenReleaseHandle(self.vm, fiber);
+                    try setter.set(&work, 0, x);
+                },
+                .pending => {
+                    _ = work.set(0, fiber);
+                },
             }
         }
 
@@ -310,45 +270,64 @@ pub fn Engine(configuration: Configuration) type {
 }
 
 pub const SyscallContext = struct {
+    allocator: std.mem.Allocator,
     document: *dom.Dom,
     window: ?*WindowMod.Window = null,
     viewport_width: usize = 80,
     viewport_height: usize = 24,
+    frame_fibers: std.ArrayListUnmanaged(*c.Handle) = .{},
+
+    pub fn deinit(self: *SyscallContext) void {
+        if (self.window) |w| {
+            w.deinit();
+            self.allocator.destroy(w);
+        }
+    }
 };
+const Fiber = *c.Handle;
+
+const Pending = syscalls.Pending;
 
 pub fn documentSyscalls(comptime EngineType: type, comptime Context: type) type {
     return struct {
-        pub fn createElement(engine: *EngineType, context: *Context, args: struct { style: []const u8 }) anyerror!dom.DomNodeId {
+        pub fn createElement(engine: *EngineType, context: *Context, fiber: Fiber, args: struct { style: []const u8 }) anyerror!dom.DomNodeId {
             _ = engine;
+            _ = fiber;
             return context.document.addElement(args.style);
         }
 
-        pub fn createText(engine: *EngineType, context: *Context, args: struct { text: []const u8 }) anyerror!dom.DomNodeId {
+        pub fn createText(engine: *EngineType, context: *Context, fiber: Fiber, args: struct { text: []const u8 }) anyerror!dom.DomNodeId {
+            _ = fiber; // autofix
             _ = engine;
             return context.document.addText(args.text);
         }
 
-        pub fn updateText(engine: *EngineType, context: *Context, args: struct { nodeId: u32, text: []const u8 }) anyerror!void {
+        pub fn updateText(engine: *EngineType, context: *Context, fiber: Fiber, args: struct { nodeId: u32, text: []const u8 }) anyerror!void {
+            _ = fiber; // autofix
             _ = engine;
             try context.document.updateText(args.nodeId, args.text);
         }
 
-        pub fn updateClass(engine: *EngineType, context: *Context, args: struct { nodeId: u32, className: []const u8 }) anyerror!void {
+        pub fn updateClass(engine: *EngineType, context: *Context, fiber: Fiber, args: struct { nodeId: u32, className: []const u8 }) anyerror!void {
+            _ = fiber; // autofix
             _ = engine;
             try context.document.updateClass(args.nodeId, args.className);
         }
 
-        pub fn appendChild(engine: *EngineType, context: *Context, args: struct { parentId: u32, childId: u32 }) anyerror!void {
+        pub fn appendChild(engine: *EngineType, context: *Context, fiber: Fiber, args: struct { parentId: u32, childId: u32 }) anyerror!void {
+            _ = fiber; // autofix
             _ = engine;
             try context.document.appendChild(args.parentId, args.childId);
         }
 
-        pub fn removeChild(engine: *EngineType, context: *Context, args: struct { parentId: u32, childId: u32 }) anyerror!void {
+        pub fn removeChild(engine: *EngineType, context: *Context, fiber: Fiber, args: struct { parentId: u32, childId: u32 }) anyerror!void {
+            _ = fiber; // autofix
             _ = engine;
             try context.document.removeChild(args.parentId, args.childId);
         }
 
-        pub fn openWindow(engine: *EngineType, context: *Context, args: struct {}) anyerror!void {
+        pub fn openWindow(engine: *EngineType, context: *Context, fiber: Fiber, args: struct {}) anyerror!void {
+            _ = fiber; // autofix
             _ = engine;
             _ = args;
             if (context.window == null) {
@@ -363,15 +342,25 @@ pub fn documentSyscalls(comptime EngineType: type, comptime Context: type) type 
             try context.window.?.renderAndPresent(context.document, 0, stdout_writer);
         }
 
-        pub fn printDocument(engine: *EngineType, context: *Context, args: struct {}) anyerror!void {
+        pub fn printDocument(engine: *EngineType, context: *Context, fiber: Fiber, args: struct {}) anyerror!void {
+            _ = fiber; // autofix
             _ = engine;
             _ = args;
-            // One-shot: print text content linearly for now (renderer hookup is for live mode)
-            const out = std.io.getStdOut().writer();
-            try printDomPlain(context.document, out, 0);
+            if (context.window == null) {
+                const w = try context.document.alloc.create(WindowMod.Window);
+                w.* = try WindowMod.Window.init(context.document.alloc, .{
+                    .width = context.viewport_width,
+                    .height = context.viewport_height,
+                });
+                context.window = w;
+            }
+            const stdout_writer = std.io.getStdOut().writer();
+            try context.window.?.render(context.document, 0);
+            try context.window.?.writeFullRaster(stdout_writer);
         }
 
-        pub fn requestRender(engine: *EngineType, context: *Context, args: struct {}) anyerror!void {
+        pub fn requestRender(engine: *EngineType, context: *Context, fiber: Fiber, args: struct {}) anyerror!void {
+            _ = fiber; // autofix
             _ = engine;
             _ = args;
             if (context.window) |w| {
@@ -380,62 +369,51 @@ pub fn documentSyscalls(comptime EngineType: type, comptime Context: type) type 
             }
         }
 
-        pub fn clearScreen(engine: *EngineType, context: *Context, args: struct {}) anyerror!void {
+        pub fn clearScreen(engine: *EngineType, context: *Context, fiber: Fiber, args: struct {}) anyerror!void {
+            _ = fiber; // autofix
             _ = engine;
             _ = context;
             _ = args;
             @panic("clearScreen not implemented");
         }
 
-        pub fn requestAnimationFrame(engine: *EngineType, context: *Context, args: struct {}) anyerror!void {
-            _ = engine;
-            _ = context;
-            _ = args;
-            @panic("requestAnimationFrame not implemented");
+        pub fn requestAnimationFrame(engine: *EngineType, context: *Context, fiber: Fiber, args: struct {}) anyerror!Pending {
+            _ = engine; // autofix
+            _ = args; // autofix
+            try context.frame_fibers.append(context.allocator, fiber);
+            return syscalls.Pending{};
         }
 
-        pub fn setTimeout(engine: *EngineType, context: *Context, args: struct { delayMs: f64 }) anyerror!void {
+        pub fn setTimeout(engine: *EngineType, context: *Context, fiber: Fiber, args: struct { delayMs: f64 }) anyerror!void {
+            _ = fiber; // autofix
             _ = engine;
             _ = context;
             _ = args;
             @panic("setTimeout not implemented");
         }
 
-        pub fn addEventListener(engine: *EngineType, context: *Context, args: struct { eventType: []const u8 }) anyerror!void {
+        pub fn addEventListener(engine: *EngineType, context: *Context, fiber: Fiber, args: struct { eventType: []const u8 }) anyerror!void {
+            _ = fiber; // autofix
             _ = engine;
             _ = context;
             _ = args;
             @panic("addEventListener not implemented");
         }
 
-        pub fn getViewportSize(engine: *EngineType, context: *Context, args: struct {}) anyerror!void {
+        pub fn getViewportSize(engine: *EngineType, context: *Context, fiber: Fiber, args: struct {}) anyerror!void {
+            _ = fiber; // autofix
             _ = engine;
             _ = context;
             _ = args;
         }
 
-        pub fn setViewportSize(engine: *EngineType, context: *Context, args: struct { width: u32, height: u32 }) anyerror!void {
+        pub fn setViewportSize(engine: *EngineType, context: *Context, fiber: Fiber, args: struct { width: u32, height: u32 }) anyerror!void {
+            _ = fiber; // autofix
             _ = engine;
             context.viewport_width = args.width;
             context.viewport_height = args.height;
             if (context.window) |w| {
                 try w.setViewport(context.viewport_width, context.viewport_height);
-            }
-        }
-
-        fn printDomPlain(document: *dom.Dom, writer: anytype, node_id: dom.DomNodeId) !void {
-            const kind = document.getNodeKind(node_id);
-            switch (kind) {
-                .text => {
-                    const text = document.getTextSlice(node_id);
-                    if (text.len > 0) try writer.print("{s}", .{text});
-                },
-                .element => {
-                    var child = document.getFirstChild(node_id);
-                    while (child != dom.Dom.NullId) : (child = document.getNextSibling(child)) {
-                        try printDomPlain(document, writer, child);
-                    }
-                },
             }
         }
     };
@@ -445,7 +423,7 @@ test "we can create and destroy a VM" {
     const allocator = std.testing.allocator;
     var document = try dom.Dom.init(allocator);
     defer document.deinit();
-    var sc = SyscallContext{ .document = document };
+    var sc = SyscallContext{ .allocator = allocator, .document = document };
 
     var vm = try Engine(.{}).init(allocator, .{ .syscall_context = &sc });
     defer vm.deinit();
@@ -462,7 +440,7 @@ test "we can run a simple script" {
 
     var document = try dom.Dom.init(allocator);
     defer document.deinit();
-    var sc = SyscallContext{ .document = document };
+    var sc = SyscallContext{ .allocator = allocator, .document = document };
 
     var engine = try Engine(.{}).init(allocator, .{ .syscall_context = &sc });
     defer engine.deinit();
@@ -478,29 +456,29 @@ test "we can run a simple script" {
     try std.testing.expect(engine.takeError() == .none);
 }
 
-test "we can call Core.spawn" {
+test "we can call Core.call" {
     const allocator = std.testing.allocator;
 
     var document = try dom.Dom.init(allocator);
     defer document.deinit();
-    var sc = SyscallContext{ .document = document };
+    var sc = SyscallContext{ .allocator = allocator, .document = document };
 
     var engine = try Engine(.{}).init(allocator, .{ .syscall_context = &sc });
     defer engine.deinit();
 
     engine.runTopLevel("main",
         \\import "xtc" for Core
-        \\Core.spawn {
-        \\  System.print("hello")
-        \\}
-        \\Core.spawn {
-        \\  System.print("hello")
-        \\}
+        \\Core.call("print", { "message": "hello" })
+        \\Core.call("print", { "message": "hello" })
     ) catch {
         try engine.croak();
     };
 
-    try engine.trampoline(engine.vm);
+    const output = try engine.takeOutput(allocator);
+    defer allocator.free(output);
+
+    try std.testing.expectEqualStrings(output, "hello\nhello\n");
+    try std.testing.expect(engine.takeError() == .none);
 }
 
 // test "Core.print operation" {
@@ -533,7 +511,7 @@ test "slots API - simple method call" {
 
     var document = try dom.Dom.init(allocator);
     defer document.deinit();
-    var sc = SyscallContext{ .document = document };
+    var sc = SyscallContext{ .allocator = allocator, .document = document };
 
     var engine = try Engine(.{}).init(allocator, .{ .syscall_context = &sc });
     defer engine.deinit();
@@ -569,7 +547,7 @@ test "slots API - working with strings" {
 
     var document = try dom.Dom.init(allocator);
     defer document.deinit();
-    var sc = SyscallContext{ .document = document };
+    var sc = SyscallContext{ .allocator = allocator, .document = document };
 
     var engine = try Engine(.{}).init(allocator, .{ .syscall_context = &sc });
     defer engine.deinit();
@@ -598,7 +576,7 @@ test "slots API - list operations" {
 
     var document = try dom.Dom.init(allocator);
     defer document.deinit();
-    var sc = SyscallContext{ .document = document };
+    var sc = SyscallContext{ .allocator = allocator, .document = document };
 
     var engine = try Engine(.{}).init(allocator, .{ .syscall_context = &sc });
     defer engine.deinit();

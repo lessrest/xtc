@@ -1,8 +1,22 @@
 class Core {
-    foreign static scheduleImmediately(fiber)
+    foreign static syscall(fiber, request)
 
-    static spawn(block) {
-        return scheduleImmediately(Fiber.new(block))
+    static syscall(request) {
+        var result = syscall(Fiber.current, request)
+        if (result == Fiber.current) {
+            return Fiber.suspend()
+        } else {
+            return result
+        }
+    }
+
+    static call(name) {
+        return syscall({ "operation": name })
+    }
+
+    static call(name, args) {
+        args["operation"] = name
+        return syscall(args)
     }
 
     static print(message) {
@@ -16,16 +30,58 @@ class Core {
         var completions = ring.reap(1)
         return completions.isEmpty ? null : completions[0]["result"]
     }
+}
 
-    // Start terminal UI mode: initialize window and begin rendering frames on requestRender
-    static openWindow() {
-        return Fiber.yield({ "operation": "openWindow" })
-    }
+class Document {
+  static root { Element.fromIndex(0) }
 
-    // Render current document once to stdout without switching buffers
-    static printDocument() {
-        return Fiber.yield({ "operation": "printDocument" })
-    }
+  static print() {
+    return Core.call("printDocument")
+  }
+
+  static openWindow() {
+    return Core.call("openWindow")
+  }
+
+  static requestRender() {
+    return Core.call("requestRender")
+  }
+}
+
+class Element {
+  index { _index }
+
+  construct fromIndex(index) {
+    _index = index
+  }
+
+  construct create(style) {
+    _index = Core.call("createElement", { "style": style })
+  }
+
+  append(child) {
+    return Core.call("appendChild", { "parentId": index, "childId": child.index })
+  }
+
+  classes=(string) {
+    return Core.call("updateClass", { "nodeId": index, "className": string })
+  }
+}
+
+class Text {
+  index { _index }
+
+  construct fromIndex(index) {
+    _index = index
+  }
+
+  construct create(text) {
+    _index = Core.call("createText", { "text": text })
+  }
+
+  content=(string) {
+    return Core.call("updateText", { "nodeId": index, "text": string })
+  }
 }
 
 class Ring {
@@ -88,20 +144,12 @@ class Ring {
     if (sqEmpty) return 0
 
     var submitted = sqCount
-    return Fiber.yield({
-      "operation": "Ring.flush",
-      "ring": this,
-      "count": submitted
-    })
+    return Core.call("Ring.flush", { "ring": this, "count": submitted })
   }
 
   // Wait for at least minComplete operations to complete
   wait(minComplete) {
-    return Fiber.yield({
-      "operation": "Ring.wait",
-      "ring": this,
-      "minComplete": minComplete
-    })
+    return Core.call("Ring.wait", { "ring": this, "minComplete": minComplete })
   }
 
   // Reap completed operations - returns list of completions
@@ -186,33 +234,3 @@ class Ring {
 }
 
 var ring = Ring.new(64, 64)  // 64 entry SQ and CQ
-
-// Minimal DOM helpers that directly yield syscalls (bypassing ring batching for now)
-class Document {
-  // Document root node id is always 0
-  static root { 0 }
-
-  static createElement(style) {
-    return Fiber.yield({ "operation": "createElement", "style": style })
-  }
-
-  static createText(text) {
-    return Fiber.yield({ "operation": "createText", "text": text })
-  }
-
-  static updateText(nodeId, text) {
-    Fiber.yield({ "operation": "updateText", "nodeId": nodeId, "text": text })
-  }
-
-  static updateClass(nodeId, className) {
-    Fiber.yield({ "operation": "updateClass", "nodeId": nodeId, "className": className })
-  }
-
-  static append(parentId, childId) {
-    Fiber.yield({ "operation": "appendChild", "parentId": parentId, "childId": childId })
-  }
-
-  static requestRender() {
-    Fiber.yield({ "operation": "requestRender" })
-  }
-}

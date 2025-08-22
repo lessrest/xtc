@@ -61,15 +61,14 @@ fn run_script(allocator: std.mem.Allocator, name: []const u8) !void {
 
     var document = try dom.Dom.init(allocator);
     defer document.deinit();
-    var sc = SyscallContext{ .document = document };
+    var sc = SyscallContext{ .allocator = allocator, .document = document };
 
     const engine = try Engine.init(allocator, .{ .syscall_context = &sc });
     defer engine.deinit();
 
-    try engine.runTopLevel(name, script); // TODO: croak...
-    try engine.trampoline(engine.vm);
+    defer engine.croak() catch {};
+    try engine.runTopLevel(name, script);
 
-    std.debug.print("trampoline done\n", .{});
     const output = try engine.takeOutput(allocator);
     defer allocator.free(output);
     try stderr.print("{s}", .{output});
