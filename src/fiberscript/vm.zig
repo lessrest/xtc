@@ -437,6 +437,7 @@ pub fn Engine(configuration: Configuration) type {
 
         fn bind(self: *Self) !void {
             try self.runTopLevel("xtc", @embedFile("xtc.wren"));
+            try self.runTopLevel("dom", @embedFile("dom.wren"));
             try self.runTopLevel("fs", @embedFile("fs.wren"));
         }
 
