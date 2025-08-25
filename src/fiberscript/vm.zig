@@ -484,14 +484,14 @@ pub const SyscallContext = struct {
 
     allocator: std.mem.Allocator,
     document: *dom.Dom,
-    
+
     // Structured task hierarchy (Phase 1: Optional)
     task_tree: ?*Pom = null,
-    system_scope: TaskId = 0,      // Root system supervisor
-    vm_scope: TaskId = 0,          // Wren VM scope  
-    user_scope: TaskId = 0,        // User script scope
-    background_scope: TaskId = 0,  // Background tasks scope
-    
+    system_scope: TaskId = 0, // Root system supervisor
+    vm_scope: TaskId = 0, // Wren VM scope
+    user_scope: TaskId = 0, // User script scope
+    background_scope: TaskId = 0, // Background tasks scope
+
     // Legacy fields (TODO: migrate to task tree)
     window: ?*WindowMod.Window = null,
     viewport_width: usize = 80,
@@ -509,7 +509,7 @@ pub const SyscallContext = struct {
         var vm_scope: TaskId = 0;
         var user_scope: TaskId = 0;
         var background_scope: TaskId = 0;
-        
+
         if (task_tree) |pomPtr| {
             // Create supervision tree
             system_scope = pomPtr.createScope(Pom.NullId, "system", .one_for_all) catch 0;
@@ -519,7 +519,7 @@ pub const SyscallContext = struct {
                 background_scope = pomPtr.createScope(system_scope, "background", .ignore) catch 0;
             }
         }
-        
+
         const sc = SyscallContext{
             .allocator = allocator,
             .document = document,
@@ -541,23 +541,17 @@ pub const SyscallContext = struct {
     }
 
     pub fn deinit(self: *SyscallContext) void {
-        std.debug.print("DEBUG: SyscallContext.deinit() START\n", .{});
-        
-        // CRITICAL: Clean up HTTP first, THEN POM
-        std.debug.print("DEBUG: Cleaning up HTTP\n", .{});
         self.http.deinit();
-        
+
         // Phase 1: Optional structured cleanup
         if (self.task_tree) |pomPtr| {
-            std.debug.print("DEBUG: SyscallContext.deinit() - system_scope={}\n", .{self.system_scope});
             if (self.system_scope != 0) {
-                std.debug.print("DEBUG: About to cancel system scope\n", .{});
-                pomPtr.cancelTask(self.system_scope);  // Cancel all tasks
+                pomPtr.cancelTask(self.system_scope); // Cancel all tasks
             }
-            pomPtr.joinAllThreads();               // Wait for threads  
-            pomPtr.deinit();                       // Clean up POM
+            pomPtr.joinAllThreads(); // Wait for threads
+            pomPtr.deinit(); // Clean up POM
         }
-        
+
         // Legacy cleanup (keep for now)
         if (self.window) |w| {
             w.deinit();
@@ -568,7 +562,7 @@ pub const SyscallContext = struct {
         self.key_waiters.deinit(self.allocator);
         // self.http.deinit();  // Already done above
     }
-    
+
     /// Create a new request scope for structured HTTP operations
     pub fn createRequestScope(self: *SyscallContext, name: []const u8) !TaskId {
         if (self.task_tree) |pomPtr| {
@@ -576,15 +570,15 @@ pub const SyscallContext = struct {
         }
         return 0; // Fallback if no POM
     }
-    
+
     /// Handle graceful shutdown (Ctrl+C)
     pub fn handleShutdown(self: *SyscallContext) void {
         std.log.info("Initiating graceful shutdown...");
-        
+
         if (self.task_tree) |pomPtr| {
             // Shutdown in phases by supervision policy
-            pomPtr.cancelTask(self.background_scope);  // Cancel background first
-            pomPtr.cancelTask(self.user_scope);        // Then user operations
+            pomPtr.cancelTask(self.background_scope); // Cancel background first
+            pomPtr.cancelTask(self.user_scope); // Then user operations
             // system_scope will be cancelled in deinit()
         }
     }
@@ -871,18 +865,18 @@ pub fn documentSyscalls(comptime EngineType: type, comptime Context: type) type 
         // --- HTTP streaming syscalls ---
         pub fn httpOpen(engine: *EngineType, context: *Context, fiber: Fiber, args: struct { url: []const u8, method: []const u8 = "GET", timeoutMs: f64 }) anyerror!Pending {
             _ = engine;
-            
+
             // Phase 1: Keep existing logic, add optional POM tracking
             const id = try context.http.openRequest(args.url, args.method);
             const to_ms: u64 = @intFromFloat(args.timeoutMs);
-            
+
             // Optional: Create structured scope for tracking (doesn't break anything)
             if (context.task_tree != null) {
                 const request_name = try std.fmt.allocPrint(context.allocator, "http_{s}", .{args.url});
                 defer context.allocator.free(request_name);
                 _ = context.createRequestScope(request_name) catch 0; // Ignore errors for now
             }
-            
+
             try context.http.awaitPayload(id, fiber, to_ms);
             return syscalls.Pending{};
         }

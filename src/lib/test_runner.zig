@@ -438,6 +438,8 @@ const TestSuite = struct {
             try tree.line(try std.fmt.allocPrint(self.allocator, "{d} test{s} leaked", .{ self.leak_count, if (self.leak_count != 1) "s" else "" }));
         }
 
+        try tree.writer.flush();
+
         // if (self.env.verbose) {
         //     try self.slowest.display(tree);
         // }

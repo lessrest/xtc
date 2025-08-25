@@ -175,11 +175,31 @@ pub fn generateResultFreer(comptime Syscalls: type, comptime Context: type) type
 /// Generate Wren source code defining foreign classes for each syscall payload.
 pub fn generateWrenModule(comptime Syscalls: type) []const u8 {
     const Request = RequestUnion(Syscalls);
-    comptime var source: []const u8 = "";
+    comptime var source: []const u8 =
+        \\import "xtc" for Core
+        \\
+        \\class Syscall {
+        \\  call() {
+        \\    return Core.call(this)
+        \\  }
+        \\}
+        \\
+        \\foreign class SubmissionBatch {
+        \\  construct new(n) {}
+        \\  foreign add(request)
+        \\}
+        \\
+        \\foreign class CompletionBatch {
+        \\  construct new() {}
+        \\  foreign wait(n)
+        \\  foreign waitAll()
+        \\}
+        \\
+    ;
     inline for (@typeInfo(Request).@"union".fields) |field| {
         const Payload = field.type;
         const class_name = pascalCase(field.name);
-        source = source ++ "foreign class " ++ class_name ++ " {\n";
+        source = source ++ "foreign class " ++ class_name ++ " is Syscall {\n";
         source = source ++ "  construct new(";
         const params = std.meta.fields(Payload);
         inline for (params, 0..) |pf, idx| {
@@ -189,14 +209,7 @@ pub fn generateWrenModule(comptime Syscalls: type) []const u8 {
         source = source ++ ") {}\n";
         source = source ++ "}\n";
     }
-    source = source ++ "foreign class SubmissionBatch {\n";
-    source = source ++ "  construct new(capacity) {}\n";
-    source = source ++ "  foreign add(request)\n";
-    source = source ++ "}\n";
-    source = source ++ "foreign class CompletionBatch {\n";
-    source = source ++ "  foreign wait(n)\n";
-    source = source ++ "  foreign waitAll()\n";
-    source = source ++ "}\n";
+
     return source;
 }
 
