@@ -2,18 +2,26 @@
 EXTENDS FiniteSets, Sequences, Naturals
 
 (***************************************************************************)
-(* Abstract Task Tree (stepwise, leaf-first)                               *)
+(* Abstract Task Tree                                                       *)
 (*                                                                         *)
-(* - PID is a finite set of task identifiers (fixed in the .cfg).          *)
-(* - Live       : the set of currently live tasks.                          *)
-(* - Parent     : the parent mapping for ALL PIDs; roots are self-parented. *)
-(* - DeathLog   : sequence of tasks reaped so far (leaf-first order).       *)
+(* This specification defines the observable behavior of a hierarchical     *)
+(* task management system. Tasks form trees, spawn children, and are       *)
+(* shutdown in leaf-first order (children before parents).                 *)
 (*                                                                         *)
-(* This model says WHAT the world observes:                                 *)
-(*   1) tasks form a tree over Live (roots are self-parented),              *)
-(*   2) births attach a fresh child to a live parent,                       *)
-(*   3) reaping removes one LEAF at a time, appending it to DeathLog.       *)
-(* It intentionally says nothing about how reaping is scheduled.            *)
+(* Key properties:                                                         *)
+(*   - Tasks organize into tree structures over the Live set               *)
+(*   - New tasks are spawned as children of existing live tasks            *)
+(*   - Shutdown removes only leaves (tasks with no live children)          *)
+(*   - DeathLog records the order of task termination                      *)
+(*                                                                         *)
+(* This is the abstract specification - it defines WHAT happens but not    *)
+(* HOW shutdown is coordinated or scheduled.                               *)
+(*                                                                         *)
+(* Variables:                                                              *)
+(* - PID        : finite set of task identifiers                           *)
+(* - Live       : currently running tasks                                  *)
+(* - Parent     : parent mapping for all PIDs (roots point to themselves)  *)
+(* - DeathLog   : sequence of terminated tasks (leaf-first order)          *)
 (***************************************************************************)
 
 CONSTANTS PID
@@ -23,22 +31,27 @@ vars == << Live, Parent, DeathLog >>
 
 (***************************************************************************)
 (* Typing & structural conventions                                         *)
+(* These functions define the basic structure of the task tree.            *)
 (***************************************************************************)
 
-\* A root is self-parented; non-roots point to their (live) parent.
+\* A root task has no parent - it points to itself in the Parent mapping.
 IsRoot(p)    == Parent[p] = p
+\* The set of all root tasks currently running.
 Roots        == { p \in Live : IsRoot(p) }
 
-\* Children/descendants are only considered among Live tasks.
+\* Children of p are live tasks that have p as their parent (excluding p itself).
 Children(p)  == { q \in Live : Parent[q] = p /\ q # p }
 
+\* Recursively find all descendants (children, grandchildren, etc.) of p.
 RECURSIVE Descendants(_)
 Descendants(p) ==
   Children(p) \cup UNION { Descendants(c) : c \in Children(p) }
 
+\* The subtree rooted at p includes p itself plus all its descendants.
 Subtree(p)   == { p } \cup Descendants(p)
 
-\* A leaf is a live task with no live children.
+\* A leaf task is one that's alive but has no children - these are the only 
+\* tasks that can be reaped (shutdown).
 IsLeaf(p)    == p \in Live /\ Children(p) = {}
 
 (***************************************************************************)
@@ -55,20 +68,20 @@ Init ==
 (* Actions                                                                 *)
 (***************************************************************************)
 
-\* Birth: attach a fresh child 'c' to a live parent 'p'.
+\* Birth: spawn a new task 'c' as a child of existing task 'p'.
 Birth(p, c) ==
-  /\ p \in Live
-  /\ c \in PID \ Live
-  /\ Live'      = Live \cup { c }
-  /\ Parent'    = [ Parent EXCEPT ![c] = p ]
-  /\ DeathLog'  = DeathLog
+  /\ p \in Live                     \* Parent must be alive
+  /\ c \in PID \ Live                 \* Child must not already exist
+  /\ Live'      = Live \cup { c }       \* Add child to live set
+  /\ Parent'    = [ Parent EXCEPT ![c] = p ]  \* Set p as c's parent
+  /\ DeathLog'  = DeathLog              \* Death log unchanged
 
-\* Reap (one step): remove a live leaf, append it to the log.
+\* Reap: shutdown a leaf task (one with no children).
 Reap(x) ==
-  /\ IsLeaf(x)
-  /\ Live'      = Live \ { x }
-  /\ Parent'    = [ q \in PID |-> IF q = x THEN "none" ELSE Parent[q] ]
-  /\ DeathLog'  = DeathLog \o << x >>
+  /\ IsLeaf(x)                      \* Can only reap leaves
+  /\ Live'      = Live \ { x }         \* Remove from live set
+  /\ Parent'    = [ q \in PID |-> IF q = x THEN "none" ELSE Parent[q] ]  \* Clear parent
+  /\ DeathLog'  = DeathLog \o << x >>   \* Record the death
 
 Next ==
   \/ \E p, c \in PID : Birth(p, c)
