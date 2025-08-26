@@ -30,7 +30,6 @@ pub fn main() !void {
     var flat_map = std.AutoHashMap(u21, u8).init(allocator);
     defer flat_map.deinit();
 
-
     // Process DerivedCoreProperties.txt
     var lr = try (@import("codegen_io").LineReader).initAlloc(allocator, "data/unicode/DerivedCoreProperties.txt");
     defer lr.deinit(allocator);
@@ -120,7 +119,8 @@ pub fn main() !void {
 
     var out_file = try std.fs.cwd().createFile(output_path, .{});
     defer out_file.close();
-    const writer = out_file.writer();
+    var buffer: [1024]u8 = undefined;
+    const writer = out_file.writer(&buffer);
 
     const endian = builtin.cpu.arch.endian();
     try writer.writeInt(u16, @intCast(stage1.items.len), endian);
@@ -128,6 +128,7 @@ pub fn main() !void {
 
     try writer.writeInt(u16, @intCast(stage2.items.len), endian);
     try writer.writeAll(stage2.items);
+    try writer.flush();
 
     try out_file.sync();
 }

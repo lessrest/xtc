@@ -10,6 +10,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    _ = magic; // autofix
 
     // shared zstd embed helper
     const zstdembed = b.createModule(.{
@@ -174,103 +175,6 @@ pub fn build(b: *std.Build) void {
     run_props_gen_exe.cwd = b.path(".");
     const props_gen_out = run_props_gen_exe.addOutputFileArg("props.bin");
 
-    // Zstd-compress generated data as an optional pack step
-    const compress_tables = b.option(bool, "compress_tables", "Compress generated tables with zstd") orelse false;
-    const tables_opts = b.addOptions();
-    tables_opts.addOption(bool, "compress", compress_tables);
-    const pack_zstd = if (compress_tables) b.step("pack-zstd", "Compress generated tables with zstd") else null;
-
-    // compression skipped for gbp (consumed uncompressed)
-
-    // compression skipped for wbp (consumed uncompressed)
-
-    // compression skipped for dwp (consumed uncompressed)
-
-    // Always produce .zst artifacts; hook them to pack step only if enabled
-    const zstd_canon = b.addSystemCommand(&.{ "zstd", "-q", "-f", "-19" });
-    zstd_canon.addArg("-o");
-    const canon_zst = zstd_canon.addOutputFileArg("canon.bin.zst");
-    zstd_canon.addFileArg(canon_gen_out);
-    if (pack_zstd) |p| p.dependOn(&zstd_canon.step);
-
-    const zstd_compat = b.addSystemCommand(&.{ "zstd", "-q", "-f", "-19" });
-    zstd_compat.addArg("-o");
-    const compat_zst = zstd_compat.addOutputFileArg("compat.bin.zst");
-    zstd_compat.addFileArg(compat_gen_out);
-    if (pack_zstd) |p| p.dependOn(&zstd_compat.step);
-
-    const zstd_hangul = b.addSystemCommand(&.{ "zstd", "-q", "-f", "-19" });
-    zstd_hangul.addArg("-o");
-    const hangul_zst = zstd_hangul.addOutputFileArg("hangul.bin.zst");
-    zstd_hangul.addFileArg(hangul_gen_out);
-    if (pack_zstd) |p| p.dependOn(&zstd_hangul.step);
-
-    const zstd_normp = b.addSystemCommand(&.{ "zstd", "-q", "-f", "-19" });
-    zstd_normp.addArg("-o");
-    const normp_zst = zstd_normp.addOutputFileArg("normp.bin.zst");
-    zstd_normp.addFileArg(normp_gen_out);
-    if (pack_zstd) |p| p.dependOn(&zstd_normp.step);
-
-    const zstd_ccc = b.addSystemCommand(&.{ "zstd", "-q", "-f", "-19" });
-    zstd_ccc.addArg("-o");
-    const ccc_zst = zstd_ccc.addOutputFileArg("ccc.bin.zst");
-    zstd_ccc.addFileArg(ccc_gen_out);
-    if (pack_zstd) |p| p.dependOn(&zstd_ccc.step);
-
-    const zstd_gencat = b.addSystemCommand(&.{ "zstd", "-q", "-f", "-19" });
-    zstd_gencat.addArg("-o");
-    const gencat_zst = zstd_gencat.addOutputFileArg("gencat.bin.zst");
-    zstd_gencat.addFileArg(gencat_gen_out);
-    if (pack_zstd) |p| p.dependOn(&zstd_gencat.step);
-
-    const zstd_fold = b.addSystemCommand(&.{ "zstd", "-q", "-f", "-19" });
-    zstd_fold.addArg("-o");
-    const fold_zst = zstd_fold.addOutputFileArg("fold.bin.zst");
-    zstd_fold.addFileArg(fold_gen_out);
-    if (pack_zstd) |p| p.dependOn(&zstd_fold.step);
-
-    const zstd_numeric = b.addSystemCommand(&.{ "zstd", "-q", "-f", "-19" });
-    zstd_numeric.addArg("-o");
-    const numeric_zst = zstd_numeric.addOutputFileArg("numeric.bin.zst");
-    zstd_numeric.addFileArg(num_gen_out);
-    if (pack_zstd) |p| p.dependOn(&zstd_numeric.step);
-
-    const zstd_case_prop = b.addSystemCommand(&.{ "zstd", "-q", "-f", "-19" });
-    zstd_case_prop.addArg("-o");
-    const case_prop_zst = zstd_case_prop.addOutputFileArg("case_prop.bin.zst");
-    zstd_case_prop.addFileArg(case_prop_gen_out);
-    if (pack_zstd) |p| p.dependOn(&zstd_case_prop.step);
-
-    const zstd_upper = b.addSystemCommand(&.{ "zstd", "-q", "-f", "-19" });
-    zstd_upper.addArg("-o");
-    const upper_zst = zstd_upper.addOutputFileArg("upper.bin.zst");
-    zstd_upper.addFileArg(upper_gen_out);
-    if (pack_zstd) |p| p.dependOn(&zstd_upper.step);
-
-    const zstd_lower = b.addSystemCommand(&.{ "zstd", "-q", "-f", "-19" });
-    zstd_lower.addArg("-o");
-    const lower_zst = zstd_lower.addOutputFileArg("lower.bin.zst");
-    zstd_lower.addFileArg(lower_gen_out);
-    if (pack_zstd) |p| p.dependOn(&zstd_lower.step);
-
-    const zstd_scripts = b.addSystemCommand(&.{ "zstd", "-q", "-f", "-19" });
-    zstd_scripts.addArg("-o");
-    const scripts_zst = zstd_scripts.addOutputFileArg("scripts.bin.zst");
-    zstd_scripts.addFileArg(scripts_gen_out);
-    if (pack_zstd) |p| p.dependOn(&zstd_scripts.step);
-
-    const zstd_core = b.addSystemCommand(&.{ "zstd", "-q", "-f", "-19" });
-    zstd_core.addArg("-o");
-    const core_props_zst = zstd_core.addOutputFileArg("core_props.bin.zst");
-    zstd_core.addFileArg(core_gen_out);
-    if (pack_zstd) |p| p.dependOn(&zstd_core.step);
-
-    const zstd_props = b.addSystemCommand(&.{ "zstd", "-q", "-f", "-19" });
-    zstd_props.addArg("-o");
-    const props_zst = zstd_props.addOutputFileArg("props.bin.zst");
-    zstd_props.addFileArg(props_gen_out);
-    if (pack_zstd) |p| p.dependOn(&zstd_props.step);
-
     // Modules we provide
 
     // Code points
@@ -340,7 +244,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    ccc_data.addAnonymousImport("ccc", .{ .root_source_file = ccc_zst });
+    ccc_data.addAnonymousImport("ccc", .{ .root_source_file = ccc_gen_out });
     ccc_data.addImport("zstdembed", zstdembed);
 
     const ccc_data_t = b.addTest(.{ .name = "ccc_data", .root_module = ccc_data });
@@ -351,8 +255,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    canon_data.addAnonymousImport("canon", .{ .root_source_file = canon_zst });
-    canon_data.addImport("magic", magic);
+    canon_data.addAnonymousImport("canon", .{ .root_source_file = canon_gen_out });
     canon_data.addImport("zstdembed", zstdembed);
 
     const canon_data_t = b.addTest(.{ .name = "canon_data", .root_module = canon_data });
@@ -363,8 +266,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    compat_data.addAnonymousImport("compat", .{ .root_source_file = compat_zst });
-    compat_data.addImport("magic", magic);
+    compat_data.addAnonymousImport("compat", .{ .root_source_file = compat_gen_out });
     compat_data.addImport("zstdembed", zstdembed);
 
     const compat_data_t = b.addTest(.{ .name = "compat_data", .root_module = compat_data });
@@ -375,7 +277,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    hangul_data.addAnonymousImport("hangul", .{ .root_source_file = hangul_zst });
+    hangul_data.addAnonymousImport("hangul", .{ .root_source_file = hangul_gen_out });
     hangul_data.addImport("zstdembed", zstdembed);
 
     const hangul_data_t = b.addTest(.{ .name = "hangul_data", .root_module = hangul_data });
@@ -386,7 +288,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    normp_data.addAnonymousImport("normp", .{ .root_source_file = normp_zst });
+    normp_data.addAnonymousImport("normp", .{ .root_source_file = normp_gen_out });
     normp_data.addImport("zstdembed", zstdembed);
 
     const normp_data_t = b.addTest(.{ .name = "normp_data", .root_module = normp_data });
@@ -414,7 +316,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    gencat.addAnonymousImport("gencat", .{ .root_source_file = gencat_zst });
+    gencat.addAnonymousImport("gencat", .{ .root_source_file = gencat_gen_out });
     gencat.addImport("zstdembed", zstdembed);
 
     const gencat_t = b.addTest(.{ .name = "gencat", .root_module = gencat });
@@ -426,7 +328,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    case_fold.addAnonymousImport("fold", .{ .root_source_file = fold_zst });
+    case_fold.addAnonymousImport("fold", .{ .root_source_file = fold_gen_out });
     case_fold.addImport("ascii", ascii);
     case_fold.addImport("Normalize", norm);
     case_fold.addImport("zstdembed", zstdembed);
@@ -441,9 +343,9 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     letter_case.addImport("code_point", code_point);
-    letter_case.addAnonymousImport("case_prop", .{ .root_source_file = case_prop_zst });
-    letter_case.addAnonymousImport("upper", .{ .root_source_file = upper_zst });
-    letter_case.addAnonymousImport("lower", .{ .root_source_file = lower_zst });
+    letter_case.addAnonymousImport("case_prop", .{ .root_source_file = case_prop_gen_out });
+    letter_case.addAnonymousImport("upper", .{ .root_source_file = upper_gen_out });
+    letter_case.addAnonymousImport("lower", .{ .root_source_file = lower_gen_out });
     letter_case.addImport("zstdembed", zstdembed);
 
     const letter_case_t = b.addTest(.{ .name = "lettercase", .root_module = letter_case });
@@ -455,7 +357,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    scripts.addAnonymousImport("scripts", .{ .root_source_file = scripts_zst });
+    scripts.addAnonymousImport("scripts", .{ .root_source_file = scripts_gen_out });
     scripts.addImport("zstdembed", zstdembed);
 
     const scripts_t = b.addTest(.{ .name = "scripts", .root_module = scripts });
@@ -467,9 +369,9 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    properties.addAnonymousImport("core_props", .{ .root_source_file = core_props_zst });
-    properties.addAnonymousImport("props", .{ .root_source_file = props_zst });
-    properties.addAnonymousImport("numeric", .{ .root_source_file = numeric_zst });
+    properties.addAnonymousImport("core_props", .{ .root_source_file = core_gen_out });
+    properties.addAnonymousImport("props", .{ .root_source_file = props_gen_out });
+    properties.addAnonymousImport("numeric", .{ .root_source_file = num_gen_out });
     properties.addImport("zstdembed", zstdembed);
 
     const properties_t = b.addTest(.{ .name = "properties", .root_module = properties });

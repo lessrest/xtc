@@ -295,7 +295,7 @@ const TestContext = struct {
 
 const TestSyscalls = struct {
     pub fn print(engine: *TestEngine, context: *TestContext, fiber: Fiber, payload: struct { message: []const u8 }) anyerror![]const u8 {
-        _ = fiber; // autofix
+        _ = fiber;
         _ = engine;
         try context.output_buffer.appendSlice(context.allocator, payload.message);
         return payload.message;

@@ -11,9 +11,6 @@ const OutputHandler = @import("output.zig").OutputHandler;
 const syscalls = @import("syscalls.zig");
 const dom = @import("../dom.zig");
 const http_streaming_task = @import("../lib/http_streaming_task.zig");
-const pom = @import("../pom.zig");
-const Pom = pom.Pom;
-const TaskId = pom.TaskId;
 const WindowMod = @import("../Window.zig");
 const layout = @import("../layout.zig");
 const Painter = @import("../Painter.zig").Painter;
@@ -184,7 +181,7 @@ pub fn Engine(configuration: Configuration) type {
             isStatic: bool,
             method: [*:0]const u8,
         ) callconv(.c) c.ForeignMethodFn {
-            _ = vm; // autofix
+            _ = vm;
             if (std.mem.eql(u8, std.mem.span(module), "xtc")) {
                 if (std.mem.eql(u8, std.mem.span(className), "Core") and isStatic) {
                     if (std.mem.eql(u8, std.mem.span(method), "syscall(_,_)")) {
@@ -215,7 +212,7 @@ pub fn Engine(configuration: Configuration) type {
             module: [*:0]const u8,
             className: [*:0]const u8,
         ) callconv(.c) c.ForeignClassMethods {
-            _ = vm; // autofix
+            _ = vm;
             var methods = c.ForeignClassMethods{};
             if (!std.mem.eql(u8, std.mem.span(module), "syscall")) return methods;
 
@@ -285,7 +282,7 @@ pub fn Engine(configuration: Configuration) type {
         }
 
         fn loadModuleFn(vm: *c.VM, name: [*:0]const u8) callconv(.c) c.LoadModuleResult {
-            _ = vm; // autofix
+            _ = vm;
             if (std.mem.eql(u8, std.mem.span(name), "syscall")) {
                 return c.LoadModuleResult{ .source = SyscallModuleSource.ptr };
             }
@@ -485,14 +482,6 @@ pub const SyscallContext = struct {
     allocator: std.mem.Allocator,
     document: *dom.Dom,
 
-    // Structured task hierarchy (Phase 1: Optional)
-    task_tree: ?*Pom = null,
-    system_scope: TaskId = 0, // Root system supervisor
-    vm_scope: TaskId = 0, // Wren VM scope
-    user_scope: TaskId = 0, // User script scope
-    background_scope: TaskId = 0, // Background tasks scope
-
-    // Legacy fields (TODO: migrate to task tree)
     window: ?*WindowMod.Window = null,
     viewport_width: usize = 80,
     viewport_height: usize = 24,
@@ -503,31 +492,10 @@ pub const SyscallContext = struct {
     http: HttpTask = undefined,
 
     pub fn init(allocator: std.mem.Allocator, document: *dom.Dom) SyscallContext {
-        // Phase 2: Re-enable POM and fix the recursion issue
-        const task_tree = Pom.init(allocator) catch null;
-        var system_scope: TaskId = 0;
-        var vm_scope: TaskId = 0;
-        var user_scope: TaskId = 0;
-        var background_scope: TaskId = 0;
-
-        if (task_tree) |pomPtr| {
-            // Create supervision tree
-            system_scope = pomPtr.createScope(Pom.NullId, "system", .one_for_all) catch 0;
-            if (system_scope != 0) {
-                vm_scope = pomPtr.createScope(system_scope, "wren_vm", .fail_fast) catch 0;
-                user_scope = pomPtr.createScope(vm_scope, "user_scripts", .fail_fast) catch 0;
-                background_scope = pomPtr.createScope(system_scope, "background", .ignore) catch 0;
-            }
-        }
-
         const sc = SyscallContext{
             .allocator = allocator,
             .document = document,
-            .task_tree = task_tree,
-            .system_scope = system_scope,
-            .vm_scope = vm_scope,
-            .user_scope = user_scope,
-            .background_scope = background_scope,
+
             .window = null,
             .viewport_width = 80,
             .viewport_height = 24,
@@ -535,7 +503,7 @@ pub const SyscallContext = struct {
             .sleep_timers = .{},
             .key_events = .{},
             .key_waiters = .{},
-            .http = HttpTask.initWithPom(allocator, task_tree, background_scope) catch HttpTask.init(allocator),
+            .http = HttpTask.init(allocator),
         };
         return sc;
     }
@@ -543,16 +511,6 @@ pub const SyscallContext = struct {
     pub fn deinit(self: *SyscallContext) void {
         self.http.deinit();
 
-        // Phase 1: Optional structured cleanup
-        if (self.task_tree) |pomPtr| {
-            if (self.system_scope != 0) {
-                pomPtr.cancelTask(self.system_scope); // Cancel all tasks
-            }
-            pomPtr.joinAllThreads(); // Wait for threads
-            pomPtr.deinit(); // Clean up POM
-        }
-
-        // Legacy cleanup (keep for now)
         if (self.window) |w| {
             w.deinit();
             self.allocator.destroy(w);
@@ -560,27 +518,12 @@ pub const SyscallContext = struct {
         self.sleep_timers.deinit(self.allocator);
         self.key_events.deinit(self.allocator);
         self.key_waiters.deinit(self.allocator);
-        // self.http.deinit();  // Already done above
-    }
-
-    /// Create a new request scope for structured HTTP operations
-    pub fn createRequestScope(self: *SyscallContext, name: []const u8) !TaskId {
-        if (self.task_tree) |pomPtr| {
-            return pomPtr.createScope(self.user_scope, name, .fail_fast);
-        }
-        return 0; // Fallback if no POM
     }
 
     /// Handle graceful shutdown (Ctrl+C)
     pub fn handleShutdown(self: *SyscallContext) void {
-        std.log.info("Initiating graceful shutdown...");
-
-        if (self.task_tree) |pomPtr| {
-            // Shutdown in phases by supervision policy
-            pomPtr.cancelTask(self.background_scope); // Cancel background first
-            pomPtr.cancelTask(self.user_scope); // Then user operations
-            // system_scope will be cancelled in deinit()
-        }
+        _ = self; // autofix
+        std.log.info("Initiating graceful shutdown... just kidding", .{});
     }
 };
 const Fiber = *c.Handle;
@@ -590,7 +533,7 @@ const Pending = syscalls.Pending;
 pub fn documentSyscalls(comptime EngineType: type, comptime Context: type) type {
     return struct {
         pub fn print(engine: *EngineType, context: *Context, fiber: Fiber, args: struct { message: []const u8 }) anyerror!void {
-            _ = fiber; // autofix
+            _ = fiber;
             _ = context;
             engine.write(args.message);
         }
@@ -602,37 +545,37 @@ pub fn documentSyscalls(comptime EngineType: type, comptime Context: type) type 
         }
 
         pub fn createText(engine: *EngineType, context: *Context, fiber: Fiber, args: struct { text: []const u8 }) anyerror!dom.DomNodeId {
-            _ = fiber; // autofix
+            _ = fiber;
             _ = engine;
             return context.document.addText(args.text);
         }
 
         pub fn updateText(engine: *EngineType, context: *Context, fiber: Fiber, args: struct { nodeId: u32, text: []const u8 }) anyerror!void {
-            _ = fiber; // autofix
+            _ = fiber;
             _ = engine;
             try context.document.updateText(args.nodeId, args.text);
         }
 
         pub fn updateClass(engine: *EngineType, context: *Context, fiber: Fiber, args: struct { nodeId: u32, className: []const u8 }) anyerror!void {
-            _ = fiber; // autofix
+            _ = fiber;
             _ = engine;
             try context.document.updateClass(args.nodeId, args.className);
         }
 
         pub fn appendChild(engine: *EngineType, context: *Context, fiber: Fiber, args: struct { parentId: u32, childId: u32 }) anyerror!void {
-            _ = fiber; // autofix
+            _ = fiber;
             _ = engine;
             try context.document.appendChild(args.parentId, args.childId);
         }
 
         pub fn removeChild(engine: *EngineType, context: *Context, fiber: Fiber, args: struct { parentId: u32, childId: u32 }) anyerror!void {
-            _ = fiber; // autofix
+            _ = fiber;
             _ = engine;
             try context.document.removeChild(args.parentId, args.childId);
         }
 
         pub fn openWindow(engine: *EngineType, context: *Context, fiber: Fiber, args: struct {}) anyerror!void {
-            _ = fiber; // autofix
+            _ = fiber;
             _ = engine;
             _ = args;
             if (context.window == null) {
@@ -651,7 +594,7 @@ pub fn documentSyscalls(comptime EngineType: type, comptime Context: type) type 
         }
 
         pub fn closeWindow(engine: *EngineType, context: *Context, fiber: Fiber, args: struct {}) anyerror!void {
-            _ = fiber; // autofix
+            _ = fiber;
             _ = args;
             if (context.window) |w| {
                 w.deinit();
@@ -683,7 +626,7 @@ pub fn documentSyscalls(comptime EngineType: type, comptime Context: type) type 
         }
 
         pub fn printElement(engine: *EngineType, context: *Context, fiber: Fiber, args: struct { nodeId: u32 }) anyerror!void {
-            _ = fiber; // autofix
+            _ = fiber;
             _ = engine;
             if (context.window == null) {
                 const w = try context.document.alloc.create(WindowMod.Window);
@@ -728,7 +671,7 @@ pub fn documentSyscalls(comptime EngineType: type, comptime Context: type) type 
         }
 
         pub fn requestRender(engine: *EngineType, context: *Context, fiber: Fiber, args: struct {}) anyerror!void {
-            _ = fiber; // autofix
+            _ = fiber;
             _ = engine;
             _ = args;
             if (context.window) |w| {
@@ -741,7 +684,7 @@ pub fn documentSyscalls(comptime EngineType: type, comptime Context: type) type 
         }
 
         pub fn clearScreen(engine: *EngineType, context: *Context, fiber: Fiber, args: struct {}) anyerror!void {
-            _ = fiber; // autofix
+            _ = fiber;
             _ = engine;
             _ = context;
             _ = args;
@@ -749,8 +692,8 @@ pub fn documentSyscalls(comptime EngineType: type, comptime Context: type) type 
         }
 
         pub fn requestAnimationFrame(engine: *EngineType, context: *Context, fiber: Fiber, args: struct {}) anyerror!Pending {
-            _ = engine; // autofix
-            _ = args; // autofix
+            _ = engine;
+            _ = args;
             try context.frame_fibers.append(context.allocator, fiber);
             return syscalls.Pending{};
         }
@@ -772,7 +715,7 @@ pub fn documentSyscalls(comptime EngineType: type, comptime Context: type) type 
         }
 
         pub fn setTimeout(engine: *EngineType, context: *Context, fiber: Fiber, args: struct { delayMs: f64 }) anyerror!void {
-            _ = fiber; // autofix
+            _ = fiber;
             _ = engine;
             _ = context;
             _ = args;
@@ -780,7 +723,7 @@ pub fn documentSyscalls(comptime EngineType: type, comptime Context: type) type 
         }
 
         pub fn addEventListener(engine: *EngineType, context: *Context, fiber: Fiber, args: struct { eventType: []const u8 }) anyerror!void {
-            _ = fiber; // autofix
+            _ = fiber;
             _ = engine;
             _ = context;
             _ = args;
@@ -788,14 +731,14 @@ pub fn documentSyscalls(comptime EngineType: type, comptime Context: type) type 
         }
 
         pub fn getViewportSize(engine: *EngineType, context: *Context, fiber: Fiber, args: struct {}) anyerror!void {
-            _ = fiber; // autofix
+            _ = fiber;
             _ = engine;
             _ = context;
             _ = args;
         }
 
         pub fn setViewportSize(engine: *EngineType, context: *Context, fiber: Fiber, args: struct { width: u32, height: u32 }) anyerror!void {
-            _ = fiber; // autofix
+            _ = fiber;
             _ = engine;
             context.viewport_width = args.width;
             context.viewport_height = args.height;
@@ -866,16 +809,8 @@ pub fn documentSyscalls(comptime EngineType: type, comptime Context: type) type 
         pub fn httpOpen(engine: *EngineType, context: *Context, fiber: Fiber, args: struct { url: []const u8, method: []const u8 = "GET", timeoutMs: f64 }) anyerror!Pending {
             _ = engine;
 
-            // Phase 1: Keep existing logic, add optional POM tracking
             const id = try context.http.openRequest(args.url, args.method);
             const to_ms: u64 = @intFromFloat(args.timeoutMs);
-
-            // Optional: Create structured scope for tracking (doesn't break anything)
-            if (context.task_tree != null) {
-                const request_name = try std.fmt.allocPrint(context.allocator, "http_{s}", .{args.url});
-                defer context.allocator.free(request_name);
-                _ = context.createRequestScope(request_name) catch 0; // Ignore errors for now
-            }
 
             try context.http.awaitPayload(id, fiber, to_ms);
             return syscalls.Pending{};

@@ -1,31 +1,27 @@
 const std = @import("std");
 const mem = std.mem;
+const zstd = std.compress.zstd;
 
 pub const ZstdEmbedReader = struct {
-    buffer: []u8,
-    input: std.Io.Reader,
-    decomp: std.compress.zstd.Decompress,
+    allocator: mem.Allocator,
+    bytes: []const u8,
 
-    pub fn init(allocator: mem.Allocator, bytes: []const u8) !ZstdEmbedReader {
-        // Use an internal buffer for the indirect streaming path.
-        const buf = try allocator.alloc(u8, std.compress.zstd.default_window_len + std.compress.zstd.block_size_max);
-        var self: ZstdEmbedReader = .{
-            .buffer = buf,
-            .input = .fixed(bytes),
-            .decomp = undefined,
-        };
-        self.decomp = std.compress.zstd.Decompress.init(&self.input, self.buffer, .{});
-        return self;
-    }
-
-    pub fn reader(self: *ZstdEmbedReader) *std.Io.Reader {
-        return &self.decomp.reader;
+    pub fn init(allocator: mem.Allocator, bytes: []const u8) ZstdEmbedReader {
+        return .{ .allocator = allocator, .bytes = bytes };
     }
 
     pub fn readAllAlloc(self: *ZstdEmbedReader, allocator: mem.Allocator) ![]u8 {
-        var out: std.Io.Writer.Allocating = .init(allocator);
+        var out: std.Io.Writer.Allocating = try .initCapacity(
+            allocator,
+            zstd.default_window_len + zstd.block_size_max,
+        );
+
         defer out.deinit();
-        _ = try self.decomp.reader.streamRemaining(&out.writer);
+
+        var input: std.Io.Reader = .fixed(self.bytes);
+        var decomp = zstd.Decompress.init(&input, .{}, .{});
+        _ = try decomp.reader.streamRemaining(&out.writer);
+
         return out.toOwnedSlice();
     }
 

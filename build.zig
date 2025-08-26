@@ -10,12 +10,17 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/lib/libansi.zig"),
     });
 
+    const pretty = b.addModule("pretty", .{
+        .root_source_file = b.path("src/lib/pretty.zig"),
+    });
+
     // In Zig 0.15, a module may not import files above its root directory.
     // Point the wren module at a src-level root so vm.zig can import siblings.
     const wren = b.addModule("wren", .{
         .target = target,
         .optimize = optimize,
         .root_source_file = b.path("src/wren_root.zig"),
+        .link_libc = true,
     });
 
     wren.addImport("ansi", ansi);
@@ -52,8 +57,6 @@ pub fn build(b: *std.Build) void {
         .name = "wren",
         .root_module = wren,
     });
-
-    libwren.linkLibC();
 
     // Create WASM-specific Wren library
     const libwren_wasm_mod = b.createModule(.{
@@ -102,8 +105,8 @@ pub fn build(b: *std.Build) void {
     });
 
     xtc.addImport("ansi", ansi);
+    xtc.addImport("pretty", pretty);
 
-    //    xtc.addImport("code_point", zg.module("code_point"));
     xtc.addImport("Graphemes", zg.module("Graphemes"));
     xtc.addImport("DisplayWidth", zg.module("DisplayWidth"));
     xtc.addImport("Words", zg.module("Words"));
