@@ -16,7 +16,7 @@ pub const std_options: std.Options = .{
     .logFn = logFn,
 };
 
-var nest: ansi.nest.TreeNest(*std.Io.Writer) = undefined;
+var nest: ansi.nest.TreeNest = undefined;
 
 fn logFn(
     comptime level: std.log.Level,

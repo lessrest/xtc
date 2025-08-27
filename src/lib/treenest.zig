@@ -17,22 +17,22 @@ fn ensureStdIo() void {
     }
 }
 
-pub fn treeNest(allocator: std.mem.Allocator, writer: anytype) TreeNest(@TypeOf(writer)) {
-    return TreeNest(@TypeOf(writer)).init(allocator, writer);
+pub fn treeNest(allocator: std.mem.Allocator, writer: *std.Io.Writer) TreeNest {
+    return TreeNest.init(allocator, writer);
 }
 
-pub fn silent(allocator: std.mem.Allocator) TreeNest(*std.Io.Writer) {
+pub fn silent(allocator: std.mem.Allocator) TreeNest {
     var stderr_nest = stderr(allocator);
     stderr_nest.enabled = false;
     return stderr_nest;
 }
 
-pub fn stderr(allocator: std.mem.Allocator) TreeNest(*std.Io.Writer) {
+pub fn stderr(allocator: std.mem.Allocator) TreeNest {
     ensureStdIo();
     return treeNest(allocator, &g_stderr_state.interface);
 }
 
-pub fn stdout(allocator: std.mem.Allocator) TreeNest(*std.Io.Writer) {
+pub fn stdout(allocator: std.mem.Allocator) TreeNest {
     ensureStdIo();
     return treeNest(allocator, &g_stdout_state.interface);
 }
@@ -211,312 +211,293 @@ pub fn fixed(allocator: std.mem.Allocator, text: []const u8, width: usize) Part 
     return padRight(allocator, text, width, ' ');
 }
 
-pub fn TreeNest(comptime Writer: type) type {
-    return struct {
-        writer: Writer,
-        depth: usize = 0,
-        stack: std.ArrayList(Level),
-        allocator: std.mem.Allocator,
-        no_color: bool = false,
-        max_depth: ?usize = null,
-        enabled: bool = true,
+pub const TreeNest = struct {
+    writer: *std.Io.Writer,
+    depth: usize = 0,
+    stack: std.ArrayList(Level),
+    allocator: std.mem.Allocator,
+    no_color: bool = false,
+    max_depth: ?usize = null,
+    enabled: bool = true,
 
-        const Self = @This();
+    const Self = @This();
 
-        const Level = struct {
-            has_more: bool,
+    const Level = struct {
+        has_more: bool,
+    };
+
+    pub fn init(allocator: std.mem.Allocator, writer: *std.Io.Writer) Self {
+        return .{
+            .writer = writer,
+            .allocator = allocator,
+            .stack = std.ArrayList(Level){},
         };
+    }
 
-        pub fn init(allocator: std.mem.Allocator, writer: Writer) Self {
-            return .{
-                .writer = writer,
-                .allocator = allocator,
-                .stack = std.ArrayList(Level){},
-            };
+    pub fn deinit(self: *Self) void {
+        self.stack.deinit(self.allocator);
+    }
+
+    pub fn dk(self: *Self) dank.Dank {
+        return dank.Dank.withTree(self.allocator, self);
+    }
+
+    pub fn setNoColor(self: *Self, no_color: bool) void {
+        self.no_color = no_color;
+    }
+
+    pub fn setMaxDepth(self: *Self, max_depth: ?usize) void {
+        self.max_depth = max_depth;
+    }
+
+    pub fn setEnabled(self: *Self, enabled: bool) void {
+        self.enabled = enabled;
+    }
+
+    pub fn disabled(self: *const Self) bool {
+        return !self.enabled;
+    }
+
+    pub fn shouldOutput(self: *const Self) bool {
+        if (!self.enabled) return false;
+        if (self.max_depth) |max| {
+            return self.depth <= max;
+        }
+        return true;
+    }
+
+    // Convenience methods for creating modified copies
+    pub fn silent(self: Self) Self {
+        var copy = self;
+        copy.enabled = false;
+        return copy;
+    }
+
+    pub fn unlimited(self: Self) Self {
+        var copy = self;
+        copy.enabled = true;
+        copy.max_depth = null;
+        return copy;
+    }
+
+    pub fn limited(self: Self, max_depth: usize) Self {
+        var copy = self;
+        copy.enabled = true;
+        copy.max_depth = max_depth;
+        return copy;
+    }
+
+    // Simplified: enter/exit manage depth and stack properly
+    pub fn enter(self: *Self) void {
+        if (!self.enabled) return;
+
+        // Always push to stack and increment depth
+        self.stack.append(self.allocator, .{ .has_more = true }) catch return;
+        self.depth += 1;
+    }
+
+    pub fn exit(self: *Self) void {
+        if (!self.enabled) return;
+
+        // Always pop from stack and decrement depth if we have something
+        if (self.stack.items.len > 0) {
+            _ = self.stack.pop();
+            self.depth -= 1;
+        }
+    }
+
+    // Tracing-specific methods
+    pub fn info(self: *Self, comptime description: []const u8) void {
+        if (!self.shouldOutput()) return;
+        self.styledLine(description, .{ .fg = Color.cyan }) catch {};
+    }
+
+    pub fn yell(self: *Self, comptime format: []const u8, args: anytype) void {
+        if (!self.shouldOutput()) return;
+        const text = std.fmt.allocPrint(self.allocator, "🔔 " ++ format, args) catch return;
+        defer self.allocator.free(text);
+        self.styledLine(text, .{ .fg = Color.yellow }) catch {};
+    }
+
+    pub fn decision(self: *Self, comptime description: []const u8) void {
+        if (!self.shouldOutput()) return;
+        const text = std.fmt.allocPrint(self.allocator, "⚡ {s}", .{description}) catch return;
+        defer self.allocator.free(text);
+        self.styledLine(text, .{ .fg = Color.yellow }) catch {};
+    }
+
+    pub fn note(self: *Self, comptime description: []const u8) void {
+        if (!self.shouldOutput()) return;
+        self.styledLine(description, .{ .fg = Color.gray, .italic = true }) catch {};
+    }
+
+    pub fn put(self: *Self, comptime key: []const u8, value: anytype) *Self {
+        if (!self.shouldOutput()) return self;
+
+        // Write continuation indent
+        if (self.depth > 0) {
+            self.writeContinuation() catch return self;
         }
 
-        pub fn deinit(self: *Self) void {
-            self.stack.deinit(self.allocator);
+        // Write key
+        self.writer.writeAll(key) catch return self;
+        self.writer.writeAll(": ") catch return self;
+
+        // Format and write the value
+        const ValueType = @TypeOf(value);
+        switch (@typeInfo(ValueType)) {
+            .int => self.writer.print("{d}", .{value}) catch return self,
+            .float => self.writer.print("{d:.2}", .{value}) catch return self,
+            .bool => self.writer.print("{any}", .{value}) catch return self,
+            .pointer => |ptr_info| {
+                if (ptr_info.size == .slice and ptr_info.child == u8) {
+                    self.writer.print("\"{s}\"", .{value}) catch return self;
+                } else {
+                    self.writer.print("{any}", .{value}) catch return self;
+                }
+            },
+            .array => |arr_info| {
+                if (arr_info.child == u8) {
+                    self.writer.print("\"{s}\"", .{value}) catch return self;
+                } else {
+                    self.writer.print("{any}", .{value}) catch return self;
+                }
+            },
+            .@"enum" => self.writer.print("{s}", .{@tagName(value)}) catch return self,
+            .optional => {
+                if (value) |v| {
+                    return self.put(key, v);
+                } else {
+                    self.writer.writeAll("null") catch return self;
+                }
+            },
+            .@"struct" => {
+                if (std.meta.hasMethod(ValueType, "format")) {
+                    self.writer.print("{any}", .{value}) catch return self;
+                } else {
+                    self.writer.print("{any}", .{value}) catch return self;
+                }
+            },
+            else => self.writer.print("{any}", .{value}) catch return self,
         }
 
-        pub fn dk(self: *Self) dank.Dank(Writer) {
-            return dank.Dank(Writer).withTree(self.allocator, self);
+        self.writer.writeAll("\n") catch return self;
+        return self;
+    }
+
+    // Output a labeled data section with fields
+    pub fn fields(self: *Self, comptime label: []const u8, data: anytype) void {
+        if (!self.shouldOutput()) return;
+
+        // Output data group header with icon
+        if (self.depth > 0) {
+            self.writeContinuation() catch return;
         }
+        self.applyStyle(.{ .fg = Color.magenta, .bold = true }) catch {};
+        self.writer.print("📊 {s}\n", .{label}) catch return;
+        self.resetStyle() catch {};
 
-        pub fn setNoColor(self: *Self, no_color: bool) void {
-            self.no_color = no_color;
-        }
+        // Enter a new level for the fields
+        self.enter();
+        defer self.exit();
 
-        pub fn setMaxDepth(self: *Self, max_depth: ?usize) void {
-            self.max_depth = max_depth;
-        }
-
-        pub fn setEnabled(self: *Self, enabled: bool) void {
-            self.enabled = enabled;
-        }
-
-        pub fn disabled(self: *const Self) bool {
-            return !self.enabled;
-        }
-
-        pub fn shouldOutput(self: *const Self) bool {
-            if (!self.enabled) return false;
-            if (self.max_depth) |max| {
-                return self.depth <= max;
-            }
-            return true;
-        }
-
-        // Convenience methods for creating modified copies
-        pub fn silent(self: Self) Self {
-            var copy = self;
-            copy.enabled = false;
-            return copy;
-        }
-
-        pub fn unlimited(self: Self) Self {
-            var copy = self;
-            copy.enabled = true;
-            copy.max_depth = null;
-            return copy;
-        }
-
-        pub fn limited(self: Self, max_depth: usize) Self {
-            var copy = self;
-            copy.enabled = true;
-            copy.max_depth = max_depth;
-            return copy;
-        }
-
-        // Simplified: enter/exit manage depth and stack properly
-        pub fn enter(self: *Self) void {
-            if (!self.enabled) return;
-
-            // Always push to stack and increment depth
-            self.stack.append(self.allocator, .{ .has_more = true }) catch return;
-            self.depth += 1;
-        }
-
-        pub fn exit(self: *Self) void {
-            if (!self.enabled) return;
-
-            // Always pop from stack and decrement depth if we have something
-            if (self.stack.items.len > 0) {
-                _ = self.stack.pop();
-                self.depth -= 1;
-            }
-        }
-
-        // Tracing-specific methods
-        pub fn info(self: *Self, comptime description: []const u8) void {
-            if (!self.shouldOutput()) return;
-            self.styledLine(description, .{ .fg = Color.cyan }) catch {};
-        }
-
-        pub fn yell(self: *Self, comptime format: []const u8, args: anytype) void {
-            if (!self.shouldOutput()) return;
-            const text = std.fmt.allocPrint(self.allocator, "🔔 " ++ format, args) catch return;
-            defer self.allocator.free(text);
-            self.styledLine(text, .{ .fg = Color.yellow }) catch {};
-        }
-
-        pub fn decision(self: *Self, comptime description: []const u8) void {
-            if (!self.shouldOutput()) return;
-            const text = std.fmt.allocPrint(self.allocator, "⚡ {s}", .{description}) catch return;
-            defer self.allocator.free(text);
-            self.styledLine(text, .{ .fg = Color.yellow }) catch {};
-        }
-
-        pub fn note(self: *Self, comptime description: []const u8) void {
-            if (!self.shouldOutput()) return;
-            self.styledLine(description, .{ .fg = Color.gray, .italic = true }) catch {};
-        }
-
-        pub fn put(self: *Self, comptime key: []const u8, value: anytype) *Self {
-            if (!self.shouldOutput()) return self;
-
-            // Write continuation indent
+        // Output each field
+        const type_info = @typeInfo(@TypeOf(data));
+        inline for (type_info.@"struct".fields) |field| {
             if (self.depth > 0) {
-                self.writeContinuation() catch return self;
+                self.writeContinuation() catch return;
             }
 
-            // Write key
-            self.writer.writeAll(key) catch return self;
-            self.writer.writeAll(": ") catch return self;
+            self.writer.writeAll(field.name) catch return;
+            self.writer.writeAll(": ") catch return;
 
-            // Format and write the value
+            const value = @field(data, field.name);
             const ValueType = @TypeOf(value);
+
             switch (@typeInfo(ValueType)) {
-                .int => self.writer.print("{d}", .{value}) catch return self,
-                .float => self.writer.print("{d:.2}", .{value}) catch return self,
-                .bool => self.writer.print("{any}", .{value}) catch return self,
+                .int => self.writer.print("{d}", .{value}) catch return,
+                .float => self.writer.print("{d:.2}", .{value}) catch return,
+                .bool => self.writer.print("{any}", .{value}) catch return,
                 .pointer => |ptr_info| {
                     if (ptr_info.size == .slice and ptr_info.child == u8) {
-                        self.writer.print("\"{s}\"", .{value}) catch return self;
+                        self.writer.print("{s}", .{value}) catch return;
+                    } else if (ptr_info.size == .many and ptr_info.child == u8 and ptr_info.sentinel_ptr != null) {
+                        self.writer.print("{s}", .{std.mem.span(value)}) catch return;
                     } else {
-                        self.writer.print("{any}", .{value}) catch return self;
+                        self.writer.print("(pointer)", .{}) catch return;
                     }
                 },
                 .array => |arr_info| {
                     if (arr_info.child == u8) {
-                        self.writer.print("\"{s}\"", .{value}) catch return self;
+                        self.writer.print("{s}", .{value}) catch return;
                     } else {
-                        self.writer.print("{any}", .{value}) catch return self;
+                        self.writer.print("{any}", .{value}) catch return;
                     }
                 },
-                .@"enum" => self.writer.print("{s}", .{@tagName(value)}) catch return self,
-                .optional => {
-                    if (value) |v| {
-                        return self.put(key, v);
-                    } else {
-                        self.writer.writeAll("null") catch return self;
-                    }
-                },
+                .@"enum" => self.writer.print("{s}", .{@tagName(value)}) catch return,
                 .@"struct" => {
                     if (std.meta.hasMethod(ValueType, "format")) {
-                        self.writer.print("{any}", .{value}) catch return self;
+                        self.writer.print("{any}", .{value}) catch return;
                     } else {
-                        self.writer.print("{any}", .{value}) catch return self;
+                        self.writer.print("{any}", .{value}) catch return;
                     }
                 },
-                else => self.writer.print("{any}", .{value}) catch return self,
+                else => self.writer.print("{any}", .{value}) catch return,
             }
 
-            self.writer.writeAll("\n") catch return self;
-            return self;
+            self.writer.writeAll("\n") catch return;
         }
+    }
 
-        // Output a labeled data section with fields
-        pub fn fields(self: *Self, comptime label: []const u8, data: anytype) void {
-            if (!self.shouldOutput()) return;
+    pub fn applyStyle(self: *Self, style: Style) !void {
+        if (self.no_color) return;
 
-            // Output data group header with icon
-            if (self.depth > 0) {
-                self.writeContinuation() catch return;
-            }
-            self.applyStyle(.{ .fg = Color.magenta, .bold = true }) catch {};
-            self.writer.print("📊 {s}\n", .{label}) catch return;
-            self.resetStyle() catch {};
+        if (style.bold) {
+            try self.writer.writeAll("\x1b[1m");
+        }
+        if (style.dim) {
+            try self.writer.writeAll("\x1b[2m");
+        }
+        if (style.italic) {
+            try self.writer.writeAll("\x1b[3m");
+        }
+        if (style.underline) {
+            try self.writer.writeAll("\x1b[4m");
+        }
+        if (style.fg) |fg| {
+            try self.writer.print("\x1b[38;2;{d};{d};{d}m", .{ fg.r, fg.g, fg.b });
+        }
+        if (style.bg) |bg| {
+            try self.writer.print("\x1b[48;2;{d};{d};{d}m", .{ bg.r, bg.g, bg.b });
+        }
+    }
 
-            // Enter a new level for the fields
-            self.enter();
-            defer self.exit();
+    pub fn resetStyle(self: *Self) !void {
+        if (!self.no_color) {
+            try self.writer.writeAll("\x1b[0m");
+        }
+    }
 
-            // Output each field
-            const type_info = @typeInfo(@TypeOf(data));
-            inline for (type_info.@"struct".fields) |field| {
-                if (self.depth > 0) {
-                    self.writeContinuation() catch return;
+    fn writeIndent(self: *Self, is_last: bool) !void {
+        // Draw vertical lines for parent levels
+        for (self.stack.items[0..self.stack.items.len], 0..) |level, i| {
+            if (i == self.stack.items.len - 1) {
+                // Current level - draw the branch
+                if (!self.no_color) {
+                    try self.writer.writeAll("\x1b[38;2;100;100;100m");
                 }
-
-                self.writer.writeAll(field.name) catch return;
-                self.writer.writeAll(": ") catch return;
-
-                const value = @field(data, field.name);
-                const ValueType = @TypeOf(value);
-
-                switch (@typeInfo(ValueType)) {
-                    .int => self.writer.print("{d}", .{value}) catch return,
-                    .float => self.writer.print("{d:.2}", .{value}) catch return,
-                    .bool => self.writer.print("{any}", .{value}) catch return,
-                    .pointer => |ptr_info| {
-                        if (ptr_info.size == .slice and ptr_info.child == u8) {
-                            self.writer.print("{s}", .{value}) catch return;
-                        } else if (ptr_info.size == .many and ptr_info.child == u8 and ptr_info.sentinel_ptr != null) {
-                            self.writer.print("{s}", .{std.mem.span(value)}) catch return;
-                        } else {
-                            self.writer.print("(pointer)", .{}) catch return;
-                        }
-                    },
-                    .array => |arr_info| {
-                        if (arr_info.child == u8) {
-                            self.writer.print("{s}", .{value}) catch return;
-                        } else {
-                            self.writer.print("{any}", .{value}) catch return;
-                        }
-                    },
-                    .@"enum" => self.writer.print("{s}", .{@tagName(value)}) catch return,
-                    .@"struct" => {
-                        if (std.meta.hasMethod(ValueType, "format")) {
-                            self.writer.print("{any}", .{value}) catch return;
-                        } else {
-                            self.writer.print("{any}", .{value}) catch return;
-                        }
-                    },
-                    else => self.writer.print("{any}", .{value}) catch return,
-                }
-
-                self.writer.writeAll("\n") catch return;
-            }
-        }
-
-        pub fn applyStyle(self: *Self, style: Style) !void {
-            if (self.no_color) return;
-
-            if (style.bold) {
-                try self.writer.writeAll("\x1b[1m");
-            }
-            if (style.dim) {
-                try self.writer.writeAll("\x1b[2m");
-            }
-            if (style.italic) {
-                try self.writer.writeAll("\x1b[3m");
-            }
-            if (style.underline) {
-                try self.writer.writeAll("\x1b[4m");
-            }
-            if (style.fg) |fg| {
-                try self.writer.print("\x1b[38;2;{d};{d};{d}m", .{ fg.r, fg.g, fg.b });
-            }
-            if (style.bg) |bg| {
-                try self.writer.print("\x1b[48;2;{d};{d};{d}m", .{ bg.r, bg.g, bg.b });
-            }
-        }
-
-        pub fn resetStyle(self: *Self) !void {
-            if (!self.no_color) {
-                try self.writer.writeAll("\x1b[0m");
-            }
-        }
-
-        fn writeIndent(self: *Self, is_last: bool) !void {
-            // Draw vertical lines for parent levels
-            for (self.stack.items[0..self.stack.items.len], 0..) |level, i| {
-                if (i == self.stack.items.len - 1) {
-                    // Current level - draw the branch
-                    if (!self.no_color) {
-                        try self.writer.writeAll("\x1b[38;2;100;100;100m");
-                    }
-                    if (is_last) {
-                        try self.writer.writeAll("└─ ");
-                    } else if (i == 0) {
-                        try self.writer.writeAll("┌─ ");
-                    } else {
-                        try self.writer.writeAll("├─ ");
-                    }
-                    if (!self.no_color) {
-                        try self.writer.writeAll("\x1b[0m");
-                    }
+                if (is_last) {
+                    try self.writer.writeAll("└─ ");
+                } else if (i == 0) {
+                    try self.writer.writeAll("┌─ ");
                 } else {
-                    // Parent levels - draw vertical lines
-                    if (!self.no_color) {
-                        try self.writer.writeAll("\x1b[38;2;100;100;100m");
-                    }
-                    if (level.has_more) {
-                        try self.writer.writeAll("│ ");
-                    } else {
-                        try self.writer.writeAll("  ");
-                    }
-                    if (!self.no_color) {
-                        try self.writer.writeAll("\x1b[0m");
-                    }
+                    try self.writer.writeAll("├─ ");
                 }
-            }
-        }
-
-        fn writeContinuation(self: *Self) !void {
-            // Draw vertical lines for continuation
-            for (self.stack.items) |level| {
+                if (!self.no_color) {
+                    try self.writer.writeAll("\x1b[0m");
+                }
+            } else {
+                // Parent levels - draw vertical lines
                 if (!self.no_color) {
                     try self.writer.writeAll("\x1b[38;2;100;100;100m");
                 }
@@ -530,138 +511,155 @@ pub fn TreeNest(comptime Writer: type) type {
                 }
             }
         }
+    }
 
-        pub fn setLast(self: *Self) void {
-            if (self.stack.items.len > 0) {
-                self.stack.items[self.stack.items.len - 1].has_more = false;
+    fn writeContinuation(self: *Self) !void {
+        // Draw vertical lines for continuation
+        for (self.stack.items) |level| {
+            if (!self.no_color) {
+                try self.writer.writeAll("\x1b[38;2;100;100;100m");
+            }
+            if (level.has_more) {
+                try self.writer.writeAll("│ ");
+            } else {
+                try self.writer.writeAll("  ");
+            }
+            if (!self.no_color) {
+                try self.writer.writeAll("\x1b[0m");
+            }
+        }
+    }
+
+    pub fn setLast(self: *Self) void {
+        if (self.stack.items.len > 0) {
+            self.stack.items[self.stack.items.len - 1].has_more = false;
+        }
+    }
+
+    pub fn node(self: *Self, text: []const u8, is_last: bool) !void {
+        if (!self.shouldOutput()) return;
+        if (self.depth > 0) {
+            try self.writeIndent(is_last);
+        }
+        try self.writer.writeAll(text);
+        try self.writer.writeAll("\n");
+        if (is_last) {
+            self.setLast();
+        }
+    }
+
+    pub fn styledNode(self: *Self, text: []const u8, style: Style, is_last: bool) !void {
+        if (!self.shouldOutput()) return;
+        if (self.depth > 0) {
+            try self.writeIndent(is_last);
+        }
+        try self.applyStyle(style);
+        try self.writer.writeAll(text);
+        try self.resetStyle();
+        try self.writer.writeAll("\n");
+        if (is_last) {
+            self.setLast();
+        }
+    }
+
+    pub fn line(self: *Self, text: []const u8) !void {
+        if (!self.shouldOutput()) return;
+        if (self.depth > 0) {
+            try self.writeContinuation();
+        }
+        try self.writer.writeAll(text);
+        try self.writer.writeAll("\n");
+    }
+
+    pub fn beginLine(self: *Self) !void {
+        if (!self.shouldOutput()) return;
+        if (self.depth > 0) {
+            try self.writeContinuation();
+        }
+    }
+
+    pub fn styledLine(self: *Self, text: []const u8, style: Style) !void {
+        if (!self.shouldOutput()) return;
+        if (self.depth > 0) {
+            try self.writeContinuation();
+        }
+        try self.applyStyle(style);
+        try self.writer.writeAll(text);
+        try self.resetStyle();
+        try self.writer.writeAll("\n");
+    }
+
+    pub fn raw(self: *Self, text: []const u8) !void {
+        try self.writer.writeAll(text);
+    }
+
+    pub fn styled(self: *Self, text: []const u8, style: Style) !void {
+        try self.applyStyle(style);
+        try self.writer.writeAll(text);
+        try self.resetStyle();
+    }
+
+    /// Print a formatted string with the given style applied.
+    pub fn styledPrint(self: *Self, comptime fmt: []const u8, args: anytype, style: Style) !void {
+        try self.applyStyle(style);
+        try self.writer.print(fmt, args);
+        try self.resetStyle();
+    }
+
+    pub fn newline(self: *Self) !void {
+        try self.writer.writeAll("\n");
+    }
+
+    pub fn print(self: *Self, comptime fmt: []const u8, args: anytype) !void {
+        try self.writer.print(fmt, args);
+    }
+
+    /// Begin composing a line from `Part`s using a fluent API.
+    /// Example:
+    ///   try tree.compose(&.{ bold(name), dim(status), green("online") }).spaced();
+    pub fn compose(self: *Self, parts: []const Part) LineComposer {
+        return .{ .tree = self, .parts = parts };
+    }
+
+    pub const LineComposer = struct {
+        tree: *Self,
+        parts: []const Part,
+
+        /// Join parts with a custom separator and emit a newline.
+        pub fn joined(self: *const @This(), separator: []const u8) !void {
+            if (self.tree.depth > 0) {
+                try self.tree.writeContinuation();
+            }
+            for (self.parts, 0..) |p, i| {
+                if (i > 0) try self.tree.writer.writeAll(separator);
+                try self.tree.applyStyle(p.style);
+                for (0..p.count) |_| try self.tree.writer.writeAll(p.text);
+                try self.tree.resetStyle();
+            }
+            try self.tree.writer.writeAll("\n");
+        }
+
+        /// Join parts with a single space and emit a newline.
+        pub fn spaced(self: *const @This()) !void {
+            try self.joined(" ");
+        }
+
+        /// Join parts with a custom separator without a trailing newline.
+        pub fn inlineJoined(self: *const @This(), separator: []const u8) !void {
+            if (self.tree.depth > 0) {
+                try self.tree.writeContinuation();
+            }
+            for (self.parts, 0..) |p, i| {
+                if (i > 0) try self.tree.writer.writeAll(separator);
+                try self.tree.applyStyle(p.style);
+                for (0..p.count) |_| try self.tree.writer.writeAll(p.text);
+                try self.tree.resetStyle();
             }
         }
 
-        pub fn node(self: *Self, text: []const u8, is_last: bool) !void {
-            if (!self.shouldOutput()) return;
-            if (self.depth > 0) {
-                try self.writeIndent(is_last);
-            }
-            try self.writer.writeAll(text);
-            try self.writer.writeAll("\n");
-            if (is_last) {
-                self.setLast();
-            }
+        /// Join parts with a single space without a trailing newline.
+        pub fn inlineSpaced(self: *const @This()) !void {
+            try self.inlineJoined(" ");
         }
-
-        pub fn styledNode(self: *Self, text: []const u8, style: Style, is_last: bool) !void {
-            if (!self.shouldOutput()) return;
-            if (self.depth > 0) {
-                try self.writeIndent(is_last);
-            }
-            try self.applyStyle(style);
-            try self.writer.writeAll(text);
-            try self.resetStyle();
-            try self.writer.writeAll("\n");
-            if (is_last) {
-                self.setLast();
-            }
-        }
-
-        pub fn line(self: *Self, text: []const u8) !void {
-            if (!self.shouldOutput()) return;
-            if (self.depth > 0) {
-                try self.writeContinuation();
-            }
-            try self.writer.writeAll(text);
-            try self.writer.writeAll("\n");
-        }
-
-        pub fn beginLine(self: *Self) !void {
-            if (!self.shouldOutput()) return;
-            if (self.depth > 0) {
-                try self.writeContinuation();
-            }
-        }
-
-        pub fn styledLine(self: *Self, text: []const u8, style: Style) !void {
-            if (!self.shouldOutput()) return;
-            if (self.depth > 0) {
-                try self.writeContinuation();
-            }
-            try self.applyStyle(style);
-            try self.writer.writeAll(text);
-            try self.resetStyle();
-            try self.writer.writeAll("\n");
-        }
-
-        pub fn raw(self: *Self, text: []const u8) !void {
-            try self.writer.writeAll(text);
-        }
-
-        pub fn styled(self: *Self, text: []const u8, style: Style) !void {
-            try self.applyStyle(style);
-            try self.writer.writeAll(text);
-            try self.resetStyle();
-        }
-
-        /// Print a formatted string with the given style applied.
-        pub fn styledPrint(self: *Self, comptime fmt: []const u8, args: anytype, style: Style) !void {
-            try self.applyStyle(style);
-            try self.writer.print(fmt, args);
-            try self.resetStyle();
-        }
-
-        pub fn newline(self: *Self) !void {
-            try self.writer.writeAll("\n");
-        }
-
-        pub fn print(self: *Self, comptime fmt: []const u8, args: anytype) !void {
-            try self.writer.print(fmt, args);
-        }
-
-        /// Begin composing a line from `Part`s using a fluent API.
-        /// Example:
-        ///   try tree.compose(&.{ bold(name), dim(status), green("online") }).spaced();
-        pub fn compose(self: *Self, parts: []const Part) LineComposer {
-            return .{ .tree = self, .parts = parts };
-        }
-
-        pub const LineComposer = struct {
-            tree: *Self,
-            parts: []const Part,
-
-            /// Join parts with a custom separator and emit a newline.
-            pub fn joined(self: *const @This(), separator: []const u8) !void {
-                if (self.tree.depth > 0) {
-                    try self.tree.writeContinuation();
-                }
-                for (self.parts, 0..) |p, i| {
-                    if (i > 0) try self.tree.writer.writeAll(separator);
-                    try self.tree.applyStyle(p.style);
-                    for (0..p.count) |_| try self.tree.writer.writeAll(p.text);
-                    try self.tree.resetStyle();
-                }
-                try self.tree.writer.writeAll("\n");
-            }
-
-            /// Join parts with a single space and emit a newline.
-            pub fn spaced(self: *const @This()) !void {
-                try self.joined(" ");
-            }
-
-            /// Join parts with a custom separator without a trailing newline.
-            pub fn inlineJoined(self: *const @This(), separator: []const u8) !void {
-                if (self.tree.depth > 0) {
-                    try self.tree.writeContinuation();
-                }
-                for (self.parts, 0..) |p, i| {
-                    if (i > 0) try self.tree.writer.writeAll(separator);
-                    try self.tree.applyStyle(p.style);
-                    for (0..p.count) |_| try self.tree.writer.writeAll(p.text);
-                    try self.tree.resetStyle();
-                }
-            }
-
-            /// Join parts with a single space without a trailing newline.
-            pub fn inlineSpaced(self: *const @This()) !void {
-                try self.inlineJoined(" ");
-            }
-        };
     };
-}
+};
