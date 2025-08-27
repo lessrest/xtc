@@ -4,13 +4,13 @@ comptime {
     @setEvalBranchQuota(200000);
 }
 
-/// Marker type for syscalls that complete asynchronously.
 pub const Pending = struct {};
+const log = std.log.scoped(.vmsys);
 
 const c = @import("wren.zig");
-const Fiber = *c.Handle;
+const FiberID = @import("vm.zig").FiberID;
+const SlotBuilder = @import("slots.zig").SlotBuilder;
 
-/// Generate a Request union from a syscalls implementation struct.
 pub fn RequestUnion(comptime Syscalls: type) type {
     const decls = std.meta.declarations(Syscalls);
     comptime var count: usize = 0;
@@ -54,7 +54,6 @@ pub fn RequestUnion(comptime Syscalls: type) type {
     });
 }
 
-/// Generate a union type representing the return values of each syscall.
 pub fn ResultUnion(comptime Syscalls: type) type {
     const decls = std.meta.declarations(Syscalls);
     comptime var count: usize = 0;
@@ -102,7 +101,6 @@ pub fn ResultUnion(comptime Syscalls: type) type {
     });
 }
 
-/// Wrapper union distinguishing between immediate results and pending operations.
 pub fn SyscallResult(comptime Syscalls: type) type {
     return union(enum) {
         immediate: ResultUnion(Syscalls),
@@ -110,69 +108,6 @@ pub fn SyscallResult(comptime Syscalls: type) type {
     };
 }
 
-/// Generate slot parsing function for a Request union.
-pub fn generateSlotParser(comptime Request: type, comptime Syscalls: type) type {
-    return struct {
-        pub fn parseRequest(slot_map: anytype) !Request {
-            const operation = try slot_map.lookup("operation", []const u8);
-            const decls = comptime std.meta.declarations(Syscalls);
-            inline for (decls) |decl| {
-                const value = @field(Syscalls, decl.name);
-                const value_type = @TypeOf(value);
-                if (@typeInfo(value_type) == .@"fn" and std.mem.eql(u8, operation, decl.name)) {
-                    const PayloadType = @typeInfo(value_type).@"fn".params[3].type.?;
-                    const payload_fields = std.meta.fields(PayloadType);
-                    var payload: PayloadType = undefined;
-                    inline for (payload_fields) |pf| {
-                        @field(payload, pf.name) = try slot_map.lookup(pf.name, pf.type);
-                    }
-                    return @unionInit(Request, decl.name, payload);
-                }
-            }
-            return error.InvalidOperation;
-        }
-    };
-}
-
-pub fn generateResultSetter(comptime Syscalls: type) type {
-    const ResultType = ResultUnion(Syscalls);
-    return struct {
-        pub fn set(
-            work: *@import("slots.zig").SlotBuilder,
-            index: c_int,
-            result: ResultType,
-        ) !void {
-            inline for (@typeInfo(ResultType).@"union".fields) |field| {
-                if (field.type != Pending) {
-                    if (std.mem.eql(u8, field.name, @tagName(result))) {
-                        _ = work.set(index, @field(result, field.name));
-                        return;
-                    }
-                }
-            }
-            return error.InvalidResult;
-        }
-    };
-}
-
-pub fn generateResultFreer(comptime Syscalls: type, comptime Context: type) type {
-    const ResultType = ResultUnion(Syscalls);
-    return struct {
-        pub fn free(context: *Context, result: ResultType) void {
-            switch (result) {
-                inline else => |payload, tag| {
-                    _ = tag;
-                    const PayloadType = @TypeOf(payload);
-                    if (PayloadType == []const u8 or PayloadType == []u8) {
-                        context.allocator.free(@constCast(payload));
-                    }
-                },
-            }
-        }
-    };
-}
-
-/// Generate Wren source code defining foreign classes for each syscall payload.
 pub fn generateWrenModule(comptime Syscalls: type) []const u8 {
     const Request = RequestUnion(Syscalls);
     comptime var source: []const u8 =
@@ -182,17 +117,6 @@ pub fn generateWrenModule(comptime Syscalls: type) []const u8 {
         \\  call() {
         \\    return Core.call(this)
         \\  }
-        \\}
-        \\
-        \\foreign class SubmissionBatch {
-        \\  construct new(n) {}
-        \\  foreign add(request)
-        \\}
-        \\
-        \\foreign class CompletionBatch {
-        \\  construct new() {}
-        \\  foreign wait(n)
-        \\  foreign waitAll()
         \\}
         \\
     ;
@@ -223,8 +147,7 @@ pub fn pascalCase(comptime name: []const u8) []const u8 {
     return head ++ name[1..];
 }
 
-/// Generate a dispatcher that bridges Wren fiber yields to syscall implementations.
-pub fn generateDispatcher(
+pub fn Syscaller(
     comptime Syscalls: type,
     comptime Engine: type,
     comptime Context: type,
@@ -240,90 +163,50 @@ pub fn generateDispatcher(
         engine: *Engine,
         context: *Context,
 
-        /// Process a single request from a yielding fiber
-        pub fn dispatch(self: *@This(), request: RequestType, fiber: *c.Handle) !DispatchResult {
+        pub fn dispatch(
+            self: *@This(),
+            request: RequestType,
+            fiber: FiberID,
+            slots: *SlotBuilder,
+        ) !DispatchResult {
             switch (request) {
                 inline else => |payload, tag| {
                     const name = @tagName(tag);
-                    const value = @field(Syscalls, name);
-                    const value_type = @TypeOf(value);
-                    if (@typeInfo(value_type) != .@"fn") return error.UnknownSyscall;
-                    const fn_info = @typeInfo(value_type).@"fn";
+                    const function = @field(Syscalls, name);
+                    const function_type = @TypeOf(function);
+
+                    if (@typeInfo(function_type) != .@"fn") return error.UnknownSyscall;
+                    const fn_info = @typeInfo(function_type).@"fn";
                     const RawReturn = fn_info.return_type.?;
                     const ReturnType = if (@typeInfo(RawReturn) == .error_union)
                         @typeInfo(RawReturn).error_union.payload
                     else
                         RawReturn;
+
+                    const result = try function(self.engine, self.context, fiber, payload);
+
+                    _ = slots.set(0, result);
                     if (ReturnType == Pending) {
-                        _ = try value(self.engine, self.context, fiber, payload);
                         return .{ .pending = Pending{} };
                     } else if (ReturnType == void) {
-                        try value(self.engine, self.context, fiber, payload);
                         return .{ .immediate = @unionInit(ResultType, name, 0) };
                     } else {
-                        const val = try value(self.engine, self.context, fiber, payload);
-                        if (ReturnType == void) {
-                            return .{ .immediate = @unionInit(ResultType, name, 0) };
-                        } else {
-                            return .{ .immediate = @unionInit(ResultType, name, val) };
-                        }
+                        return .{ .immediate = @unionInit(ResultType, name, result) };
+                    }
+                },
+            }
+        }
+
+        pub fn free(self: *@This(), result: ResultType) void {
+            switch (result) {
+                inline else => |payload, tag| {
+                    _ = tag;
+                    const PayloadType = @TypeOf(payload);
+                    if (PayloadType == []const u8 or PayloadType == []u8) {
+                        self.context.allocator.free(@constCast(payload));
                     }
                 },
             }
         }
     };
-}
-
-// ------------------------ Tests ----------------------------
-
-const testing = std.testing;
-
-const TestEngine = struct {};
-
-const TestContext = struct {
-    allocator: std.mem.Allocator,
-    output_buffer: std.ArrayList(u8),
-
-    pub fn init(allocator: std.mem.Allocator) TestContext {
-        return .{ .allocator = allocator, .output_buffer = std.ArrayList(u8){} };
-    }
-
-    pub fn deinit(self: *TestContext) void {
-        self.output_buffer.deinit(self.allocator);
-    }
-};
-
-const TestSyscalls = struct {
-    pub fn print(engine: *TestEngine, context: *TestContext, fiber: Fiber, payload: struct { message: []const u8 }) anyerror![]const u8 {
-        _ = fiber;
-        _ = engine;
-        try context.output_buffer.appendSlice(context.allocator, payload.message);
-        return payload.message;
-    }
-
-    pub fn sleep(engine: *TestEngine, context: *TestContext, fiber: Fiber, payload: struct { duration_ms: u64 }) anyerror!void {
-        _ = engine;
-        _ = context;
-        _ = payload;
-        _ = fiber;
-    }
-};
-
-test "can generate trampoline dispatcher" {
-    const Dispatcher = generateDispatcher(TestSyscalls, TestEngine, TestContext);
-    var engine = TestEngine{};
-    var context = TestContext.init(testing.allocator);
-    defer context.deinit();
-    const fiber: Fiber = undefined;
-    var dispatcher = Dispatcher{ .engine = &engine, .context = &context };
-    const request = Dispatcher.RequestType{ .print = .{ .message = "hello" } };
-    const result = try dispatcher.dispatch(request, fiber);
-    switch (result) {
-        .immediate => |im| switch (im) {
-            .print => |msg| try testing.expectEqualStrings("hello", msg),
-            else => try testing.expect(false),
-        },
-        else => try testing.expect(false),
-    }
-    try testing.expectEqualStrings("hello", context.output_buffer.items);
 }

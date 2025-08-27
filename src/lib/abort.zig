@@ -38,6 +38,7 @@ pub fn do_abort(start_addr: usize) !void {
 
     std.debug.captureStackTrace(start_addr, &stack_trace);
 
+    nosuspend try nest.newline();
     nosuspend try ansi.dumpConciseStackTrace(&nest, stack_trace);
     var err_buf: [128]u8 = undefined;
     var err_state = std.fs.File.stderr().writer(&err_buf);

@@ -401,4 +401,5 @@ pub fn dumpConciseStackTrace(tree: anytype, stack_trace: std.builtin.StackTrace)
         }
     }
     try tree.dk().separator(72);
+    try tree.writer.flush();
 }

@@ -216,6 +216,20 @@ pub fn Dank(comptime Writer: type) type {
             });
         }
 
+        pub fn log(self: Self, comptime level: std.log.Level, comptime scope: anytype, comptime format: []const u8, args: anytype) !void {
+            const icon = switch (level) {
+                .err => iconPart(.cross),
+                .warn => iconPart(.warning),
+                .info => iconPart(.info),
+                .debug => iconPart(.dot),
+            };
+            try self.lineParts(&.{
+                treenest.colored(@tagName(scope), Color.yellow).bold().justifyRight(self.allocator, 8),
+                icon,
+                self.formattedPart(format, args),
+            });
+        }
+
         // Table formatting
         pub fn table(
             self: Self,

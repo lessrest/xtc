@@ -66,7 +66,7 @@ pub const Window = struct {
         self.unicode.deinit(self.allocator);
         self.trace.deinit();
         self.allocator.destroy(self.trace);
-        self.allocator.destroy(self.unicode);
+        //        self.allocator.destroy(self.unicode);
         if (self.state.needs_tty_restore) {
             var ansi_writer = ansi.stdout();
             ansi_writer.exitAlternateScreen() catch {};

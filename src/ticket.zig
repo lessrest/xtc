@@ -375,6 +375,15 @@ pub fn from(something: anytype) ![Wy64Ticket12.out_len]u8 {
         }
     }
 
+    // *c.Handle
+    if (ti == .pointer and ti.pointer.size == .one and ti.pointer.child == @import("fiberscript/wren.zig").Handle) {
+        var buf: [64]u8 = undefined;
+        var x = std.Io.Writer.fixed(&buf);
+        try x.printAddress(something);
+        var reader = std.Io.Reader.fixed(&buf);
+        return try tix12FromReader(reader.adaptToOldInterface());
+    }
+
     // Anything with a .reader() method
     if (@hasDecl(T, "reader")) {
         return try tix12FromReader(something.reader());

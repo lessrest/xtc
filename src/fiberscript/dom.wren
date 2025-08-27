@@ -1,28 +1,11 @@
 import "xtc" for Core
-import "syscall" for OpenWindow, RequestRender, NextEvent, CloseWindow, CreateElement, AppendChild, UpdateClass, PrintElement, CreateText, UpdateText
+import "syscall" for CreateElement, CreateText, UpdateText, UpdateClass, AppendChild, RemoveChild, SetDocumentTitle
 
 class Document {
   static root { Element.fromIndex(0) }
 
-  static requestRender() {
-    return Core.call(RequestRender.new())
-  }
-}
-
-class Window {
-  construct new() {}
-
-  static open() {
-    Core.call(OpenWindow.new())
-    return Window.new()
-  }
-
-  nextEvent(type) {
-    return Core.call(NextEvent.new(type))
-  }
-
-  close() {
-    return Core.call(CloseWindow.new())
+  static title=(title) {
+    return Core.call(SetDocumentTitle.new(title))
   }
 }
 
@@ -41,12 +24,12 @@ class Element {
     return Core.call(AppendChild.new(index, child.index))
   }
 
-  classes=(string) {
-    return Core.call(UpdateClass.new(index, string))
+  remove(child) {
+    return Core.call(RemoveChild.new(index, child.index))
   }
 
-  print() {
-    return Core.call(PrintElement.new(index))
+  classes=(string) {
+    return Core.call(UpdateClass.new(index, string))
   }
 }
 

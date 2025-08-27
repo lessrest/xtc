@@ -55,14 +55,20 @@ pub fn build(b: *std.Build) void {
     gbp_mod.addImport("codegen_io", codegen_io);
     const gbp_gen_exe = b.addExecutable(.{ .name = "gbp", .root_module = gbp_mod });
     const run_gbp_gen_exe = b.addRunArtifact(gbp_gen_exe);
-    run_gbp_gen_exe.cwd = b.path(".");
+    run_gbp_gen_exe.setCwd(b.path("."));
+    run_gbp_gen_exe.stdio = .{ .check = .{} };
+    run_gbp_gen_exe.addFileInput(b.path("data/unicode/DerivedCoreProperties.txt"));
+    run_gbp_gen_exe.expectExitCode(0);
     const gbp_gen_out = run_gbp_gen_exe.addOutputFileArg("gbp.bin");
 
     const wbp_mod = b.createModule(.{ .root_source_file = b.path("codegen/wbp.zig"), .target = b.graph.host, .optimize = .Debug });
     wbp_mod.addImport("codegen_io", codegen_io);
     const wbp_gen_exe = b.addExecutable(.{ .name = "wbp", .root_module = wbp_mod });
     const run_wbp_gen_exe = b.addRunArtifact(wbp_gen_exe);
-    run_wbp_gen_exe.cwd = b.path(".");
+    run_wbp_gen_exe.setCwd(b.path("."));
+    run_wbp_gen_exe.stdio = .{ .check = .{} };
+    run_wbp_gen_exe.expectExitCode(0);
+    run_wbp_gen_exe.addFileInput(b.path("data/unicode/auxiliary/WordBreakTest.txt"));
     const wbp_gen_out = run_wbp_gen_exe.addOutputFileArg("wbp.bin");
 
     const dwp_mod = b.createModule(.{ .root_source_file = b.path("codegen/dwp.zig"), .target = b.graph.host, .optimize = .Debug });
@@ -70,7 +76,9 @@ pub fn build(b: *std.Build) void {
     const dwp_gen_exe = b.addExecutable(.{ .name = "dwp", .root_module = dwp_mod });
     dwp_gen_exe.root_module.addOptions("options", dwp_options);
     const run_dwp_gen_exe = b.addRunArtifact(dwp_gen_exe);
-    run_dwp_gen_exe.cwd = b.path(".");
+    run_dwp_gen_exe.setCwd(b.path("."));
+    run_dwp_gen_exe.stdio = .{ .check = .{} };
+    run_dwp_gen_exe.expectExitCode(0);
     const dwp_gen_out = run_dwp_gen_exe.addOutputFileArg("dwp.bin");
 
     // Normalization properties
@@ -78,49 +86,63 @@ pub fn build(b: *std.Build) void {
     canon_mod.addImport("codegen_io", codegen_io);
     const canon_gen_exe = b.addExecutable(.{ .name = "canon", .root_module = canon_mod });
     const run_canon_gen_exe = b.addRunArtifact(canon_gen_exe);
-    run_canon_gen_exe.cwd = b.path(".");
+    //    run_canon_gen_exe.cwd = b.path(".");
+    run_canon_gen_exe.stdio = .{ .check = .{} };
+    run_canon_gen_exe.expectExitCode(0);
     const canon_gen_out = run_canon_gen_exe.addOutputFileArg("canon.bin");
 
     const compat_mod = b.createModule(.{ .root_source_file = b.path("codegen/compat.zig"), .target = b.graph.host, .optimize = .Debug });
     compat_mod.addImport("codegen_io", codegen_io);
     const compat_gen_exe = b.addExecutable(.{ .name = "compat", .root_module = compat_mod });
     const run_compat_gen_exe = b.addRunArtifact(compat_gen_exe);
-    run_compat_gen_exe.cwd = b.path(".");
+    //    run_compat_gen_exe.cwd = b.path(".");
+    run_compat_gen_exe.stdio = .{ .check = .{} };
+    run_compat_gen_exe.expectExitCode(0);
     const compat_gen_out = run_compat_gen_exe.addOutputFileArg("compat.bin");
 
     const hangul_mod = b.createModule(.{ .root_source_file = b.path("codegen/hangul.zig"), .target = b.graph.host, .optimize = .Debug });
     hangul_mod.addImport("codegen_io", codegen_io);
     const hangul_gen_exe = b.addExecutable(.{ .name = "hangul", .root_module = hangul_mod });
     const run_hangul_gen_exe = b.addRunArtifact(hangul_gen_exe);
-    run_hangul_gen_exe.cwd = b.path(".");
+    //    run_hangul_gen_exe.cwd = b.path(".");
+    run_hangul_gen_exe.stdio = .{ .check = .{} };
+    run_hangul_gen_exe.expectExitCode(0);
     const hangul_gen_out = run_hangul_gen_exe.addOutputFileArg("hangul.bin");
 
     const normp_mod = b.createModule(.{ .root_source_file = b.path("codegen/normp.zig"), .target = b.graph.host, .optimize = .Debug });
     normp_mod.addImport("codegen_io", codegen_io);
     const normp_gen_exe = b.addExecutable(.{ .name = "normp", .root_module = normp_mod });
     const run_normp_gen_exe = b.addRunArtifact(normp_gen_exe);
-    run_normp_gen_exe.cwd = b.path(".");
+    //    run_normp_gen_exe.cwd = b.path(".");
+    run_normp_gen_exe.stdio = .{ .check = .{} };
+    run_normp_gen_exe.expectExitCode(0);
     const normp_gen_out = run_normp_gen_exe.addOutputFileArg("normp.bin");
 
     const ccc_mod = b.createModule(.{ .root_source_file = b.path("codegen/ccc.zig"), .target = b.graph.host, .optimize = .Debug });
     ccc_mod.addImport("codegen_io", codegen_io);
     const ccc_gen_exe = b.addExecutable(.{ .name = "ccc", .root_module = ccc_mod });
     const run_ccc_gen_exe = b.addRunArtifact(ccc_gen_exe);
-    run_ccc_gen_exe.cwd = b.path(".");
+    //    run_ccc_gen_exe.cwd = b.path(".");
+    run_ccc_gen_exe.stdio = .{ .check = .{} };
+    run_ccc_gen_exe.expectExitCode(0);
     const ccc_gen_out = run_ccc_gen_exe.addOutputFileArg("ccc.bin");
 
     const gencat_mod = b.createModule(.{ .root_source_file = b.path("codegen/gencat.zig"), .target = b.graph.host, .optimize = .Debug });
     gencat_mod.addImport("codegen_io", codegen_io);
     const gencat_gen_exe = b.addExecutable(.{ .name = "gencat", .root_module = gencat_mod });
     const run_gencat_gen_exe = b.addRunArtifact(gencat_gen_exe);
-    run_gencat_gen_exe.cwd = b.path(".");
+    //    run_gencat_gen_exe.cwd = b.path(".");
+    run_gencat_gen_exe.stdio = .{ .check = .{} };
+    run_gencat_gen_exe.expectExitCode(0);
     const gencat_gen_out = run_gencat_gen_exe.addOutputFileArg("gencat.bin");
 
     const fold_mod = b.createModule(.{ .root_source_file = b.path("codegen/fold.zig"), .target = b.graph.host, .optimize = .Debug });
     fold_mod.addImport("codegen_io", codegen_io);
     const fold_gen_exe = b.addExecutable(.{ .name = "fold", .root_module = fold_mod });
     const run_fold_gen_exe = b.addRunArtifact(fold_gen_exe);
-    run_fold_gen_exe.cwd = b.path(".");
+    //    run_fold_gen_exe.cwd = b.path(".");
+    run_fold_gen_exe.stdio = .{ .check = .{} };
+    run_fold_gen_exe.expectExitCode(0);
     const fold_gen_out = run_fold_gen_exe.addOutputFileArg("fold.bin");
 
     // Numeric types
@@ -128,7 +150,9 @@ pub fn build(b: *std.Build) void {
     num_mod.addImport("codegen_io", codegen_io);
     const num_gen_exe = b.addExecutable(.{ .name = "numeric", .root_module = num_mod });
     const run_num_gen_exe = b.addRunArtifact(num_gen_exe);
-    run_num_gen_exe.cwd = b.path(".");
+    //    run_num_gen_exe.cwd = b.path(".");
+    run_num_gen_exe.stdio = .{ .check = .{} };
+    run_num_gen_exe.expectExitCode(0);
     const num_gen_out = run_num_gen_exe.addOutputFileArg("numeric.bin");
 
     // Letter case properties
@@ -136,7 +160,9 @@ pub fn build(b: *std.Build) void {
     case_prop_mod.addImport("codegen_io", codegen_io);
     const case_prop_gen_exe = b.addExecutable(.{ .name = "case_prop", .root_module = case_prop_mod });
     const run_case_prop_gen_exe = b.addRunArtifact(case_prop_gen_exe);
-    run_case_prop_gen_exe.cwd = b.path(".");
+    //    run_case_prop_gen_exe.cwd = b.path(".");
+    run_case_prop_gen_exe.stdio = .{ .check = .{} };
+    run_case_prop_gen_exe.expectExitCode(0);
     const case_prop_gen_out = run_case_prop_gen_exe.addOutputFileArg("case_prop.bin");
 
     // Uppercase mappings
@@ -144,7 +170,9 @@ pub fn build(b: *std.Build) void {
     upper_mod.addImport("codegen_io", codegen_io);
     const upper_gen_exe = b.addExecutable(.{ .name = "upper", .root_module = upper_mod });
     const run_upper_gen_exe = b.addRunArtifact(upper_gen_exe);
-    run_upper_gen_exe.cwd = b.path(".");
+    //    run_upper_gen_exe.cwd = b.path(".");
+    run_upper_gen_exe.stdio = .{ .check = .{} };
+    run_upper_gen_exe.expectExitCode(0);
     const upper_gen_out = run_upper_gen_exe.addOutputFileArg("upper.bin");
 
     // Lowercase mappings
@@ -152,27 +180,35 @@ pub fn build(b: *std.Build) void {
     lower_mod.addImport("codegen_io", codegen_io);
     const lower_gen_exe = b.addExecutable(.{ .name = "lower", .root_module = lower_mod });
     const run_lower_gen_exe = b.addRunArtifact(lower_gen_exe);
-    run_lower_gen_exe.cwd = b.path(".");
+    //    run_lower_gen_exe.cwd = b.path(".");
+    run_lower_gen_exe.stdio = .{ .check = .{} };
+    run_lower_gen_exe.expectExitCode(0);
     const lower_gen_out = run_lower_gen_exe.addOutputFileArg("lower.bin");
 
     const scripts_mod = b.createModule(.{ .root_source_file = b.path("codegen/scripts.zig"), .target = b.graph.host, .optimize = .Debug });
     scripts_mod.addImport("codegen_io", codegen_io);
     const scripts_gen_exe = b.addExecutable(.{ .name = "scripts", .root_module = scripts_mod });
     const run_scripts_gen_exe = b.addRunArtifact(scripts_gen_exe);
-    run_scripts_gen_exe.cwd = b.path(".");
+    //    run_scripts_gen_exe.cwd = b.path(".");
+    run_scripts_gen_exe.stdio = .{ .check = .{} };
+    run_scripts_gen_exe.expectExitCode(0);
     const scripts_gen_out = run_scripts_gen_exe.addOutputFileArg("scripts.bin");
 
     const core_mod = b.createModule(.{ .root_source_file = b.path("codegen/core_props.zig"), .target = b.graph.host, .optimize = .Debug });
     const core_gen_exe = b.addExecutable(.{ .name = "core", .root_module = core_mod });
     const run_core_gen_exe = b.addRunArtifact(core_gen_exe);
-    run_core_gen_exe.cwd = b.path(".");
+    //    run_core_gen_exe.cwd = b.path(".");
+    run_core_gen_exe.stdio = .{ .check = .{} };
+    run_core_gen_exe.expectExitCode(0);
     const core_gen_out = run_core_gen_exe.addOutputFileArg("core_props.bin");
 
     const props_mod = b.createModule(.{ .root_source_file = b.path("codegen/props.zig"), .target = b.graph.host, .optimize = .Debug });
     props_mod.addImport("codegen_io", codegen_io);
     const props_gen_exe = b.addExecutable(.{ .name = "props", .root_module = props_mod });
     const run_props_gen_exe = b.addRunArtifact(props_gen_exe);
-    run_props_gen_exe.cwd = b.path(".");
+    //    run_props_gen_exe.cwd = b.path(".");
+    run_props_gen_exe.stdio = .{ .check = .{} };
+    run_props_gen_exe.expectExitCode(0);
     const props_gen_out = run_props_gen_exe.addOutputFileArg("props.bin");
 
     // Modules we provide

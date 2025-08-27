@@ -1,8 +1,5 @@
-import "syscall" for Sleep
-
 class Core {
     foreign static syscall(fiber, request)
-    foreign static submitBatch(fiber, batch)
 
     static call(request) {
         var result = syscall(Fiber.current, request)
@@ -11,14 +8,6 @@ class Core {
         } else {
             return result
         }
-    }
-
-    static sleep(seconds) {
-        return Core.call(Sleep.new(seconds))
-    }
-
-    static submit(batch) {
-        return submitBatch(Fiber.current, batch)
     }
 }
 

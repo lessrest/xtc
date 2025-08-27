@@ -1,6 +1,8 @@
 const std = @import("std");
 const c = @import("wren.zig");
-
+const syscalls = @import("syscalls.zig");
+const FiberID = @import("vm.zig").FiberID;
+const log = std.log.scoped(.slot);
 /// Builder for setting up slots before making a call.
 pub const SlotBuilder = struct {
     vm: *c.VM,
@@ -76,6 +78,7 @@ pub const SlotBuilder = struct {
             usize => @intFromFloat(c.wrenGetSlotDouble(self.vm, slot)),
             []const u8 => std.mem.span(c.wrenGetSlotString(self.vm, slot)),
             *c.Handle => c.wrenGetSlotHandle(self.vm, slot) orelse error.NullHandle,
+            FiberID => FiberID.init(c.wrenGetSlotHandle(self.vm, slot).?),
             else => @compileError("Unsupported type: " ++ @typeName(T)),
         };
     }
@@ -129,7 +132,27 @@ pub const SlotBuilder = struct {
             return CallResult.initError();
         }
 
-        return CallResult.init(self.vm, self.allocator, signature);
+        const cstr = self.allocator.dupeZ(u8, signature) catch {
+            std.debug.panic("failed to dupe signature {s}", .{signature});
+        };
+        defer self.allocator.free(cstr);
+
+        const handle = c.wrenMakeCallHandle(self.vm, cstr) orelse {
+            self.has_error = true;
+            return CallResult.initError();
+        };
+
+        defer c.wrenReleaseHandle(self.vm, handle);
+
+        return self.callWithHandle(handle);
+    }
+
+    pub fn callWithHandle(self: *SlotBuilder, handle: *c.Handle) CallResult {
+        if (self.has_error) {
+            return CallResult.initError();
+        }
+
+        return CallResult.init(self.vm, handle);
     }
 
     /// Helper to ensure enough slots are available.
@@ -145,12 +168,21 @@ pub const SlotBuilder = struct {
             f64 => c.wrenSetSlotDouble(self.vm, slot, value),
             comptime_int => c.wrenSetSlotDouble(self.vm, slot, @floatFromInt(value)),
             u8, i8, u16, i16, u32, i32, usize, isize => c.wrenSetSlotDouble(self.vm, slot, @floatFromInt(value)),
+            ?usize => {
+                if (value) |v| {
+                    c.wrenSetSlotDouble(self.vm, slot, @floatFromInt(v));
+                } else {
+                    c.wrenSetSlotNull(self.vm, slot);
+                }
+            },
             []const u8 => {
                 const cstr = try self.allocator.dupeZ(u8, value);
                 defer self.allocator.free(cstr);
                 c.wrenSetSlotString(self.vm, slot, cstr);
             },
             *c.Handle => c.wrenSetSlotHandle(self.vm, slot, value),
+            FiberID => c.wrenSetSlotHandle(self.vm, slot, value.handle),
+            syscalls.Pending => c.wrenSetSlotNull(self.vm, slot),
             else => |T| {
                 const info = @typeInfo(T);
                 if (info == .pointer and std.meta.Elem(@TypeOf(value)) == u8) {
@@ -168,26 +200,14 @@ pub const SlotBuilder = struct {
 /// Result of a method call, providing type-safe value extraction.
 pub const CallResult = struct {
     vm: *c.VM,
-    allocator: std.mem.Allocator,
     result: c.InterpretResult,
     has_error: bool,
 
-    pub fn init(vm: *c.VM, allocator: std.mem.Allocator, signature: []const u8) CallResult {
-        const sig_cstr = allocator.dupeZ(u8, signature) catch {
-            return CallResult.initError();
-        };
-        defer allocator.free(sig_cstr);
-
-        const handle = c.wrenMakeCallHandle(vm, sig_cstr) orelse {
-            return CallResult.initError();
-        };
-        defer c.wrenReleaseHandle(vm, handle);
-
+    pub fn init(vm: *c.VM, handle: *c.Handle) CallResult {
         const result = c.wrenCall(vm, handle);
 
         return CallResult{
             .vm = vm,
-            .allocator = allocator,
             .result = @enumFromInt(result),
             .has_error = false,
         };
@@ -196,7 +216,6 @@ pub const CallResult = struct {
     pub fn initError() CallResult {
         return CallResult{
             .vm = undefined,
-            .allocator = undefined,
             .result = .runtime_error,
             .has_error = true,
         };
@@ -209,6 +228,15 @@ pub const CallResult = struct {
 
         c.wrenEnsureSlots(self.vm, 1);
 
+        const ty = @typeInfo(T);
+        if (ty == .optional) {
+            const type_id = c.wrenGetSlotType(self.vm, 0);
+            if (@as(c.Type, @enumFromInt(type_id)) == c.Type.null) {
+                return null;
+            }
+            return try self.as(ty.optional.child);
+        }
+
         return switch (T) {
             bool => c.wrenGetSlotBool(self.vm, 0),
             f64 => c.wrenGetSlotDouble(self.vm, 0),
@@ -216,8 +244,6 @@ pub const CallResult = struct {
             usize => @intFromFloat(c.wrenGetSlotDouble(self.vm, 0)),
             []const u8 => std.mem.span(c.wrenGetSlotString(self.vm, 0)),
             *c.Handle => c.wrenGetSlotHandle(self.vm, 0) orelse error.NullHandle,
-            // Remove hardcoded Request handling - use generic syscalls system
-
             else => @compileError("Unsupported type: " ++ @typeName(T)),
         };
     }
