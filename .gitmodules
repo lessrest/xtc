@@ -1,4 +1,0 @@
-
-[submodule "deps/wren"]
-	path = deps/wren
-	url = https://github.com/wren-lang/wren
