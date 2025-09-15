@@ -1,16 +1,17 @@
 const std = @import("std");
-const layout = @import("../layout.zig");
-const Painter = @import("../Painter.zig").Painter;
+const miniflex = @import("miniflex");
+const layout = miniflex.layout;
+const Painter = miniflex.Painter;
 const xml = @import("../xml.zig");
 const xmlparse = @import("../xmlparse.zig");
 const TreeNest = @import("ansi").nest;
-const Dom = @import("../dom.zig").Dom;
-const BoxTree = @import("../layout.zig").BoxTree;
-const DomNodeId = @import("../dom.zig").DomNodeId;
-const Raster = @import("../Raster.zig");
-const GlyphTable = @import("../GlyphTable.zig");
+const Dom = miniflex.Dom;
+const BoxTree = miniflex.BoxTree;
+const DomNodeId = miniflex.DomNodeId;
+const Raster = miniflex.Raster;
+const GlyphTable = miniflex.GlyphTable;
 const GlyphId = GlyphTable.GlyphId;
-const UnicodeData = @import("../unicode.zig");
+const UnicodeData = miniflex.UnicodeData;
 
 /// Helper for tests: pick the first top-level element as root and build a BoxTree.
 pub fn makeDocumentBoxTree(

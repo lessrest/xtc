@@ -15,6 +15,17 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/lib/pretty.zig"),
     });
 
+    const miniflex = b.addModule("miniflex", .{
+        .root_source_file = b.path("src/miniflex.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    miniflex.addImport("ansi", ansi);
+    miniflex.addImport("Graphemes", zg.module("Graphemes"));
+    miniflex.addImport("DisplayWidth", zg.module("DisplayWidth"));
+    miniflex.addImport("Words", zg.module("Words"));
+
     // // In Zig 0.15, a module may not import files above its root directory.
     // // Point the wren module at a src-level root so vm.zig can import siblings.
     // const wren = b.addModule("wren", .{
@@ -81,6 +92,7 @@ pub fn build(b: *std.Build) void {
 
     xtc.addImport("ansi", ansi);
     xtc.addImport("pretty", pretty);
+    xtc.addImport("miniflex", miniflex);
 
     xtc.addIncludePath(b.path("deps/wren/src/include"));
     xtc.addIncludePath(b.path("deps/wren/src/vm"));

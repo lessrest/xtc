@@ -5,7 +5,8 @@ const syscalls = @import("syscalls.zig");
 const slots_api = @import("slots.zig");
 const Platform = @import("platform.zig");
 const ticket = @import("../ticket.zig");
-const Document = @import("../dom.zig").Dom;
+const miniflex = @import("miniflex");
+const Document = miniflex.dom.Dom;
 
 const log = std.log.scoped(.wrenctx);
 
