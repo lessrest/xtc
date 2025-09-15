@@ -3,7 +3,8 @@ const Self = @import("vm.zig");
 const Context = @import("context.zig").Context;
 const Fiber = Self.FiberID;
 const FiberID = Self.FiberID;
-const dom = @import("../dom.zig");
+const miniflex = @import("miniflex");
+const dom = miniflex.dom;
 
 const log = std.log.scoped(.platform);
 

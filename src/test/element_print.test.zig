@@ -1,6 +1,7 @@
 const std = @import("std");
 const vm = @import("../fiberscript/vm.zig");
-const dom = @import("../dom.zig");
+const miniflex = @import("miniflex");
+const dom = miniflex.dom;
 
 const SyscallContext = vm.SyscallContext;
 const Engine = vm.Engine(.{});

@@ -2,7 +2,8 @@ const std = @import("std");
 const ansi = @import("ansi");
 
 const Engine = @import("fiberscript/vm.zig");
-const dom = @import("dom.zig");
+const miniflex = @import("miniflex");
+const dom = miniflex.dom;
 const c = @import("fiberscript/wren.zig");
 
 pub const version = "0.5.0";

@@ -1,12 +1,13 @@
 const std = @import("std");
-const dom = @import("dom.zig");
-const Window = @import("Window.zig");
-const paint = @import("paint.zig");
+const miniflex = @import("miniflex");
+const dom = miniflex.dom;
+const Window = miniflex.Window;
 const WrenRunner = @import("wren/runtime.zig");
 const DocumentLoader = @import("pageload.zig");
 const cli = @import("cli.zig");
-const GlyphTable = @import("GlyphTable.zig");
-const Raster = @import("Raster.zig");
+const GlyphTable = miniflex.GlyphTable;
+const Raster = miniflex.Raster;
+const UnicodeData = miniflex.UnicodeData;
 
 const ansi = @import("ansi");
 const Trace = ansi.FileTrace;
@@ -126,7 +127,7 @@ pub const WasmLiveSession = struct {
 
 /// Component bundle for WASM rendering
 const Components = struct {
-    unicode: *paint.UnicodeData,
+    unicode: *UnicodeData,
     document: *dom.Dom,
     wren_runner: *WrenRunner,
     glyphs: *GlyphTable,
@@ -144,8 +145,8 @@ const Components = struct {
 
 /// Initialize all required components
 fn initializeComponents(allocator: std.mem.Allocator) !Components {
-    var unicode = try allocator.create(paint.UnicodeData);
-    unicode.* = try paint.UnicodeData.init(allocator);
+    var unicode = try allocator.create(UnicodeData);
+    unicode.* = try UnicodeData.init(allocator);
     errdefer unicode.deinit(allocator);
 
     var document = try dom.Dom.init(allocator);
@@ -299,11 +300,11 @@ export fn xtc_render(xml_ptr: [*]const u8, xml_len: usize, width: u32, height: u
 
     // Use the WASM rendering pipeline with present()
     renderXmlWasm(xml, width, height) catch |err| {
-    var outb: [256]u8 = undefined;
-    var outs = std.fs.File.stdout().writer(&outb);
-    const stdout: *std.Io.Writer = &outs.interface;
-    stdout.print("Render error: {}\n", .{err}) catch return;
-    stdout.flush() catch {};
+        var outb: [256]u8 = undefined;
+        var outs = std.fs.File.stdout().writer(&outb);
+        const stdout: *std.Io.Writer = &outs.interface;
+        stdout.print("Render error: {}\n", .{err}) catch return;
+        stdout.flush() catch {};
     };
 }
 

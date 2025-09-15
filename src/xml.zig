@@ -1,6 +1,7 @@
 const std = @import("std");
-const Dom = @import("dom.zig").Dom;
-const DomNodeId = @import("dom.zig").DomNodeId;
+const miniflex = @import("miniflex");
+const Dom = miniflex.dom.Dom;
+const DomNodeId = miniflex.dom.DomNodeId;
 
 // --- XML -> DOM mapping ---
 pub const XmlDom = struct { dom: Dom, root: DomNodeId };
