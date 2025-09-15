@@ -1,7 +1,7 @@
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
-    const target = b.standardTargetOptions(.{ .default_target = .{ .abi = .musl } });
+    const target = b.standardTargetOptions(.{});
     //    const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
@@ -143,33 +143,33 @@ pub fn build(b: *std.Build) void {
 
     b.installArtifact(exe);
 
-    // const exe_check = b.addExecutable(.{
-    //     .name = "xtc",
-    //     .root_module = xtc,
-    // });
+    const exe_check = b.addExecutable(.{
+        .name = "xtc",
+        .root_module = xtc,
+    });
 
-    // exe_check.linkSystemLibrary("m");
+    exe_check.linkSystemLibrary("m");
     // exe_check.linkLibrary(libwren);
 
-    // const check_step = b.step("check", "Check the xtc executable");
-    // check_step.dependOn(&exe_check.step);
+    const check_step = b.step("check", "Check the xtc executable");
+    check_step.dependOn(&exe_check.step);
 
-    // const unit_tests = b.addTest(.{
-    //     .name = "xtc-test-suite",
-    //     .root_module = xtc,
-    //     .test_runner = .{
-    //         .path = b.path("src/lib/test_runner.zig"),
-    //         .mode = .simple,
-    //     },
-    // });
+    const unit_tests = b.addTest(.{
+        .name = "xtc-test-suite",
+        .root_module = xtc,
+        .test_runner = .{
+            .path = b.path("src/lib/test_runner.zig"),
+            .mode = .simple,
+        },
+    });
 
     // unit_tests.linkLibrary(libwren);
 
-    // b.installArtifact(unit_tests);
+    b.installArtifact(unit_tests);
 
-    // const run_unit_tests = b.addRunArtifact(unit_tests);
-    // run_unit_tests.setEnvironmentVariable("TEST_VERBOSE", "true");
-    // b.step("test", "Run unit tests").dependOn(&run_unit_tests.step);
+    const run_unit_tests = b.addRunArtifact(unit_tests);
+    run_unit_tests.setEnvironmentVariable("TEST_VERBOSE", "true");
+    b.step("test", "Run unit tests").dependOn(&run_unit_tests.step);
 
     // // WASM build target using WASI for stdout access
     // const wasm_mod = b.createModule(.{

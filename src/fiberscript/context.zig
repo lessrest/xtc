@@ -48,6 +48,14 @@ pub const Context = struct {
         isDone,
     }, *c.Handle) = .{},
 
+    pub fn init(allocator: std.mem.Allocator, document: *Document) Context {
+        return Context{
+            .document = document,
+            .allocator = allocator,
+            .vm = undefined,
+        };
+    }
+
     pub fn deinit(self: *Context) void {
         self.thunks.deinit(self.allocator);
         self.background_threads.deinit(self.allocator);

@@ -244,6 +244,7 @@ pub const CallResult = struct {
             usize => @intFromFloat(c.wrenGetSlotDouble(self.vm, 0)),
             []const u8 => std.mem.span(c.wrenGetSlotString(self.vm, 0)),
             *c.Handle => c.wrenGetSlotHandle(self.vm, 0) orelse error.NullHandle,
+            FiberID => FiberID.init(c.wrenGetSlotHandle(self.vm, 0).?),
             else => @compileError("Unsupported type: " ++ @typeName(T)),
         };
     }

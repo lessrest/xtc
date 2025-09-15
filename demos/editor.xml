@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root class="flex flex-col bg-gray-900">
+  <!-- Editor container -->
+  <div id="editor" class="flex-1 grow-1 bg-blue-800">
+    <!-- Editor will be populated by the Wren script -->
+  </div>
+</root>

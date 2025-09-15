@@ -6,6 +6,12 @@ const miniflex = @import("miniflex");
 const dom = miniflex.dom;
 const c = @import("fiberscript/wren.zig");
 
+test {
+    _ = @import("miniflex");
+    _ = @import("fiberscript/wren.zig");
+    _ = @import("fiberscript/vm.zig");
+}
+
 pub const version = "0.5.0";
 
 pub const panic = ansi.panic;

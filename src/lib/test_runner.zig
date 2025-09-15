@@ -12,7 +12,7 @@ const BORDER = "=" ** 80;
 // use in custom panic handler
 var current_test: ?*TestCase = null;
 
-const Tree = treenest.TreeNest(*std.Io.Writer);
+const Tree = treenest.TreeNest;
 const Dank = dank.Dank(std.fs.File.Writer);
 
 var current_tree: *Tree = undefined;
