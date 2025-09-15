@@ -353,7 +353,7 @@ pub fn buildBoxTree(arena: *std.heap.ArenaAllocator, dom: *const Dom, root: DomN
     const items = dom.headers.slice();
     var cur_child: DomNodeId = Dom.NullId;
     switch (items.items(.content)[@as(usize, @intCast(root))]) {
-        .children => |ch| cur_child = ch.first_child,
+        .element => |ch| cur_child = ch.first_child,
         else => cur_child = Dom.NullId,
     }
     var prev_ptr: ?*BoxNode = null;

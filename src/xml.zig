@@ -1,5 +1,5 @@
 const std = @import("std");
-const miniflex = @import("miniflex");
+const miniflex = @import("miniflex.zig");
 const Dom = miniflex.dom.Dom;
 const DomNodeId = miniflex.dom.DomNodeId;
 

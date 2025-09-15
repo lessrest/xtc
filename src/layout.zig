@@ -13,7 +13,7 @@ const StyleOverflow = @import("style.zig").StyleOverflow;
 const StyleRow = @import("style.zig").StyleRow;
 const ContiguousTree = @import("tree.zig").ContiguousTree;
 const BoxSize = [2]usize;
-const LayoutEngine = @This();
+pub const LayoutEngine = @This();
 
 allocator: std.mem.Allocator,
 unicode: *const UnicodeData,

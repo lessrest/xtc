@@ -163,13 +163,28 @@ pub fn build(b: *std.Build) void {
         },
     });
 
+    const miniflextest = b.addTest(.{
+        .name = "miniflex-test-suite",
+        .root_module = miniflex,
+        .test_runner = .{
+            .path = b.path("src/lib/test_runner.zig"),
+            .mode = .simple,
+        },
+    });
+
     // unit_tests.linkLibrary(libwren);
 
     b.installArtifact(unit_tests);
+    b.installArtifact(miniflextest);
 
     const run_unit_tests = b.addRunArtifact(unit_tests);
+    const run_miniflex_tests = b.addRunArtifact(miniflextest);
     run_unit_tests.setEnvironmentVariable("TEST_VERBOSE", "true");
-    b.step("test", "Run unit tests").dependOn(&run_unit_tests.step);
+    run_miniflex_tests.setEnvironmentVariable("TEST_VERBOSE", "true");
+
+    var teststep = b.step("test", "Run unit tests");
+    teststep.dependOn(&run_unit_tests.step);
+    teststep.dependOn(&run_miniflex_tests.step);
 
     // // WASM build target using WASI for stdout access
     // const wasm_mod = b.createModule(.{

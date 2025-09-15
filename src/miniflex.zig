@@ -36,3 +36,10 @@ pub const GlyphTable = glyph_table;
 
 pub const unicode = @import("unicode.zig");
 pub const UnicodeData = unicode;
+
+const std = @import("std");
+
+test {
+    _ = @import("test/flex.test.zig");
+    std.testing.refAllDecls(@This());
+}

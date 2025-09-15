@@ -6,7 +6,7 @@ pub const nest = @import("treenest.zig");
 pub const dank = @import("dank.zig");
 pub const abort = @import("abort.zig");
 
-pub const FileTrace = nest.TreeNest(*std.Io.Writer);
+pub const FileTrace = nest.TreeNest;
 
 // Shims to preserve previous usingnamespace API
 pub fn stdout() AnsiWriter.StdoutAnsiWriter {
