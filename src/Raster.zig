@@ -345,6 +345,72 @@ pub fn writeAsPlainText(
     }
 }
 
+pub fn writeAsAnsiText(
+    self: *const Raster,
+    writer: anytype,
+    glyphs: *const GlyphTable,
+) !void {
+    const cells = self.cells.slice();
+    const glyph_data = cells.items(.glyph);
+    const fg_data = cells.items(.fg);
+    const bg_data = cells.items(.bg);
+    
+    var current_fg: Rgba8 = TERMINAL_DEFAULT_COLOR;
+    var current_bg: Rgba8 = TERMINAL_DEFAULT_COLOR;
+    
+    for (0..self.height) |y| {
+        for (0..self.width) |x| {
+            const idx = y * self.width + x;
+            const gid = glyph_data[idx];
+            const fg = fg_data[idx];
+            const bg = bg_data[idx];
+            
+            // Only change colors if they're different from current
+            if (bg != current_bg) {
+                if (bg == 0 or bg == TERMINAL_DEFAULT_COLOR) {
+                    try writer.writeAll("\x1b[49m"); // Reset background
+                } else {
+                    const r = (bg >> 24) & 0xFF;
+                    const g = (bg >> 16) & 0xFF;
+                    const b = (bg >> 8) & 0xFF;
+                    try writer.print("\x1b[48;2;{};{};{}m", .{ r, g, b });
+                }
+                current_bg = bg;
+            }
+            
+            if (fg != current_fg) {
+                if (fg == 0 or fg == TERMINAL_DEFAULT_COLOR) {
+                    try writer.writeAll("\x1b[39m"); // Reset foreground
+                } else {
+                    const r = (fg >> 24) & 0xFF;
+                    const g = (fg >> 16) & 0xFF;
+                    const b = (fg >> 8) & 0xFF;
+                    try writer.print("\x1b[38;2;{};{};{}m", .{ r, g, b });
+                }
+                current_fg = fg;
+            }
+            
+            // Write the glyph
+            if (gid == 0) {
+                try writer.writeByte(' ');
+            } else if (gid <= 255) {
+                try writer.writeByte(@intCast(gid));
+            } else if (glyphs.getSlice(gid)) |bytes| {
+                try writer.writeAll(bytes);
+            } else {
+                try writer.writeByte('?');
+            }
+        }
+        try writer.writeByte('\n');
+        // Reset at end of each line for cleaner output
+        if (current_fg != TERMINAL_DEFAULT_COLOR or current_bg != TERMINAL_DEFAULT_COLOR) {
+            try writer.writeAll("\x1b[0m");
+            current_fg = TERMINAL_DEFAULT_COLOR;
+            current_bg = TERMINAL_DEFAULT_COLOR;
+        }
+    }
+}
+
 pub fn writeSubRectAsPlainText(
     self: *const Raster,
     writer: anytype,

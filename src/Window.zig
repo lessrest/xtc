@@ -5,6 +5,8 @@ const ansi = @import("ansi");
 const Trace = @import("ansi").FileTrace;
 const Raster = @import("Raster.zig");
 const GlyphTable = @import("GlyphTable.zig");
+const GlyphId = GlyphTable.GlyphId;
+const Rgba8 = @import("paint.zig").Rgba8;
 const Unicode = @import("unicode.zig");
 const Painter = @import("Painter.zig").Painter;
 const RasterDiff = @import("RasterDiff.zig");
@@ -122,20 +124,87 @@ pub const Window = struct {
             self.state.needs_tty_restore = true;
         }
 
-        var diff_iter = RasterDiff.iterateChanges(&self.state.front, &self.state.back);
-        while (diff_iter.next()) |change_run| {
-            try ansi_writer.moveCursor(change_run.y + 1, change_run.x + 1);
-            if (change_run.bg_reset) {
-                try ansi_writer.resetBackground();
-            } else if (change_run.bg_change) |bg| {
-                try ansi_writer.setBackground(bg);
+        if (self.state.needs_tty_restore) {
+            // Alternate screen - use diff and cursor positioning as before
+            var diff_iter = RasterDiff.iterateChanges(&self.state.front, &self.state.back);
+            while (diff_iter.next()) |change_run| {
+                try ansi_writer.moveCursor(change_run.y + 1, change_run.x + 1);
+                if (change_run.bg_reset) {
+                    try ansi_writer.resetBackground();
+                } else if (change_run.bg_change) |bg| {
+                    try ansi_writer.setBackground(bg);
+                }
+                if (change_run.fg_reset) {
+                    try ansi_writer.resetForeground();
+                } else if (change_run.fg_change) |fg| {
+                    try ansi_writer.setForeground(fg);
+                }
+                try ansi_writer.writeGlyphs(change_run.glyphs, self.glyphs);
             }
-            if (change_run.fg_reset) {
-                try ansi_writer.resetForeground();
-            } else if (change_run.fg_change) |fg| {
-                try ansi_writer.setForeground(fg);
+        } else {
+            // Primary buffer rendering: walk runs using RasterDiff but emit sequential
+            // text with SGR transitions instead of cursor positioning.
+            // Use a scratch copy of the front buffer so RasterDiff yields the entire frame
+            // without mutating the real previous state (keeps subsequent frames correct).
+            var scratch_front = try Raster.init(self.allocator, self.state.front.width, self.state.front.height);
+            defer scratch_front.deinit(self.allocator);
+            scratch_front.clear();
+
+            var diff_iter = RasterDiff.iterateChanges(&scratch_front, &self.state.back);
+            var next_run = diff_iter.next();
+
+            const back_cells = self.state.back.cells.slice();
+            const back_fg = back_cells.items(.fg);
+            const back_bg = back_cells.items(.bg);
+
+            var line: usize = 0;
+            while (line < self.state.back.height) : (line += 1) {
+                var column: usize = 0;
+                var active_fg: ?Rgba8 = null;
+                var active_bg: ?Rgba8 = null;
+
+                while (next_run) |run| {
+                    if (run.y > line) break;
+
+                    const current = run;
+                    next_run = diff_iter.next();
+                    if (current.y < line) continue;
+
+                    while (column < current.x) : (column += 1) {
+                        try ansi_writer.writeAll(" ");
+                    }
+
+                    const cell_index = run.y * self.state.back.width + run.x;
+                    const desired_bg: ?Rgba8 = if (back_bg[cell_index] == Raster.TERMINAL_DEFAULT_COLOR) null else back_bg[cell_index];
+                    const desired_fg: ?Rgba8 = if (back_fg[cell_index] == Raster.TERMINAL_DEFAULT_COLOR) null else back_fg[cell_index];
+
+                    if ((desired_bg == null and active_bg != null)) {
+                        try ansi_writer.resetBackground();
+                        active_bg = null;
+                    } else if (desired_bg) |bg| {
+                        if (active_bg == null or active_bg.? != bg) {
+                            try ansi_writer.setBackground(bg);
+                            active_bg = bg;
+                        }
+                    }
+
+                    if ((desired_fg == null and active_fg != null)) {
+                        try ansi_writer.resetForeground();
+                        active_fg = null;
+                    } else if (desired_fg) |fg| {
+                        if (active_fg == null or active_fg.? != fg) {
+                            try ansi_writer.setForeground(fg);
+                            active_fg = fg;
+                        }
+                    }
+
+                    column = current.x + try writeGlyphRun(&ansi_writer, self.unicode, current.glyphs, self.glyphs);
+                }
+
+                if (active_fg != null) try ansi_writer.resetForeground();
+                if (active_bg != null) try ansi_writer.resetBackground();
+                try ansi_writer.writeAll("\n");
             }
-            try ansi_writer.writeGlyphs(change_run.glyphs, self.glyphs);
         }
 
         try ansi_writer.resetStyle();
@@ -158,8 +227,38 @@ pub const Window = struct {
     pub fn writeFullRaster(self: *const Window, writer: anytype) !void {
         try self.state.back.writeAsPlainText(writer, self.glyphs);
     }
-
     pub fn getBackBuffer(self: *const Window) *const Raster {
         return &self.state.back;
     }
 };
+
+fn writeGlyphRun(
+    writer: anytype,
+    unicode: *Unicode,
+    glyphs: []const GlyphId,
+    glyph_table: *const GlyphTable,
+) !usize {
+    const space = [_]u8{' '};
+    var single: [1]u8 = undefined;
+    var written: usize = 0;
+
+    for (glyphs) |gid| {
+        if (gid == 0) {
+            try writer.writeAll(space[0..]);
+            written += 1;
+        } else if (gid <= 255) {
+            single[0] = @intCast(gid);
+            try writer.writeAll(single[0..]);
+            written += 1;
+        } else if (glyph_table.getSlice(gid)) |bytes| {
+            try writer.writeAll(bytes);
+            written += unicode.monospacedTextWidth(bytes);
+        } else {
+            single[0] = '?';
+            try writer.writeAll(single[0..]);
+            written += 1;
+        }
+    }
+
+    return written;
+}

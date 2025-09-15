@@ -1,5 +1,5 @@
 const std = @import("std");
-const miniflex = @import("../miniflex.zig");
+const miniflex = @import("miniflex");
 const layout = miniflex.layout;
 const Painter = miniflex.Painter;
 const xml = @import("../xml.zig");

@@ -10,6 +10,7 @@ test {
     _ = @import("miniflex");
     _ = @import("fiberscript/wren.zig");
     _ = @import("fiberscript/vm.zig");
+    _ = @import("test/flex.test.zig");
 }
 
 pub const version = "0.5.0";

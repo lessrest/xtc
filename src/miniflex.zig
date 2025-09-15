@@ -40,6 +40,5 @@ pub const UnicodeData = unicode;
 const std = @import("std");
 
 test {
-    _ = @import("test/flex.test.zig");
     std.testing.refAllDecls(@This());
 }

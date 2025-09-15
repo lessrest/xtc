@@ -5,7 +5,6 @@ import wasmUrl from "../zig-out/web-dist/xtc.wasm"
 
 import wavesScript from "../demos/waves.wren" with { type: "text" }
 import matrixScript from "../demos/matrix.wren" with { type: "text" }
-import platformerScript from "../demos/platformer.wren" with { type: "text" }
 
 class XTCModule {
   private wasiInstance: any = null
@@ -327,9 +326,6 @@ class XTCModule {
     switch (demoName) {
       case "matrix":
         script = matrixScript
-        break
-      case "platformer":
-        script = platformerScript
         break
       default:
         script = wavesScript
