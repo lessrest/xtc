@@ -10,8 +10,8 @@ pub const GlyphId = u32; // 0..=255 self-map to single-byte ASCII
 const Span = struct { off: u32, len: u8 };
 
 alloc: std.mem.Allocator,
-    map: std.StringArrayHashMap(GlyphId),
-    arena: std.ArrayList(u8),
+map: std.StringArrayHashMap(GlyphId),
+arena: std.ArrayList(u8),
 spans: std.MultiArrayList(Span), // index => (off,len), id == index
 
 pub fn init(allocator: std.mem.Allocator) !*GlyphTable {

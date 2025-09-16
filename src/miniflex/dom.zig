@@ -1,9 +1,9 @@
 const std = @import("std");
-const StyleRow = @import("style.zig").StyleRow;
-const StyleTable = @import("style.zig").StyleTable;
-const parseUtilityClassList = @import("tailwind.zig").parseUtilityClassList;
-const defaultStyleRow = @import("style.zig").defaultStyleRow;
-const Rect = @import("layout.zig").Rect;
+const StyleRow = @import("./style.zig").StyleRow;
+const StyleTable = @import("./style.zig").StyleTable;
+const parseUtilityClassList = @import("./tailwind.zig").parseUtilityClassList;
+const defaultStyleRow = @import("./style.zig").defaultStyleRow;
+const Rect = @import("./layout.zig").Rect;
 
 pub const DomNodeId = u32;
 pub const DomNodeKind = enum { element, text };

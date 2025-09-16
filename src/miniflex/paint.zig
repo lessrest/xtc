@@ -1,5 +1,5 @@
 const std = @import("std");
-const GlyphId = @import("GlyphTable.zig").GlyphId;
+const GlyphId = @import("./GlyphTable.zig").GlyphId;
 
 /// RGBA color packed into a u32: 0xAABBGGRR (little-endian layout)
 pub const Rgba8 = u32;

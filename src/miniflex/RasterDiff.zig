@@ -3,9 +3,9 @@ const DiffIterator = @This();
 
 const std = @import("std");
 
-const Raster = @import("Raster.zig");
-const GlyphId = @import("GlyphTable.zig").GlyphId;
-const Rgba8 = @import("paint.zig").Rgba8;
+const Raster = @import("./Raster.zig");
+const GlyphId = @import("./GlyphTable.zig").GlyphId;
+const Rgba8 = @import("./paint.zig").Rgba8;
 
 const noColor = Raster.TERMINAL_DEFAULT_COLOR;
 
@@ -228,7 +228,7 @@ test "raster diff iterator detects runs of changes with consistent colors" {
     back.set(1, 0, 'H');
     back.set(2, 0, 'i');
     back.set(3, 0, '!');
-    const red: Rgba8 = @import("paint.zig").rgba8(0xff, 0x00, 0x00, 0xff);
+    const red: Rgba8 = @import("./paint.zig").rgba8(0xff, 0x00, 0x00, 0xff);
     back.setFg(1, 0, red);
     back.setFg(2, 0, red);
     back.setFg(3, 0, red);
