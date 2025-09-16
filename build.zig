@@ -16,7 +16,7 @@ pub fn build(b: *std.Build) !void {
     });
 
     const miniflex = b.addModule("miniflex", .{
-        .root_source_file = b.path("src/miniflex.zig"),
+        .root_source_file = b.path("src/miniflex/miniflex.zig"),
         .target = target,
         .optimize = optimize,
     });

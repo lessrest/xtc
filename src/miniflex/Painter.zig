@@ -1,14 +1,14 @@
 const std = @import("std");
-const dom = @import("dom.zig");
-const layout = @import("layout.zig");
-const Unicode = @import("unicode.zig");
-const StyleRow = @import("style.zig").StyleRow;
-const StyleJustify = @import("style.zig").StyleJustify;
+const dom = @import("./dom.zig");
+const layout = @import("./layout.zig");
+const Unicode = @import("./unicode.zig");
+const StyleRow = @import("./style.zig").StyleRow;
+const StyleJustify = @import("./style.zig").StyleJustify;
 const ansi = @import("ansi");
 const Trace = ansi.FileTrace;
-const GlyphTable = @import("GlyphTable.zig");
+const GlyphTable = @import("./GlyphTable.zig");
 const GlyphId = GlyphTable.GlyphId;
-const paint = @import("paint.zig");
+const paint = @import("./paint.zig");
 const Rgba8 = paint.Rgba8;
 const rgba8 = paint.rgba8;
 const PaintOp = paint.PaintOp;
@@ -587,7 +587,7 @@ pub const Painter = struct {
 // --- Tests ---
 
 test "stroke rect command renders unicode box-drawing characters to the raster" {
-    const Raster = @import("Raster.zig");
+    const Raster = @import("./Raster.zig");
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const al = gpa.allocator();
@@ -630,7 +630,7 @@ test "stroke rect command renders unicode box-drawing characters to the raster" 
 }
 
 test "text nodes inherit foreground color from their parent element's style" {
-    const tailwind = @import("tailwind.zig");
+    const tailwind = @import("./tailwind.zig");
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     var arena = std.heap.ArenaAllocator.init(gpa.allocator());
@@ -650,7 +650,7 @@ test "text nodes inherit foreground color from their parent element's style" {
     var unicode = try Unicode.init(al);
     defer unicode.deinit(al);
     var trace = ansi.silentTrace(al);
-    var layout_engine = @import("layout.zig").init(al, &unicode, &trace);
+    var layout_engine = @import("./layout.zig").init(al, &unicode, &trace);
     try layout_engine.layoutSubtree(
         &tree,
         d,

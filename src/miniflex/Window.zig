@@ -1,15 +1,15 @@
 const std = @import("std");
-const dom = @import("dom.zig");
-const layout = @import("layout.zig");
+const dom = @import("./dom.zig");
+const layout = @import("./layout.zig");
 const ansi = @import("ansi");
 const Trace = @import("ansi").FileTrace;
-const Raster = @import("Raster.zig");
-const GlyphTable = @import("GlyphTable.zig");
+const Raster = @import("./Raster.zig");
+const GlyphTable = @import("./GlyphTable.zig");
 const GlyphId = GlyphTable.GlyphId;
-const Rgba8 = @import("paint.zig").Rgba8;
-const Unicode = @import("unicode.zig");
-const Painter = @import("Painter.zig").Painter;
-const RasterDiff = @import("RasterDiff.zig");
+const Rgba8 = @import("./paint.zig").Rgba8;
+const Unicode = @import("./unicode.zig");
+const Painter = @import("./Painter.zig").Painter;
+const RasterDiff = @import("./RasterDiff.zig");
 
 pub const Options = struct {
     width: usize,

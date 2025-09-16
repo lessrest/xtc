@@ -2,13 +2,13 @@ const std = @import("std");
 
 const ansi = @import("ansi");
 
-const GlyphTable = @import("GlyphTable.zig");
+const GlyphTable = @import("./GlyphTable.zig");
 const GlyphId = GlyphTable.GlyphId;
 
-const paint = @import("paint.zig");
+const paint = @import("./paint.zig");
 const Rgba8 = paint.Rgba8;
 const PaintBorderStyle = paint.PaintBorderStyle;
-const Painter = @import("Painter.zig").Painter;
+const Painter = @import("./Painter.zig").Painter;
 
 const Cell = struct {
     glyph: GlyphId,
@@ -354,17 +354,17 @@ pub fn writeAsAnsiText(
     const glyph_data = cells.items(.glyph);
     const fg_data = cells.items(.fg);
     const bg_data = cells.items(.bg);
-    
+
     var current_fg: Rgba8 = TERMINAL_DEFAULT_COLOR;
     var current_bg: Rgba8 = TERMINAL_DEFAULT_COLOR;
-    
+
     for (0..self.height) |y| {
         for (0..self.width) |x| {
             const idx = y * self.width + x;
             const gid = glyph_data[idx];
             const fg = fg_data[idx];
             const bg = bg_data[idx];
-            
+
             // Only change colors if they're different from current
             if (bg != current_bg) {
                 if (bg == 0 or bg == TERMINAL_DEFAULT_COLOR) {
@@ -377,7 +377,7 @@ pub fn writeAsAnsiText(
                 }
                 current_bg = bg;
             }
-            
+
             if (fg != current_fg) {
                 if (fg == 0 or fg == TERMINAL_DEFAULT_COLOR) {
                     try writer.writeAll("\x1b[39m"); // Reset foreground
@@ -389,7 +389,7 @@ pub fn writeAsAnsiText(
                 }
                 current_fg = fg;
             }
-            
+
             // Write the glyph
             if (gid == 0) {
                 try writer.writeByte(' ');
