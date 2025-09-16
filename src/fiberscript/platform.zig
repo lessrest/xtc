@@ -5,6 +5,8 @@ const Fiber = Self.FiberID;
 const FiberID = Self.FiberID;
 const miniflex = @import("miniflex");
 const dom = miniflex.dom;
+const root_mod = @import("root");
+const has_threads = if (@hasDecl(root_mod, "has_threads")) root_mod.has_threads else true;
 
 const log = std.log.scoped(.platform);
 
@@ -40,15 +42,19 @@ const documentSyscalls = struct {
     ) anyerror!void {
         _ = engine; // autofix
         _ = fiber; // autofix
-        const readableStream = context.fiber_readers.at(args.id);
+        if (has_threads) {
+            const readableStream = context.fiber_readers.at(args.id);
 
-        try context.addBackgroundThread(
-            try std.Thread.spawn(
-                .{},
-                slowlyDrainStreamThread,
-                .{readableStream},
-            ),
-        );
+            try context.addBackgroundThread(
+                try std.Thread.spawn(
+                    .{},
+                    slowlyDrainStreamThread,
+                    .{readableStream},
+                ),
+            );
+        } else {
+            return error.ThreadsUnavailable;
+        }
     }
 
     pub fn print(engine: *Self, context: *Context, fiber: Fiber, args: struct { message: []const u8 }) anyerror!void {
@@ -210,13 +216,15 @@ pub const appendChild = documentSyscalls.appendChild;
 pub const removeChild = documentSyscalls.removeChild;
 
 fn slowlyDrainStreamThread(source: *@import("context.zig").FiberReader) void {
-    var stdout = std.fs.File.stdout().writer(&.{});
-    while (true) {
-        std.Thread.sleep(std.time.ns_per_ms * 250);
-        const n = source.reader.stream(&stdout.interface, .limited(3)) catch {
-            break;
-        };
-        _ = n; // autofix
-        stdout.interface.flush() catch {};
+    if (has_threads) {
+        var stdout = std.fs.File.stdout().writer(&.{});
+        while (true) {
+            std.Thread.sleep(std.time.ns_per_ms * 250);
+            const n = source.reader.stream(&stdout.interface, .limited(3)) catch {
+                break;
+            };
+            _ = n; // autofix
+            stdout.interface.flush() catch {};
+        }
     }
 }

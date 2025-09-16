@@ -7,6 +7,10 @@ const Platform = @import("platform.zig");
 const ticket = @import("../ticket.zig");
 const miniflex = @import("miniflex");
 const Document = miniflex.dom.Dom;
+const root_mod = @import("root");
+
+const has_threads = if (@hasDecl(root_mod, "has_threads")) root_mod.has_threads else true;
+const ThreadType = if (has_threads) std.Thread else struct {};
 
 const log = std.log.scoped(.wrenctx);
 
@@ -38,7 +42,7 @@ pub const Context = struct {
     vm: *c.VM,
 
     thunks: std.ArrayList(FiberID) = .{},
-    background_threads: std.ArrayList(std.Thread) = .{},
+    background_threads: std.ArrayList(ThreadType) = .{},
     fiber_readers: std.SegmentedList(FiberReader, 64) = .{},
 
     handles: std.EnumMap(enum {
@@ -58,7 +62,9 @@ pub const Context = struct {
 
     pub fn deinit(self: *Context) void {
         self.thunks.deinit(self.allocator);
-        self.background_threads.deinit(self.allocator);
+        if (has_threads) {
+            self.background_threads.deinit(self.allocator);
+        }
 
         var it = self.fiber_readers.iterator(0);
         while (it.next()) |reader| {
@@ -72,12 +78,14 @@ pub const Context = struct {
         }
     }
 
-    pub fn addBackgroundThread(self: *Context, thread: std.Thread) !void {
+    pub fn addBackgroundThread(self: *Context, thread: ThreadType) !void {
+        if (!has_threads) return error.ThreadsUnavailable;
         log.debug("starting background thread", .{});
         try self.background_threads.append(self.allocator, thread);
     }
 
     pub fn joinBackgroundThreads(self: *Context) !void {
+        if (!has_threads) return;
         const threads = try self.background_threads.toOwnedSlice(self.allocator);
         defer self.allocator.free(threads);
         for (threads) |thread| {

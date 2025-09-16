@@ -5,6 +5,8 @@ const WindowType = miniflex.Window;
 const xml = @import("xml.zig");
 const xmlparse = @import("xmlparse.zig");
 
+pub const has_threads = false;
+
 const SessionInput = union(enum) {
     xml_string: []const u8,
     default: void,
