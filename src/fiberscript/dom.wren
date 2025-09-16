@@ -1,12 +1,14 @@
 import "xtc" for Core
-import "syscall" for CreateElement, CreateText, UpdateText, UpdateClass, AppendChild, RemoveChild, SetDocumentTitle
+import "syscall" for CreateElement, CreateText, UpdateText, UpdateClass, AppendChild, RemoveChild, GetViewportWidth, GetViewportHeight, WaitForNextFrame, Start
 
 class Document {
   static root { Element.fromIndex(0) }
 
-  static title=(title) {
-    return Core.call(SetDocumentTitle.new(title))
-  }
+  static width { GetViewportWidth.new().yield() }
+  static height { GetViewportHeight.new().yield() }
+
+  static createElement(style) { Element.create(style) }
+  static createText(text) { Text.create(text) }
 }
 
 class Element {
@@ -17,19 +19,33 @@ class Element {
   }
 
   construct create(style) {
-    _index = Core.call(CreateElement.new(style))
+    _index = CreateElement.new(style).yield()
   }
 
   append(child) {
-    return Core.call(AppendChild.new(index, child.index))
+    return AppendChild.new(index, child.index).yield()
   }
 
   remove(child) {
-    return Core.call(RemoveChild.new(index, child.index))
+    return RemoveChild.new(index, child.index).yield()
   }
 
   classes=(string) {
-    return Core.call(UpdateClass.new(index, string))
+    return UpdateClass.new(index, string).yield()
+  }
+
+  updateClass(string) {
+    return UpdateClass.new(index, string).yield()
+  }
+}
+
+class Window {
+  static waitForNextFrame() {
+    return Fiber.yield(WaitForNextFrame.new())
+  }
+
+  static immediately(block) {
+    return Core.call(Start.new(Fiber.new(block)))
   }
 }
 
@@ -41,10 +57,14 @@ class Text {
   }
 
   construct create(text) {
-    _index = Core.call(CreateText.new(text))
+    _index = CreateText.new(text).yield()
   }
 
   content=(string) {
-    return Core.call(UpdateText.new(index, string))
+    return UpdateText.new(index, string).yield()
+  }
+
+  updateText(string) {
+    return UpdateText.new(index, string).yield()
   }
 }

@@ -14,7 +14,7 @@ const ThreadType = if (has_threads) std.Thread else struct {};
 
 const log = std.log.scoped(.wrenctx);
 
-const Request = syscalls.RequestUnion(Platform);
+pub const Request = syscalls.RequestUnion(Platform);
 const Syscaller = syscalls.Syscaller(Platform, Self, Context);
 
 pub const FiberID = struct {
@@ -44,6 +44,9 @@ pub const Context = struct {
     thunks: std.ArrayList(FiberID) = .{},
     background_threads: std.ArrayList(ThreadType) = .{},
     fiber_readers: std.SegmentedList(FiberReader, 64) = .{},
+    frame_fibers: std.ArrayList(FiberID) = .{},
+    viewport_width: usize = 0,
+    viewport_height: usize = 0,
 
     handles: std.EnumMap(enum {
         @"call()",
@@ -72,6 +75,7 @@ pub const Context = struct {
         }
 
         self.fiber_readers.deinit(self.allocator);
+        self.frame_fibers.deinit(self.allocator);
         var it2 = self.handles.iterator();
         while (it2.next()) |entry| {
             c.wrenReleaseHandle(self.vm, entry.value.*);
@@ -120,6 +124,19 @@ pub const Context = struct {
 
     pub fn slots(self: *Context) slots_api.SlotBuilder {
         return slots_api.SlotBuilder.init(self.vm, self.allocator);
+    }
+
+    pub fn setViewport(self: *Context, width: usize, height: usize) void {
+        self.viewport_width = width;
+        self.viewport_height = height;
+    }
+
+    pub fn queueFrameFiber(self: *Context, fiber: FiberID) !void {
+        try self.frame_fibers.append(self.allocator, fiber);
+    }
+
+    pub fn drainFrameFibers(self: *Context) ![]FiberID {
+        return try self.frame_fibers.toOwnedSlice(self.allocator);
     }
 };
 

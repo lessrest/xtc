@@ -117,6 +117,10 @@ pub fn generateWrenModule(comptime Syscalls: type) []const u8 {
         \\  call() {
         \\    return Core.call(this)
         \\  }
+        \\
+        \\  yield() {
+        \\    return Fiber.yield(this)
+        \\  }
         \\}
         \\
     ;

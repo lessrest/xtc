@@ -1,6 +1,7 @@
 const std = @import("std");
 const c = @import("wren.zig");
 const syscalls = @import("syscalls.zig");
+const Platform = @import("platform.zig");
 const FiberID = @import("vm.zig").FiberID;
 const log = std.log.scoped(.slot);
 /// Builder for setting up slots before making a call.
@@ -183,6 +184,15 @@ pub const SlotBuilder = struct {
             *c.Handle => c.wrenSetSlotHandle(self.vm, slot, value),
             FiberID => c.wrenSetSlotHandle(self.vm, slot, value.handle),
             syscalls.Pending => c.wrenSetSlotNull(self.vm, slot),
+            syscalls.ResultUnion(Platform) => {
+                const tag = std.meta.activeTag(value);
+                switch (tag) {
+                    inline else => |t| {
+                        const field = @field(value, @tagName(t));
+                        try self.setSlotValue(slot, field);
+                    },
+                }
+            },
             else => |T| {
                 const info = @typeInfo(T);
                 if (info == .pointer and std.meta.Elem(@TypeOf(value)) == u8) {
@@ -219,6 +229,23 @@ pub const CallResult = struct {
             .result = .runtime_error,
             .has_error = true,
         };
+    }
+
+    pub fn asForeign(self: CallResult, comptime T: type) !?*T {
+        if (self.has_error) {
+            return error.InternalError;
+        }
+
+        if (c.wrenGetSlotCount(self.vm) < 1) {
+            return null;
+        }
+
+        const req_ptr = c.wrenGetSlotForeign(self.vm, 0);
+        if (req_ptr == null) {
+            return error.BadForeignSlotRead;
+        }
+
+        return @as(*T, @ptrCast(@alignCast(req_ptr)));
     }
 
     pub fn as(self: CallResult, comptime T: type) !T {

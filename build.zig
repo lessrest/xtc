@@ -196,6 +196,7 @@ pub fn build(b: *std.Build) void {
             .abi = .musl,
         }),
         .optimize = .ReleaseFast,
+        .link_libc = true,
     });
 
     const wasm_exe = b.addExecutable(.{ .name = "xtc", .root_module = wasm_mod });
@@ -204,7 +205,6 @@ pub fn build(b: *std.Build) void {
 
     wasm_exe.root_module.export_symbol_names = &[_][]const u8{
         "xtc_hello",
-        "xtc_render",
         "xtc_init_session",
         "xtc_process_frame",
         "xtc_render_frame",
@@ -215,8 +215,34 @@ pub fn build(b: *std.Build) void {
         "wasm_free",
     };
 
-    // // Link dependencies for WASI
     wasm_mod.addImport("miniflex", miniflex);
+    wasm_mod.addImport("ansi", ansi);
+
+    wasm_mod.addIncludePath(b.path("deps/wren/src/include"));
+    wasm_mod.addIncludePath(b.path("deps/wren/src/vm"));
+    wasm_mod.addIncludePath(b.path("deps/wren/src/optional"));
+    wasm_mod.addCSourceFiles(.{
+        .files = &.{
+            "deps/wren/src/vm/wren_compiler.c",
+            "deps/wren/src/vm/wren_core.c",
+            "deps/wren/src/vm/wren_debug.c",
+            "deps/wren/src/vm/wren_primitive.c",
+            "deps/wren/src/vm/wren_utils.c",
+            "deps/wren/src/vm/wren_value.c",
+            "deps/wren/src/vm/wren_vm.c",
+            "deps/wren/src/optional/wren_opt_meta.c",
+            "deps/wren/src/optional/wren_opt_random.c",
+        },
+        .flags = &.{
+            "-std=c99",
+            "-Wall",
+            "-Wextra",
+            "-Wno-unused-parameter",
+            "-Wno-implicit",
+            "-g",
+            "-DDEBUG",
+        },
+    });
 
     const wasm_step = b.step("wasm", "Build WASM library");
     wasm_step.dependOn(&b.addInstallArtifact(wasm_exe, .{}).step);
@@ -233,11 +259,11 @@ pub fn build(b: *std.Build) void {
         .optimize = .ReleaseFast,
     });
 
-    const wasm_cli_exe = b.addExecutable(.{ 
-        .name = "xtc-cli", 
+    const wasm_cli_exe = b.addExecutable(.{
+        .name = "xtc-cli",
         .root_module = wasm_cli_mod,
     });
-    
+
     // Link dependencies
     wasm_cli_mod.addImport("miniflex", miniflex);
 

@@ -146,8 +146,8 @@ class MatrixDemo {
 }
 
 Window.immediately {
-  var container = Document.getElementById("matrix")
-  if (container) {
-    MatrixDemo.new(container)
-  }
+  Document.root.classes = "flex flex-col grow-1 bg-black"
+  var container = Document.createElement("flex flex-col grow-1")
+  Document.root.append(container)
+  MatrixDemo.new(container)
 }

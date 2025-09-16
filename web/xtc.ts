@@ -19,6 +19,7 @@ class XTCModule {
   private isLiveSession = false
   private animationFrameId: number | null = null
   private currentDemo = "waves"
+  private keyboardHandlerRegistered = false
 
   // Initialize or reinitialize WASI instance
   private async initWASI(): Promise<void> {
@@ -139,7 +140,7 @@ class XTCModule {
 
   // Helper function to allocate string in WASM memory
   private allocateString(str: string): { ptr: number; length: number } {
-    const bytes = this.encoder.encode(str + "\0") // null-terminated
+    const bytes = this.encoder.encode(str)
     const ptr = (this.wasiInstance.instance.exports as any).wasm_alloc(
       bytes.length
     )
@@ -154,24 +155,13 @@ class XTCModule {
   }
 
   // Helper function to read string from WASM memory
-  private readString(ptr: number, length: number): string {
-    const memory = new Uint8Array(
-      (this.wasiInstance.instance.exports.memory as WebAssembly.Memory).buffer
-    )
-    const bytes = memory.slice(ptr, ptr + length)
-    // Remove null terminator if present
-    const nullIndex = bytes.indexOf(0)
-    const actualBytes = nullIndex >= 0 ? bytes.slice(0, nullIndex) : bytes
-    return this.decoder.decode(actualBytes)
-  }
-
   // Free WASM memory
   private freeMemory(ptr: number, length: number): void {
     ;(this.wasiInstance.instance.exports as any).wasm_free(ptr, length)
   }
 
-  // Initialize a live session with XML
-  initLiveSession(xmlString: string): boolean {
+  // Initialize a live session with a Wren script
+  initLiveSession(script: string, moduleName: string): boolean {
     try {
       this.terminal!.clear()
 
@@ -185,24 +175,15 @@ class XTCModule {
         return false
       }
 
-      // Allocate memory for XML string
-      const xmlBytes = new TextEncoder().encode(xmlString)
-      const xmlPtr = this.wasiInstance.instance.exports.wasm_alloc(xmlBytes.length)
-
-      if (!xmlPtr) {
-        this.terminal!.writeln("Failed to allocate memory")
-        return false
-      }
+      const scriptAlloc = this.allocateString(script)
+      const moduleAlloc = this.allocateString(moduleName)
 
       try {
-        // Copy XML to WASM memory
-        const memory = new Uint8Array(this.wasiInstance.instance.exports.memory.buffer)
-        memory.set(xmlBytes, xmlPtr)
-
-        // Call init function
         const result = this.wasiInstance.instance.exports.xtc_init_session(
-          xmlPtr,
-          xmlBytes.length,
+          scriptAlloc.ptr,
+          scriptAlloc.length,
+          moduleAlloc.ptr,
+          moduleAlloc.length,
           this.terminalCols,
           this.terminalRows
         )
@@ -217,8 +198,8 @@ class XTCModule {
           return false
         }
       } finally {
-        // Free memory
-        this.wasiInstance.instance.exports.wasm_free(xmlPtr, xmlBytes.length)
+        this.freeMemory(scriptAlloc.ptr, scriptAlloc.length)
+        this.freeMemory(moduleAlloc.ptr, moduleAlloc.length)
       }
     } catch (error) {
       console.error("Init error:", error)
@@ -261,7 +242,8 @@ class XTCModule {
 
   // Setup keyboard input handling
   private setupKeyboardInput(): void {
-    if (!this.terminal) return
+    if (!this.terminal || this.keyboardHandlerRegistered) return
+    this.keyboardHandlerRegistered = true
 
     // Handle keyboard input from terminal
     this.terminal.onKey(({ key, domEvent }) => {
@@ -299,9 +281,9 @@ class XTCModule {
       this.animationFrameId = null
     }
 
-    if (this.wasiInstance?.instance.exports.xtc_cleanup) {
-      this.wasiInstance.instance.exports.xtc_cleanup()
-    }
+    // if (this.wasiInstance?.instance.exports.xtc_cleanup) {
+    //   this.wasiInstance.instance.exports.xtc_cleanup()
+    // }
   }
 
   // Switch to a different demo
@@ -321,7 +303,7 @@ class XTCModule {
     // Reinitialize WASI completely
     await this.initWASI()
 
-    // Create XML for the selected demo
+    // Select script for the demo
     let script: string
     switch (demoName) {
       case "matrix":
@@ -331,11 +313,11 @@ class XTCModule {
         script = wavesScript
         break
     }
-    
-    const demoXML = `<root class="flex flex-row"><script type="text/wren" module="${demoName}" class="flex flex-row grow-1" id="${demoName}">${escapeHtml(script)}</script></root>`
 
     // Start new session with fresh WASI
-    this.initLiveSession(demoXML)
+    if (!this.initLiveSession(script, demoName)) {
+      console.error("Failed to start demo session")
+    }
   }
 
   // Handle window resize
@@ -350,76 +332,12 @@ class XTCModule {
       
       // Resize the terminal
       this.terminal.resize(cols, rows)
-      
-      // If we have an active session, restart it with new dimensions
-      if (this.isLiveSession) {
-        const currentDemo = this.currentDemo
-        this.stopLiveSession()
-        setTimeout(() => {
-          this.switchDemo(currentDemo)
-        }, 100)
+
+      if (this.isLiveSession && this.wasiInstance?.instance.exports.xtc_resize) {
+        this.wasiInstance.instance.exports.xtc_resize(cols, rows)
       }
     }
   }
-
-  // Legacy one-shot render function
-  renderXML(xmlString: string): void {
-    try {
-      this.terminal!.clear()
-
-      if (!this.wasiInstance) {
-        this.terminal!.writeln("WASI not available - cannot render")
-        return
-      }
-
-      // Call the render function with XML data
-      if (this.wasiInstance.instance.exports.xtc_render) {
-        // Allocate memory for XML string
-        const xmlBytes = new TextEncoder().encode(xmlString)
-        const xmlPtr = this.wasiInstance.instance.exports.wasm_alloc(
-          xmlBytes.length
-        )
-
-        if (xmlPtr) {
-          // Copy XML to WASM memory
-          const memory = new Uint8Array(
-            this.wasiInstance.instance.exports.memory.buffer
-          )
-          memory.set(xmlBytes, xmlPtr)
-
-          // Call render function with terminal dimensions
-          this.wasiInstance.instance.exports.xtc_render(
-            xmlPtr,
-            xmlBytes.length,
-            this.terminalCols,
-            this.terminalRows
-          )
-
-          // Free memory
-          if (this.wasiInstance.instance.exports.wasm_free) {
-            this.wasiInstance.instance.exports.wasm_free(
-              xmlPtr,
-              xmlBytes.length
-            )
-          }
-        } else {
-          this.terminal!.writeln("Failed to allocate memory for XML")
-        }
-      } else {
-        this.terminal!.writeln("xtc_render function not found")
-      }
-    } catch (error) {
-      console.error("Render error:", error)
-      this.terminal!.writeln(`\r\nError: ${(error as Error).message}`)
-    }
-  }
-}
-
-function escapeHtml(unsafe: string): string {
-  return unsafe
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
 }
 
 // Initialize everything when the page loads

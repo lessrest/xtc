@@ -2,20 +2,59 @@ const std = @import("std");
 const miniflex = @import("miniflex");
 const dom = miniflex.dom;
 const WindowType = miniflex.Window;
-const xml = @import("xml.zig");
-const xmlparse = @import("xmlparse.zig");
+const Engine = @import("fiberscript/vm.zig");
+const ansi = @import("ansi");
+const Context = Engine.Context;
+const Request = Engine.Request;
+
+pub const std_options: std.Options = .{
+    .log_level = .info,
+    .logFn = logFn,
+};
+
+var nest: ansi.nest.TreeNest = undefined;
+
+fn logFn(
+    comptime level: std.log.Level,
+    comptime scope: anytype,
+    comptime format: []const u8,
+    args: anytype,
+) void {
+    logprint(level, scope, format, args) catch unreachable;
+}
+
+fn logprint(
+    comptime level: std.log.Level,
+    comptime scope: anytype,
+    comptime format: []const u8,
+    args: anytype,
+) !void {
+    try nest.dk().log(level, scope, format, args);
+    try nest.writer.flush();
+}
+
+const log = std.log.scoped(.wasm);
 
 pub const has_threads = false;
 
+const ScriptConfig = struct {
+    module: []const u8,
+    source: []const u8,
+};
+
 const SessionInput = union(enum) {
-    xml_string: []const u8,
+    script: ScriptConfig,
     default: void,
 };
 
-const default_markup =
-    \\<root class="flex flex-col items-center justify-center h-full">
-    \\  <box class="text-gray-200">xtc wasm ready</box>
-    \\</root>
+const default_script =
+    \\import "dom" for Document, Element, Text, Window
+    \\Window.immediately {
+    \\  Document.root.classes = "flex flex-col items-center justify-center h-full bg-gray-900"
+    \\  var panel = Document.createElement("p-2 text-gray-200")
+    \\  panel.append(Document.createText("xtc wasm ready"))
+    \\  Document.root.append(panel)
+    \\}
 ;
 
 pub const WasmLiveSession = struct {
@@ -23,7 +62,8 @@ pub const WasmLiveSession = struct {
     config: Config,
     document: ?*dom.Dom = null,
     window: ?*WindowType = null,
-    root_id: dom.DomNodeId = 0,
+    context: ?*Context = null,
+    engine: ?*Engine = null,
     is_initialized: bool = false,
     needs_present: bool = false,
 
@@ -44,20 +84,33 @@ pub const WasmLiveSession = struct {
     }
 
     pub fn initSession(self: *WasmLiveSession, input: SessionInput) !void {
-        if (self.is_initialized) return;
+        self.deinit();
+        errdefer self.deinit();
 
-        const load_result = try loadDocumentForSession(self.allocator, input);
-        self.document = load_result.document;
-        self.root_id = load_result.root_id;
+        const document = try dom.Dom.init(self.allocator);
+        self.document = document;
+
+        const context_ptr = try self.allocator.create(Context);
+        context_ptr.* = Context.init(self.allocator, document);
+        context_ptr.setViewport(self.config.output.width, self.config.output.height);
+        self.context = context_ptr;
+
+        const engine_ptr = try Engine.init(self.allocator, .{ .context = context_ptr });
+        self.engine = engine_ptr;
 
         const window_ptr = try self.allocator.create(WindowType);
-        errdefer self.allocator.destroy(window_ptr);
-
         window_ptr.* = try WindowType.init(self.allocator, .{
             .width = self.config.output.width,
             .height = self.config.output.height,
         });
         self.window = window_ptr;
+
+        switch (input) {
+            .script => |script| try self.runTopLevel(script.module, script.source),
+            .default => try self.runTopLevel("main", default_script),
+        }
+
+        try self.flushEngineOutput();
 
         self.is_initialized = true;
         self.needs_present = true;
@@ -65,7 +118,13 @@ pub const WasmLiveSession = struct {
 
     pub fn processFrame(self: *WasmLiveSession) !bool {
         if (!self.is_initialized) return false;
-        if (self.document == null or self.window == null) return false;
+        try self.pumpFibers();
+
+        const document = self.document orelse return false;
+        if (document.dirty) {
+            self.needs_present = true;
+        }
+
         return self.needs_present;
     }
 
@@ -78,7 +137,7 @@ pub const WasmLiveSession = struct {
         var out_state = std.fs.File.stdout().writer(&out_buf);
         const out: *std.Io.Writer = &out_state.interface;
 
-        try window.renderAndPresent(document, self.root_id, out);
+        try window.renderAndPresent(document, 0, out);
         try out.flush();
         self.needs_present = false;
     }
@@ -86,87 +145,131 @@ pub const WasmLiveSession = struct {
     pub fn handleKeypress(self: *WasmLiveSession, key: u8) void {
         _ = self;
         _ = key;
-        // Keyboard input is not yet handled in the WASM shim.
     }
 
     pub fn handleResize(self: *WasmLiveSession, width: usize, height: usize) !void {
         if (!self.is_initialized) return;
-        const window = self.window orelse return;
-        const document = self.document orelse return;
-
-        try window.setViewport(width, height);
+        if (self.window) |window| {
+            try window.setViewport(width, height);
+        }
+        if (self.context) |context| {
+            context.setViewport(width, height);
+        }
+        if (self.document) |document| {
+            document.dirty = true;
+        }
         self.config.output.width = width;
         self.config.output.height = height;
-        document.dirty = true;
         self.needs_present = true;
     }
 
     pub fn deinit(self: *WasmLiveSession) void {
+        if (self.engine) |engine| {
+            if (self.context) |context| {
+                context.deinit();
+            }
+            engine.deinit();
+            self.engine = null;
+        }
+
+        if (self.context) |context| {
+            self.allocator.destroy(context);
+            self.context = null;
+        }
+
         if (self.window) |win| {
             win.deinit();
             self.allocator.destroy(win);
             self.window = null;
         }
+
         if (self.document) |doc| {
             doc.deinit();
             self.document = null;
         }
+
         self.is_initialized = false;
         self.needs_present = false;
-        self.root_id = 0;
-    }
-};
-
-const LoadResult = struct {
-    document: *dom.Dom,
-    root_id: dom.DomNodeId,
-};
-
-fn loadDocumentForSession(allocator: std.mem.Allocator, input: SessionInput) !LoadResult {
-    return switch (input) {
-        .xml_string => |markup| try parseMarkup(allocator, markup, "<inline>"),
-        .default => try parseMarkup(allocator, default_markup, "<default>"),
-    };
-}
-
-fn parseMarkup(allocator: std.mem.Allocator, markup: []const u8, source_name: []const u8) !LoadResult {
-    var stream = std.io.fixedBufferStream(markup);
-    var parsed = try xmlparse.parse(allocator, source_name, stream.reader());
-    defer parsed.deinit();
-
-    var document = try xml.loadDocumentFromMarkup(allocator, &parsed);
-    const root_id = determineRootNode(document);
-    document.dirty = true;
-
-    return .{ .document = document, .root_id = root_id };
-}
-
-fn determineRootNode(document: *dom.Dom) dom.DomNodeId {
-    const headers = document.headers.slice();
-    const contents = headers.items(.content);
-
-    if (contents.len == 0) return 0;
-
-    switch (contents[0]) {
-        .element => |element| {
-            if (element.first_child != dom.Dom.NullId) {
-                return element.first_child;
-            }
-        },
-        else => {},
     }
 
-    var idx: usize = 1;
-    while (idx < contents.len) : (idx += 1) {
-        if (headers.items(.parent)[idx] == 0) {
-            switch (contents[idx]) {
-                .element => return @intCast(idx),
-                else => {},
+    fn runTopLevel(self: *WasmLiveSession, module: []const u8, source: []const u8) !void {
+        const engine = self.engine orelse return error.MissingEngine;
+        try engine.runTopLevel(module, source);
+        try engine.checkError();
+    }
+
+    fn pumpFibers(self: *WasmLiveSession) !void {
+        const engine = self.engine orelse return;
+        const context = self.context orelse return;
+
+        try self.runThunks(engine, context);
+        try self.resumeFrameFibers(engine, context);
+        try self.flushEngineOutput();
+    }
+
+    fn runThunks(self: *WasmLiveSession, engine: *Engine, context: *Context) !void {
+        const thunks = try context.thunks.toOwnedSlice(self.allocator);
+        defer if (thunks.len != 0) self.allocator.free(thunks);
+
+        for (thunks) |fiber| {
+            try runFiberOnce(engine, fiber);
+            if (try fiberIsDone(engine, context, fiber)) {
+                fiber.deinit(engine.vm);
             }
         }
     }
 
-    return 0;
+    fn resumeFrameFibers(self: *WasmLiveSession, engine: *Engine, context: *Context) !void {
+        const fibers = try context.drainFrameFibers();
+        defer if (fibers.len != 0) self.allocator.free(fibers);
+
+        for (fibers) |fiber| {
+            try runFiberOnce(engine, fiber);
+
+            if (try fiberIsDone(engine, context, fiber)) {
+                fiber.deinit(engine.vm);
+            }
+        }
+    }
+
+    fn flushEngineOutput(self: *WasmLiveSession) !void {
+        const engine = self.engine orelse return;
+        const output = try engine.takeOutput(self.allocator);
+        defer if (output.len != 0) self.allocator.free(output);
+
+        if (output.len == 0) return;
+
+        var out_buf: [512]u8 = undefined;
+        var out_state = std.fs.File.stdout().writer(&out_buf);
+        const out: *std.Io.Writer = &out_state.interface;
+        try out.writeAll(output);
+        try out.flush();
+    }
+};
+
+fn runFiberOnce(engine: *Engine, fiber: Engine.FiberID) !void {
+    var slots = engine.slots();
+    _ = slots.set(0, fiber);
+    var fiber_result = try slots.call("call()").asForeign(Request);
+    while (fiber_result) |req| {
+        const result = try engine.syscaller.dispatch(req.*, fiber, &slots);
+        switch (result) {
+            .immediate => |res| {
+                _ = slots.set(0, fiber);
+                _ = slots.set(1, res);
+                fiber_result = try slots.call("call(_)").asForeign(Request);
+            },
+            .pending => {
+                break;
+            },
+        }
+    }
+}
+
+fn fiberIsDone(engine: *Engine, context: *Context, fiber: Engine.FiberID) !bool {
+    var slots = engine.slots();
+    _ = slots.set(0, fiber);
+    return try slots.callWithHandle(context.methodHandle(.isDone)).as(bool);
 }
 
 // WASM exports
@@ -191,14 +294,25 @@ export fn xtc_hello() void {
     out.flush() catch {};
 }
 
-export fn xtc_init_session(xml_ptr: [*]const u8, xml_len: usize, width: u32, height: u32) c_int {
-    const xml_bytes = xml_ptr[0..xml_len];
+export fn xtc_init_session(
+    script_ptr: [*]const u8,
+    script_len: usize,
+    module_ptr: [*]const u8,
+    module_len: usize,
+    width: u32,
+    height: u32,
+) c_int {
+    nest = ansi.nest.stderr(global_allocator);
+    nest.no_color = true;
+
+    const script_bytes = script_ptr[0..script_len];
+    const module_bytes = module_ptr[0..module_len];
 
     if (global_live_session) |*session| {
         session.deinit();
     }
 
-    global_live_session = initLiveSessionWasm(xml_bytes, width, height) catch |err| {
+    global_live_session = initLiveSessionWasm(script_bytes, module_bytes, width, height) catch |err| {
         var err_buf: [256]u8 = undefined;
         var err_state = std.fs.File.stderr().writer(&err_buf);
         const stderr: *std.Io.Writer = &err_state.interface;
@@ -218,6 +332,7 @@ export fn xtc_process_frame() c_int {
             const stderr: *std.Io.Writer = &err_state.interface;
             stderr.print("Process frame error: {}\n", .{err}) catch {};
             stderr.flush() catch {};
+            session.engine.?.croak() catch {};
             return -1;
         };
         return if (needs_render) 1 else 0;
@@ -270,19 +385,7 @@ export fn xtc_cleanup() void {
     }
 }
 
-export fn xtc_render(xml_ptr: [*]const u8, xml_len: usize, width: u32, height: u32) void {
-    const xml_bytes = xml_ptr[0..xml_len];
-
-    renderXmlWasm(xml_bytes, width, height) catch |err| {
-        var outb: [256]u8 = undefined;
-        var outs = std.fs.File.stdout().writer(&outb);
-        const stdout: *std.Io.Writer = &outs.interface;
-        stdout.print("Render error: {}\n", .{err}) catch return;
-        stdout.flush() catch {};
-    };
-}
-
-fn initLiveSessionWasm(markup: []const u8, width: u32, height: u32) !WasmLiveSession {
+fn initLiveSessionWasm(script: []const u8, module_name: []const u8, width: u32, height: u32) !WasmLiveSession {
     const config = WasmLiveSession.Config{
         .output = .{
             .width = @as(usize, @intCast(width)),
@@ -291,16 +394,14 @@ fn initLiveSessionWasm(markup: []const u8, width: u32, height: u32) !WasmLiveSes
     };
 
     var session = WasmLiveSession.init(global_allocator, config);
-    try session.initSession(SessionInput{ .xml_string = markup });
+    if (script.len == 0) {
+        try session.initSession(.default);
+    } else {
+        const module = if (module_name.len == 0) "main" else module_name;
+        try session.initSession(.{ .script = .{ .module = module, .source = script } });
+    }
 
     return session;
-}
-
-fn renderXmlWasm(markup: []const u8, width: u32, height: u32) !void {
-    var session = try initLiveSessionWasm(markup, width, height);
-    defer session.deinit();
-
-    try session.render();
 }
 
 var global_allocator = std.heap.wasm_allocator;
@@ -314,5 +415,3 @@ export fn wasm_free(ptr: [*]u8, size: usize) void {
     const slice = ptr[0..size];
     global_allocator.free(slice);
 }
-
-export fn _initialize() void {}

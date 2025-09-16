@@ -27,10 +27,10 @@ pub fn create(host: std.mem.Allocator) @This() {
 }
 
 const Header = struct {
-    size: u64,
+    size: usize,
 };
 
-const header_size = @sizeOf(Header);
+const header_size = 8;
 
 fn alloc_impl(
     ctx: *anyopaque,

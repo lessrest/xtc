@@ -255,13 +255,11 @@ class CombinedWaveAnimation {
 
 Window.immediately {
   System.print("Starting waves animation")
-  var container = Document.getElementById("waves")
-  if (container == null) {
-    System.print("Error: Could not find waves element")
-  } else {
-    // Create the combined beautiful animation
-    var combinedWaves = CombinedWaveAnimation.new(container)
-    System.print("✨ Mystical Ocean Waves with shimmering stars and floating particles! ✨")
-    combinedWaves.animate()
-  }
+  Document.root.classes = "flex flex-col grow-1 bg-gray-900"
+  var container = Document.createElement("flex flex-col grow-1")
+  Document.root.append(container)
+
+  var combinedWaves = CombinedWaveAnimation.new(container)
+  System.print("✨ Mystical Ocean Waves with shimmering stars and floating particles! ✨")
+  combinedWaves.animate()
 }

@@ -19,7 +19,7 @@ const ticket = @import("../ticket.zig");
 const Platform = @import("platform.zig");
 pub const Context = @import("context.zig").Context;
 
-const Request = syscalls.RequestUnion(Platform);
+pub const Request = syscalls.RequestUnion(Platform);
 const Syscaller = syscalls.Syscaller(Platform, @This(), Context);
 
 pub const FiberID = @import("context.zig").FiberID;
@@ -204,8 +204,15 @@ fn loadModuleFn(vm: *c.VM, name: [*:0]const u8) callconv(.c) c.LoadModuleResult 
     _ = vm;
     if (std.mem.eql(u8, std.mem.span(name), "syscall")) {
         const src: [:0]const u8 = comptime blk: {
-            const src = syscalls.generateWrenModule(Platform) ++ "\x00";
-            break :blk src;
+            const generated = syscalls.generateWrenModule(Platform) ++ "\x00";
+            break :blk generated;
+        };
+        return c.LoadModuleResult{ .source = src.ptr };
+    }
+    if (std.mem.eql(u8, std.mem.span(name), "dom")) {
+        const src: [:0]const u8 = comptime blk: {
+            const embedded = @embedFile("dom.wren") ++ "\x00";
+            break :blk embedded;
         };
         return c.LoadModuleResult{ .source = src.ptr };
     }
