@@ -42,6 +42,8 @@ zig-out/bin/xtc --xml '<root class="flex"><box class="w-4 h-2 bg-glyph-[a]"/></r
 
 - Inline unit tests live beside Zig modules; broader integration tests live in
   `src/test/`.
+- The Miniflex rendering pipeline (DOM, styles, layout, paint, raster, etc.)
+  resides under `src/miniflex/`.
 - Web demo and WASM bindings live under `web/` with a Bun‑based build. See
   `build.zig` and comments in `web/` for details.
 

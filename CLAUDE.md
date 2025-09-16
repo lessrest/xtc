@@ -36,25 +36,25 @@ The codebase follows a clean pipeline architecture:
 
 ### Core Pipeline Components
 
-1. **DOM & Styles** (`src/dom.zig`, `src/style.zig`)
+1. **DOM & Styles** (`src/miniflex/dom.zig`, `src/miniflex/style.zig`)
 
    - Lightweight DOM with parent-child relationships
    - Style interning via `StyleTable` for memory efficiency
    - All styles stored in deduplicated `StyleRow` structs
 
-2. **Tailwind Parser** (`src/tailwind.zig`)
+2. **Tailwind Parser** (`src/miniflex/tailwind.zig`)
 
    - Parses utility classes into `StyleRow` properties
    - Supports flexbox, sizing, spacing, borders, colors
    - OKLCH→sRGB color conversion for Tailwind palette
 
-3. **Layout Engine** (`src/layout.zig`)
+3. **Layout Engine** (`src/miniflex/layout.zig`)
 
    - One-pass flexbox algorithm with grow distribution
    - Uses `BoxTree` (breadth-first construction for cache locality)
-   - Integrates text measurement via `src/measure.zig`
+   - Integrates text measurement via `src/miniflex/measure.zig`
 
-4. **Paint System** (`src/paint.zig`)
+4. **Paint System** (`src/miniflex/paint.zig`)
 
    - Generates device-independent display list
    - Commands: `FillRect`, `StrokeRect`, `GlyphRun`
@@ -75,13 +75,13 @@ The codebase follows a clean pipeline architecture:
 
 ## Testing Strategy
 
-Tests are integrated in `src/lib.zig` using the `expectLayout()` helper that compares expected vs actual ASCII output.
+Tests live under `src/test/` using the helpers in `src/test/Expect.zig` to compare expected vs actual ASCII output.
 
 ```bash
 # Run all tests
 zig build test
 
-# To add a test, follow the pattern in src/lib.zig
+# To add a test, follow the pattern in src/test/flex.test.zig
 # Use bg-glyph-[x] utility classes for visual debugging
 ```
 
@@ -116,11 +116,11 @@ zig build test
 
 ### Adding New Utility Classes
 
-1. Update parser in `src/tailwind.zig`
-2. Add corresponding fields to `StyleRow` in `src/style.zig`
-3. Implement layout behavior in `src/layout.zig`
-4. Add paint commands if needed in `src/paint.zig`
-5. Write tests in `src/lib.zig`
+1. Update parser in `src/miniflex/tailwind.zig`
+2. Add corresponding fields to `StyleRow` in `src/miniflex/style.zig`
+3. Implement layout behavior in `src/miniflex/layout.zig`
+4. Add paint commands if needed in `src/miniflex/paint.zig`
+5. Write tests under `src/test/` (see `src/test/flex.test.zig` and helpers in `src/test/Expect.zig`)
 
 ### Debugging Layout Issues
 
