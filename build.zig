@@ -1,6 +1,6 @@
 const std = @import("std");
 
-pub fn build(b: *std.Build) void {
+pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     //    const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -267,8 +267,10 @@ pub fn build(b: *std.Build) void {
     // Link dependencies
     wasm_cli_mod.addImport("miniflex", miniflex);
 
+    const install_wasm_cli = b.addInstallArtifact(wasm_cli_exe, .{});
+
     const wasm_cli_step = b.step("wasm-cli", "Build standalone WASM CLI executable");
-    wasm_cli_step.dependOn(&b.addInstallArtifact(wasm_cli_exe, .{}).step);
+    wasm_cli_step.dependOn(&install_wasm_cli.step);
 
     // Web distribution build using Bun
     const web_dist_step = b.step("web-dist", "Build web distribution with Bun");
@@ -283,6 +285,7 @@ pub fn build(b: *std.Build) void {
 
     // Dependencies: build after WASM is ready
     bun_build_cmd.step.dependOn(&install_wasm_wasi.step);
+    try bun_build_cmd.step.addDirectoryWatchInputFromPath(.initCwd("web"));
 
     web_dist_step.dependOn(&bun_build_cmd.step);
 

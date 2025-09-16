@@ -12,7 +12,7 @@ if (!existsSync(outdir)) {
 
 try {
   const result = await build({
-    entrypoints: ["./web/index.html"],
+    entrypoints: ["./web/index.html", "./web/xtc_worker.ts"],
     outdir,
     naming: {
       entry: "[dir]/[name].[ext]",

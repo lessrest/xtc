@@ -330,7 +330,7 @@ export fn xtc_process_frame() c_int {
             var err_buf: [256]u8 = undefined;
             var err_state = std.fs.File.stderr().writer(&err_buf);
             const stderr: *std.Io.Writer = &err_state.interface;
-            stderr.print("Process frame error: {}\n", .{err}) catch {};
+            stderr.print("process frame error: {}\n", .{err}) catch {};
             stderr.flush() catch {};
             session.engine.?.croak() catch {};
             return -1;
