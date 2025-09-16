@@ -20,11 +20,30 @@
 const WASI_ESUCCESS = 0
 const WASI_STDOUT_FILENO = 1
 const WASI_STDERR_FILENO = 2
+const WASI_ENOSYS = 52
 
 const CLOCK = {
   REALTIME: 0,
   MONOTONIC: 1
 } as const
+
+const SUBSCRIPTION_SIZE = 48
+const SUBSCRIPTION_USERDATA_OFFSET = 0
+const SUBSCRIPTION_TAG_OFFSET = 8
+const SUBSCRIPTION_CLOCK_OFFSET = 16
+const SUBSCRIPTION_CLOCK_TIMEOUT_OFFSET = 8
+const SUBSCRIPTION_CLOCK_FLAGS_OFFSET = 24
+const SUBSCRIPTION_CLOCK_ABSTIME = 0x0001
+
+const EVENT_SIZE = 32
+const EVENT_USERDATA_OFFSET = 0
+const EVENT_ERROR_OFFSET = 8
+const EVENT_TYPE_OFFSET = 10
+const EVENT_FD_OFFSET = 16
+const EVENT_FD_NBYTES_OFFSET = EVENT_FD_OFFSET
+const EVENT_FD_FLAGS_OFFSET = EVENT_FD_OFFSET + 8
+
+const pollWaitArray = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT))
 
 interface WASIOptions {
   stdout?: (data: Uint8Array) => void
@@ -59,8 +78,12 @@ export default class WASI {
   }
 
   getImports(): WebAssembly.Imports {
+    const wasiExports = this.exports()
     return {
-      wasi_snapshot_preview1: this.exports()
+      wasi_snapshot_preview1: wasiExports,
+      wasi: {
+        "thread-spawn": wasiExports["thread-spawn"]
+      }
     }
   }
 
@@ -165,6 +188,77 @@ export default class WASI {
         }
 
         return 0
+      },
+
+      poll_oneoff: (
+        inPtr: number,
+        outPtr: number,
+        nsubscriptions: number,
+        neventsPtr: number
+      ): number => {
+        const view = this.getDataView()
+        let eventsWritten = 0
+
+        for (let i = 0; i < nsubscriptions; i++) {
+          const subBase = inPtr + i * SUBSCRIPTION_SIZE
+          const userdata = view.getBigUint64(
+            subBase + SUBSCRIPTION_USERDATA_OFFSET,
+            true
+          )
+          const tag = view.getUint8(subBase + SUBSCRIPTION_TAG_OFFSET)
+          const eventBase = outPtr + eventsWritten * EVENT_SIZE
+
+          let errno = 0
+          let eventType = tag
+
+          if (tag === 0) {
+            const clockBase = subBase + SUBSCRIPTION_CLOCK_OFFSET
+            const clockId = view.getUint32(clockBase, true)
+            const flags = view.getUint16(
+              clockBase + SUBSCRIPTION_CLOCK_FLAGS_OFFSET,
+              true
+            )
+
+            if (clockId !== CLOCK.MONOTONIC && clockId !== CLOCK.REALTIME) {
+              errno = WASI_ENOSYS
+            } else {
+              const timeoutRaw = view.getBigUint64(
+                clockBase + SUBSCRIPTION_CLOCK_TIMEOUT_OFFSET,
+                true
+              )
+              let timeoutNs = Number(timeoutRaw)
+
+              if ((flags & SUBSCRIPTION_CLOCK_ABSTIME) !== 0) {
+                const nowNs = Math.floor(performance.now() * 1e6)
+                timeoutNs = Math.max(0, timeoutNs - nowNs)
+              }
+
+              if (Number.isFinite(timeoutNs) && timeoutNs > 0) {
+                const timeoutMs = Math.ceil(timeoutNs / 1_000_000)
+                try {
+                  Atomics.wait(pollWaitArray, 0, 0, timeoutMs)
+                } catch (error) {
+                  console.warn("Atomics.wait failed in poll_oneoff", error)
+                }
+              }
+
+              eventType = 0
+            }
+          } else {
+            errno = WASI_ENOSYS
+          }
+
+          view.setBigUint64(eventBase + EVENT_USERDATA_OFFSET, userdata, true)
+          view.setUint16(eventBase + EVENT_ERROR_OFFSET, errno, true)
+          view.setUint8(eventBase + EVENT_TYPE_OFFSET, eventType)
+          view.setBigUint64(eventBase + EVENT_FD_NBYTES_OFFSET, 0n, true)
+          view.setUint16(eventBase + EVENT_FD_FLAGS_OFFSET, 0, true)
+
+          eventsWritten += 1
+        }
+
+        view.setUint32(neventsPtr, eventsWritten, true)
+        return WASI_ESUCCESS
       },
 
       // Args functions for command line arguments

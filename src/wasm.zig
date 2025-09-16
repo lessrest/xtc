@@ -402,10 +402,47 @@ fn initLiveSessionWasm(script: []const u8, module_name: []const u8, width: u32, 
         try session.initSession(.{ .script = .{ .module = module, .source = script } });
     }
 
+    spawnDemoThread();
+
     return session;
 }
 
 var global_allocator = std.heap.raw_c_allocator;
+
+fn spawnDemoThread() void {
+    if (!has_threads) return;
+
+    const config = std.Thread.SpawnConfig{
+        .stack_size = 128 * 1024,
+        .allocator = global_allocator,
+    };
+
+    const thread = std.Thread.spawn(config, wasmThreadMain, .{}) catch |err| {
+        log.err("failed to spawn wasm thread: {}", .{err});
+        return;
+    };
+    thread.detach();
+}
+
+fn wasmThreadMain() !void {
+    var out_buf: [256]u8 = undefined;
+    var out_state = std.fs.File.stderr().writer(&out_buf);
+    const out: *std.Io.Writer = &out_state.interface;
+
+    const tid = std.Thread.getCurrentId();
+    try out.print("wasm thread {d} started\n", .{tid});
+    try out.flush();
+
+    var tick: usize = 0;
+    while (tick < 3) : (tick += 1) {
+        std.Thread.sleep(200 * std.time.ns_per_ms);
+        try out.print("wasm thread {d} tick {d}\n", .{ tid, tick + 1 });
+        try out.flush();
+    }
+
+    try out.print("wasm thread {d} finished\n", .{tid});
+    try out.flush();
+}
 
 export fn wasm_alloc(size: usize) ?[*]u8 {
     const slice = global_allocator.alloc(u8, size) catch return null;

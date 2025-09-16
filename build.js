@@ -12,8 +12,22 @@ if (!existsSync(outdir)) {
 }
 
 try {
+  const y = await build({
+    entrypoints: ["./web/threadworker.ts"],
+    root: "./web",
+    outdir,
+    target: "browser",
+    naming: {
+      entry: "[dir]/[name].[hash].[ext]"
+    },
+    splitting: false,
+    sourcemap: "inline"
+  })
+
+  const wasm_thread_worker_path = relative(outdir, y.outputs[0].path)
+
   const x = await build({
-    entrypoints: ["./web/xtcworker.ts", "./web/threadworker.ts"],
+    entrypoints: ["./web/xtcworker.ts"],
     root: "./web",
     outdir,
     target: "browser",
@@ -25,11 +39,13 @@ try {
     loader: {
       ".wren": "text",
       ".wasm": "file"
+    },
+    define: {
+      "process.env.THREAD_WORKER": JSON.stringify(wasm_thread_worker_path)
     }
   })
 
   const worker_path = relative(outdir, x.outputs[0].path)
-  const wasm_thread_worker_path = relative(outdir, x.outputs[1].path)
 
   console.log("✅ Worker build completed successfully")
   console.log(`📁    XTC worker: ${worker_path}`)
