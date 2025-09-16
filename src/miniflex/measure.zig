@@ -8,11 +8,11 @@
 
 const std = @import("std");
 const DisplayWidth = @import("DisplayWidth");
-const UnicodeData = @import("unicode.zig");
-const Dom = @import("dom.zig").Dom;
-const DomNodeId = @import("dom.zig").DomNodeId;
-const StyleRow = @import("style.zig").StyleRow;
-const BoxTree = @import("layout.zig").BoxTree;
+const UnicodeData = @import("./unicode.zig");
+const Dom = @import("./dom.zig").Dom;
+const DomNodeId = @import("./dom.zig").DomNodeId;
+const StyleRow = @import("./style.zig").StyleRow;
+const BoxTree = @import("./layout.zig").BoxTree;
 
 // ============================================================================
 // Core Concepts

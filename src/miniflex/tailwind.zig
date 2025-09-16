@@ -1,5 +1,5 @@
 const std = @import("std");
-const style = @import("style.zig");
+const style = @import("./style.zig");
 const StyleRow = style.StyleRow;
 const StyleDisplay = style.StyleDisplay;
 const StyleFlexDir = style.StyleFlexDir;
