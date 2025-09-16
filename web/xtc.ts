@@ -7,7 +7,7 @@ import matrixScript from "../demos/matrix.wren" with { type: "text" }
 type WorkerResponse =
   | { type: "ready" }
   | { type: "stdout"; buffer: ArrayBuffer }
-  | { type: "stderr"; text: string }
+  | { type: "stderr"; buffer: ArrayBuffer }
   | { type: "session-started"; demoName: string }
   | { type: "session-stopped"; demoName: string }
   | { type: "session-error"; demoName: string; message: string }
@@ -69,7 +69,7 @@ class XTCModule {
         break
       }
       case "stderr":
-        console.error("WASM stderr:", message.text)
+        console.error("WASM stderr:", this.decoder.decode(new Uint8Array(message.buffer), { stream: true }))
         break
       case "session-started":
         this.isLiveSession = true
@@ -137,7 +137,9 @@ class XTCModule {
 
       this.setupKeyboardInput()
 
-      this.worker = new Worker(new URL("./xtc_worker.js", import.meta.url), {
+      const workerPath = process.env.XTC_WORKER!
+
+      this.worker = new Worker(new URL(workerPath, import.meta.url), {
         type: "module"
       })
       this.worker.addEventListener("message", this.handleWorkerMessage)

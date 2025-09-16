@@ -30,6 +30,7 @@ interface WASIOptions {
   stdout?: (data: Uint8Array) => void
   stderr?: (data: Uint8Array) => void
   terminalSize?: { cols: number; rows: number }
+  threadSpawn?: (argPtr: number) => number
 }
 
 export default class WASI {
@@ -37,11 +38,13 @@ export default class WASI {
   private stdout: (data: Uint8Array) => void
   private stderr: (data: Uint8Array) => void
   private terminalSize: { cols: number; rows: number }
+  private threadSpawn?: (argPtr: number) => number
 
   constructor(options: WASIOptions = {}) {
     this.stdout = options.stdout || ((text) => console.log(text))
     this.stderr = options.stderr || ((text) => console.warn(text))
     this.terminalSize = options.terminalSize || { cols: 80, rows: 24 }
+    this.threadSpawn = options.threadSpawn
   }
 
   setMemory(memory: WebAssembly.Memory): void {
@@ -254,6 +257,20 @@ export default class WASI {
         // For other file descriptors, return success with no change
         view.setBigUint64(newoffset_ptr, BigInt(0), true)
         return WASI_ESUCCESS
+      },
+
+      "thread-spawn": (instancePtr: number): number => {
+        if (!this.threadSpawn) {
+          console.warn("WASI thread-spawn requested but no handler installed")
+          return -1
+        }
+
+        try {
+          return this.threadSpawn(instancePtr)
+        } catch (error) {
+          console.error("thread-spawn handler threw", error)
+          return -1
+        }
       }
     }
   }

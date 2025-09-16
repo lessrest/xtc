@@ -187,21 +187,32 @@ pub fn build(b: *std.Build) !void {
     teststep.dependOn(&run_miniflex_tests.step);
 
     // // WASM build target using WASI for stdout access
+    const wasm_initial_pages: u32 = 260;
+    const wasm_memory_bytes: u64 = @as(u64, wasm_initial_pages) * std.wasm.page_size;
+    const wasm_target = b.resolveTargetQuery(.{
+        .cpu_arch = .wasm32,
+        .os_tag = .wasi,
+        .ofmt = .wasm,
+        .abi = .musl,
+        .cpu_features_add = std.Target.wasm.featureSet(&.{ .atomics, .bulk_memory }),
+    });
+
     const wasm_mod = b.createModule(.{
         .root_source_file = b.path("src/wasm.zig"),
-        .target = b.resolveTargetQuery(.{
-            .cpu_arch = .wasm32,
-            .os_tag = .wasi,
-            .ofmt = .wasm,
-            .abi = .musl,
-        }),
+        .target = wasm_target,
         .optimize = .ReleaseFast,
         .link_libc = true,
     });
 
+    wasm_mod.single_threaded = false;
+
     const wasm_exe = b.addExecutable(.{ .name = "xtc", .root_module = wasm_mod });
     wasm_exe.rdynamic = true;
     wasm_exe.wasi_exec_model = .reactor;
+    wasm_exe.import_memory = true;
+    wasm_exe.shared_memory = true;
+    wasm_exe.initial_memory = wasm_memory_bytes;
+    wasm_exe.max_memory = wasm_memory_bytes * 32;
 
     wasm_exe.root_module.export_symbol_names = &[_][]const u8{
         "xtc_hello",
@@ -250,13 +261,8 @@ pub fn build(b: *std.Build) !void {
     // Standalone WASM CLI executable (not a reactor)
     const wasm_cli_mod = b.createModule(.{
         .root_source_file = b.path("src/wasm_cli.zig"),
-        .target = b.resolveTargetQuery(.{
-            .cpu_arch = .wasm32,
-            .os_tag = .wasi,
-            .ofmt = .wasm,
-            .abi = .musl,
-        }),
-        .optimize = .ReleaseFast,
+        .target = wasm_target,
+        //        .optimize = .ReleaseFast,
     });
 
     const wasm_cli_exe = b.addExecutable(.{

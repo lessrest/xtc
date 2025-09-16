@@ -3,6 +3,15 @@ import wasmUrl from "../zig-out/web-dist/xtc.wasm"
 
 const ctx = self as DedicatedWorkerGlobalScope
 
+const WASM_MEMORY_INITIAL_PAGES = 260
+const WASM_MEMORY_MAX_PAGES = 260 * 32
+
+type ThreadWorkerMessage =
+  | { type: "thread-exit"; tid: number }
+  | { type: "stdout"; tid: number; buffer: ArrayBuffer }
+  | { type: "stderr"; tid: number; buffer: ArrayBuffer }
+  | { type: "thread-error"; tid: number; message: string }
+
 type InitMessage = { type: "init"; cols: number; rows: number }
 type SwitchDemoMessage = {
   type: "switchDemo"
@@ -25,7 +34,7 @@ type WorkerMessage =
 type WorkerResponse =
   | { type: "ready" }
   | { type: "stdout"; buffer: ArrayBuffer }
-  | { type: "stderr"; text: string }
+  | { type: "stderr"; buffer: ArrayBuffer }
   | { type: "session-started"; demoName: string }
   | { type: "session-stopped"; demoName: string }
   | { type: "session-error"; demoName: string; message: string }
@@ -36,11 +45,131 @@ interface WASIInstance {
   instance: WebAssembly.Instance
 }
 
+interface ThreadManagerCallbacks {
+  onStdout(bytes: Uint8Array): void
+  onStderr(bytes: Uint8Array): void
+}
+
+class ThreadManager {
+  private workers = new Map<number, Worker>()
+  private nextThreadId = 1
+  private memory: WebAssembly.Memory | null = null
+
+  constructor(
+    private readonly module: WebAssembly.Module,
+    private readonly callbacks: ThreadManagerCallbacks
+  ) {}
+
+  setMemory(memory: WebAssembly.Memory): void {
+    if (!(memory.buffer instanceof SharedArrayBuffer)) {
+      console.warn("WASM memory is not shared; threads are unavailable")
+      this.memory = null
+      return
+    }
+
+    this.memory = memory
+  }
+
+  spawnThread(argPtr: number): number {
+    if (!this.memory) {
+      console.warn("Cannot spawn thread without shared memory")
+      return -1
+    }
+
+    try {
+      const tid = this.nextThreadId++
+      const worker = new Worker(
+        new URL(process.env.THREAD_WORKER!, import.meta.url),
+        { type: "module" }
+      )
+
+      worker.addEventListener("message", (event) => {
+        this.handleThreadMessage(
+          tid,
+          event as MessageEvent<ThreadWorkerMessage>
+        )
+      })
+
+      worker.addEventListener("error", (event) => {
+        console.error(
+          `Thread worker ${tid} error:`,
+          event.error ?? event.message
+        )
+      })
+
+      worker.postMessage({
+        type: "start-thread",
+        tid,
+        argPtr,
+        module: this.module,
+        memory: this.memory
+      })
+
+      this.workers.set(tid, worker)
+      return tid
+    } catch (error) {
+      console.error("Failed to spawn WASM thread", error)
+      return -1
+    }
+  }
+
+  dispose(): void {
+    for (const worker of this.workers.values()) {
+      worker.terminate()
+    }
+    this.workers.clear()
+    this.memory = null
+    this.nextThreadId = 1
+  }
+
+  private handleThreadMessage(
+    tid: number,
+    event: MessageEvent<ThreadWorkerMessage>
+  ): void {
+    const message = event.data
+
+    switch (message.type) {
+      case "stdout": {
+        const bytes = new Uint8Array(message.buffer)
+        this.callbacks.onStdout(bytes)
+        break
+      }
+      case "stderr": {
+        const bytes = new Uint8Array(message.buffer)
+        this.callbacks.onStderr(bytes)
+        break
+      }
+      case "thread-exit": {
+        const worker = this.workers.get(tid)
+        if (worker) {
+          worker.terminate()
+        }
+        this.workers.delete(tid)
+        break
+      }
+      case "thread-error": {
+        console.error(
+          `Thread ${message.tid} reported error: ${message.message}`
+        )
+        const worker = this.workers.get(message.tid)
+        if (worker) {
+          worker.terminate()
+          this.workers.delete(message.tid)
+        }
+        break
+      }
+    }
+  }
+}
+
 class XTCWorkerRuntime {
   private wasiInstance: WASIInstance | null = null
   private decoder = new TextDecoder()
   private encoder = new TextEncoder()
   private wasmBytes: ArrayBuffer | null = null
+  private wasmModule: WebAssembly.Module | null = null
+  private sharedMemory: WebAssembly.Memory | null = null
+  private threadManager: ThreadManager | null = null
   private terminalCols = 80
   private terminalRows = 30
   private isLiveSession = false
@@ -84,7 +213,7 @@ class XTCWorkerRuntime {
     this.terminalCols = message.cols
     this.terminalRows = message.rows
 
-    await this.ensureWasmBytes()
+    await this.ensureWasmArtifacts()
     await this.initWASI()
 
     this.emit({ type: "ready" })
@@ -135,41 +264,71 @@ class XTCWorkerRuntime {
   private handleStop(): void {
     const wasLive = this.isLiveSession
     this.stopLiveSession()
+    if (this.threadManager) {
+      this.threadManager.dispose()
+      this.threadManager = null
+    }
     if (wasLive && this.currentDemo) {
       this.emit({ type: "session-stopped", demoName: this.currentDemo })
     }
   }
 
-  private async ensureWasmBytes(): Promise<void> {
-    if (this.wasmBytes) return
+  private async ensureWasmArtifacts(): Promise<void> {
+    if (!this.wasmBytes) {
+      const response = await fetch(wasmUrl)
+      this.wasmBytes = await response.arrayBuffer()
+    }
 
-    const response = await fetch(wasmUrl)
-    this.wasmBytes = await response.arrayBuffer()
+    if (!this.wasmModule && this.wasmBytes) {
+      this.wasmModule = await WebAssembly.compile(this.wasmBytes)
+    }
   }
 
   private async initWASI(): Promise<void> {
-    if (!this.wasmBytes) {
-      throw new Error("WASM bytes not loaded")
+    await this.ensureWasmArtifacts()
+
+    if (!this.wasmModule) {
+      throw new Error("WASM module not ready")
     }
+
+    if (this.threadManager) {
+      this.threadManager.dispose()
+    }
+
+    const threadManager = new ThreadManager(this.wasmModule, {
+      onStdout: (bytes: Uint8Array) => this.forwardStdout(bytes),
+      onStderr: (bytes: Uint8Array) => this.forwardStderr(bytes)
+    })
+    this.threadManager = threadManager
 
     const wasi = new WASI({
       stdout: (bytes: Uint8Array) => this.forwardStdout(bytes),
-      stderr: (bytes: Uint8Array) => this.forwardStderr(bytes)
+      stderr: (bytes: Uint8Array) => this.forwardStderr(bytes),
+      threadSpawn: (argPtr: number) => threadManager.spawnThread(argPtr)
     })
 
-    const wasiImports = wasi.getImports()
-    const jsImports = {
-      env: {
-        js_performance_now: () => performance.now()
-      }
+    this.sharedMemory = new WebAssembly.Memory({
+      initial: WASM_MEMORY_INITIAL_PAGES,
+      maximum: WASM_MEMORY_MAX_PAGES,
+      shared: true
+    })
+
+    const wasiImports = wasi.getImports() as Record<string, any>
+    const envImports: Record<string, unknown> = {
+      ...(wasiImports.env ?? {}),
+      memory: this.sharedMemory,
+      js_performance_now: () => performance.now()
     }
 
-    const { instance } = await WebAssembly.instantiate(this.wasmBytes, {
+    const imports = {
       ...wasiImports,
-      ...jsImports
-    })
+      env: envImports
+    } as WebAssembly.Imports
 
-    wasi.setMemory(instance.exports.memory as WebAssembly.Memory)
+    const instance = await WebAssembly.instantiate(this.wasmModule, imports)
+
+    wasi.setMemory(this.sharedMemory)
+    threadManager.setMemory(this.sharedMemory)
 
     this.wasiInstance = { wasi, instance }
   }
@@ -180,8 +339,8 @@ class XTCWorkerRuntime {
   }
 
   private forwardStderr(bytes: Uint8Array): void {
-    const text = this.decoder.decode(bytes)
-    this.emit({ type: "stderr", text })
+    const copy = bytes.slice()
+    this.emit({ type: "stderr", buffer: copy.buffer }, [copy.buffer])
   }
 
   private initLiveSession(script: string, moduleName: string): number {
@@ -246,9 +405,7 @@ class XTCWorkerRuntime {
       throw new Error("Failed to allocate memory in WASM")
     }
 
-    const memory = new Uint8Array(
-      (this.wasiInstance.instance.exports.memory as WebAssembly.Memory).buffer
-    )
+    const memory = new Uint8Array(this.getMemory().buffer)
     memory.set(bytes, ptr)
     return { ptr, length: bytes.length }
   }
@@ -260,6 +417,23 @@ class XTCWorkerRuntime {
     if (typeof freeFn === "function") {
       freeFn(ptr, length)
     }
+  }
+
+  private getMemory(): WebAssembly.Memory {
+    if (this.sharedMemory) {
+      return this.sharedMemory
+    }
+
+    if (this.wasiInstance) {
+      const exportedMemory = (
+        this.wasiInstance.instance.exports as Record<string, unknown>
+      ).memory
+      if (exportedMemory instanceof WebAssembly.Memory) {
+        return exportedMemory
+      }
+    }
+
+    throw new Error("WASM memory not available")
   }
 
   private startAnimationLoop(): void {

@@ -2,6 +2,7 @@
 
 import { build } from "bun"
 import { existsSync, mkdirSync } from "fs"
+import { relative } from "path"
 
 const outdir = "./zig-out/web-dist"
 
@@ -11,17 +12,44 @@ if (!existsSync(outdir)) {
 }
 
 try {
-  const result = await build({
-    entrypoints: ["./web/index.html", "./web/xtc_worker.ts"],
+  const x = await build({
+    entrypoints: ["./web/xtcworker.ts", "./web/threadworker.ts"],
+    root: "./web",
     outdir,
+    target: "browser",
+    naming: {
+      entry: "[dir]/[name].[hash].[ext]"
+    },
+    splitting: false,
+    sourcemap: "inline",
+    loader: {
+      ".wren": "text",
+      ".wasm": "file"
+    }
+  })
+
+  const worker_path = relative(outdir, x.outputs[0].path)
+  const wasm_thread_worker_path = relative(outdir, x.outputs[1].path)
+
+  console.log("✅ Worker build completed successfully")
+  console.log(`📁    XTC worker: ${worker_path}`)
+  console.log(`📁 Thread worker: ${wasm_thread_worker_path}`)
+
+  const result = await build({
+    entrypoints: ["./web/index.html"],
+    root: "./web",
+    outdir,
+    define: {
+      "process.env.XTC_WORKER": JSON.stringify(worker_path),
+      "process.env.THREAD_WORKER": JSON.stringify(wasm_thread_worker_path)
+    },
     naming: {
       entry: "[dir]/[name].[ext]",
       asset: "[name].[hash].[ext]"
     },
     target: "browser",
     splitting: false,
-    minify: process.env.NODE_ENV === "production",
-    sourcemap: process.env.NODE_ENV !== "production" ? "external" : "none",
+    sourcemap: "inline",
     loader: {
       ".wren": "text",
       ".wasm": "file"

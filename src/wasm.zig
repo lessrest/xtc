@@ -4,6 +4,7 @@ const dom = miniflex.dom;
 const WindowType = miniflex.Window;
 const Engine = @import("fiberscript/vm.zig");
 const ansi = @import("ansi");
+const builtin = @import("builtin");
 const Context = Engine.Context;
 const Request = Engine.Request;
 
@@ -35,7 +36,7 @@ fn logprint(
 
 const log = std.log.scoped(.wasm);
 
-pub const has_threads = false;
+pub const has_threads = !builtin.single_threaded;
 
 const ScriptConfig = struct {
     module: []const u8,
@@ -404,7 +405,7 @@ fn initLiveSessionWasm(script: []const u8, module_name: []const u8, width: u32, 
     return session;
 }
 
-var global_allocator = std.heap.wasm_allocator;
+var global_allocator = std.heap.raw_c_allocator;
 
 export fn wasm_alloc(size: usize) ?[*]u8 {
     const slice = global_allocator.alloc(u8, size) catch return null;
