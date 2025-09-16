@@ -1,10 +1,11 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const ansi = @import("ansi");
-
-const Engine = @import("fiberscript/vm.zig");
-const miniflex = @import("miniflex");
-const dom = miniflex.dom;
-const c = @import("fiberscript/wren.zig");
+const live = @import("lib/live_session.zig");
+const LiveSession = live.LiveSession;
+const time = std.time;
+const posix = std.posix;
+const Thread = std.Thread;
 
 test {
     _ = @import("miniflex");
@@ -90,19 +91,44 @@ pub fn main() !void {
     return error.Usage;
 }
 
+const Viewport = struct {
+    width: usize,
+    height: usize,
+};
+
+fn detectViewport(stdout_file: std.fs.File) Viewport {
+    var width: usize = 80;
+    var height: usize = 25;
+
+    if (!stdout_file.isTty()) {
+        return .{ .width = width, .height = height };
+    }
+
+    switch (builtin.os.tag) {
+        .windows => return .{ .width = width, .height = height },
+        else => {
+            var winsize: posix.winsize = .{
+                .row = 0,
+                .col = 0,
+                .xpixel = 0,
+                .ypixel = 0,
+            };
+
+            const err = posix.system.ioctl(stdout_file.handle, posix.T.IOCGWINSZ, @intFromPtr(&winsize));
+            if (posix.errno(err) == .SUCCESS and winsize.col != 0 and winsize.row != 0) {
+                width = @as(usize, @intCast(winsize.col));
+                height = @as(usize, @intCast(winsize.row));
+            }
+        },
+    }
+
+    return .{ .width = width, .height = height };
+}
+
 pub fn run_script(allocator: std.mem.Allocator, script_path: []const u8) !void {
-    var document = try dom.Dom.init(allocator);
-    defer document.deinit();
-
-    var context: Engine.Context = .{
-        .document = document,
-        .allocator = allocator,
-        .vm = undefined,
-    };
-
-    var engine = try Engine.init(allocator, .{ .context = &context });
-    defer engine.deinit();
-    defer context.deinit();
+    var stdout_file = std.fs.File.stdout();
+    const viewport = detectViewport(stdout_file);
+    log.info("using viewport {d}x{d}", .{ viewport.width, viewport.height });
 
     const file_path = if (std.fs.path.isAbsolute(script_path))
         try allocator.dupe(u8, script_path)
@@ -113,27 +139,64 @@ pub fn run_script(allocator: std.mem.Allocator, script_path: []const u8) !void {
     const file_content = try std.fs.cwd().readFileAlloc(allocator, script_path, 1024 * 1024);
     defer allocator.free(file_content);
 
-    log.info("running top-level script {s}", .{script_path});
-    try engine.runTopLevel("main", file_content);
+    var session = LiveSession.init(allocator, .{
+        .output = .{ .width = viewport.width, .height = viewport.height },
+    });
+    defer session.deinit();
 
-    const thunks = try context.thunks.toOwnedSlice(allocator);
-    defer allocator.free(thunks);
+    log.info("running top-level script {s}", .{file_path});
+    try session.initSession(.{ .script = .{ .module = "main", .source = file_content } });
 
-    log.info("{d} thunk fibers in queue", .{thunks.len});
-    for (thunks) |fiber| {
-        var slots = engine.slots();
-        _ = slots.set(0, fiber);
-        log.warn("calling {s}", .{fiber.ticket});
-        defer log.warn("called {s}", .{fiber.ticket});
-        try slots.call("call()").checkSuccess();
-        fiber.deinit(engine.vm);
+    if (!stdout_file.isTty()) {
+        if (session.window) |window| {
+            window.state.needs_clear = false;
+            window.state.needs_tty_restore = false;
+        }
     }
 
-    log.info(
-        "joining {d} background threads",
-        .{engine.context.background_threads.items.len},
-    );
-    try engine.context.joinBackgroundThreads();
+    if (session.context) |context| {
+        log.info("{d} thunk fibers in queue", .{context.thunks.items.len});
+    }
+
+    const frame_interval_ns: u64 = 16 * time.ns_per_ms;
+    var frame_count: usize = 0;
+
+    while (true) {
+        const needs_render = session.processFrame() catch |err| {
+            log.err("process frame error: {}", .{err});
+            if (session.engine) |engine| {
+                engine.croak() catch {};
+            }
+            return err;
+        };
+
+        if (needs_render) {
+            session.render() catch |err| {
+                log.err("render error: {}", .{err});
+                return err;
+            };
+            frame_count += 1;
+        }
+
+        const has_work = session.hasPendingWork();
+        if (!has_work and !needs_render) {
+            break;
+        }
+
+        if (has_work) {
+            Thread.sleep(frame_interval_ns);
+        }
+    }
+
+    if (session.context) |context| {
+        log.info(
+            "joining {d} background threads",
+            .{context.background_threads.items.len},
+        );
+    }
+    try session.joinBackgroundThreads();
+
+    log.info("rendered {d} frames", .{frame_count});
     log.info("done", .{});
     try nest.newline();
     try nest.writer.flush();
