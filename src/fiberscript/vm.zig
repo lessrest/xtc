@@ -5,9 +5,7 @@ comptime {
 }
 
 const c = @import("wren.zig");
-const ErrorHandler = @import("error_handler.zig").ErrorHandler;
 const slots_api = @import("slots.zig");
-const OutputHandler = @import("output.zig").OutputHandler;
 const syscalls = @import("syscalls.zig");
 const miniflex = @import("miniflex");
 const dom = miniflex.dom;
@@ -28,22 +26,28 @@ const tree = ansi.nest;
 
 const log = std.log.scoped(.vm);
 
-pub const ErrorReport = ErrorHandler.ErrorReport;
-pub const StackTraceLine = ErrorHandler.StackTraceLine;
+pub const WrenError = error{
+    CompilationError,
+    RuntimeError,
+};
 
 allocator: std.mem.Allocator,
-output_handler: OutputHandler,
-error_handler: ErrorHandler,
+output_writer: *std.Io.Writer,
+error_writer: *std.Io.Writer,
+problem: ?WrenError = null,
 syscaller: Syscaller,
 vm: *c.VM,
 context: *Context,
 
 const Self = @This();
 
+var discarding = std.Io.Writer.Discarding.init(&.{});
+const devnull = &discarding.writer;
+
 pub const Options = struct {
-    output_buffer_size: usize = 1024 * 32,
-    error_buffer_size: usize = 1024 * 32,
     context: *Context,
+    output_writer: *std.Io.Writer = devnull,
+    error_writer: *std.Io.Writer = devnull,
 };
 
 pub fn init(base_allocator: std.mem.Allocator, options: Options) !*Self {
@@ -58,18 +62,8 @@ pub fn setup(self: *Self, allocator: std.mem.Allocator, options: Options) !void 
     // Initialize fields needed prior to VM creation
     self.allocator = allocator;
 
-    self.output_handler = try OutputHandler.init(
-        allocator,
-        .{ .buffer_size = options.output_buffer_size },
-    );
-
-    errdefer self.output_handler.deinit(allocator);
-
-    self.error_handler = try ErrorHandler.init(
-        allocator,
-        .{ .buffer_size = options.error_buffer_size },
-    );
-    errdefer self.error_handler.deinit(allocator);
+    self.output_writer = options.output_writer;
+    self.error_writer = options.error_writer;
 
     self.context = options.context;
     self.syscaller = Syscaller{ .engine = self, .context = self.context };
@@ -93,15 +87,13 @@ pub fn setup(self: *Self, allocator: std.mem.Allocator, options: Options) !void 
     }
 
     errdefer c.wrenFreeVM(self.vm);
-    errdefer self.croak() catch {};
 
     try self.bind();
 }
 
 pub fn deinit(self: *Self) void {
-    self.error_handler.deinit(self.allocator);
-    self.output_handler.deinit(self.allocator);
-
+    self.output_writer.flush() catch {};
+    self.error_writer.flush() catch {};
     c.wrenFreeVM(self.vm);
 
     self.allocator.destroy(self);
@@ -251,11 +243,13 @@ pub fn syscall(self: *Self, fiber: FiberID, request: Request) !void {
 /// C callback wrapper for output handling.
 fn writeFn(vm: *c.VM, text: [*:0]const u8) callconv(.c) void {
     const self = getSelf(vm);
-    self.output_handler.writeFn(vm, text);
+    self.output_writer.print("{s}", .{text}) catch {};
+    self.output_writer.flush() catch {};
 }
 
 pub fn write(self: *Self, text: []const u8) void {
-    self.output_handler.write(self.vm, text);
+    self.output_writer.print("{s}", .{text}) catch {};
+    self.output_writer.flush() catch {};
 }
 
 /// C callback wrapper for error handling.
@@ -267,15 +261,37 @@ fn errorFn(
     message_ptr: ?[*:0]const u8,
 ) callconv(.c) void {
     const self = getSelf(vm);
-    self.error_handler.errorFn(error_type, module_ptr, line, message_ptr);
-}
+    switch (error_type) {
+        .stack_trace => {
+            self.error_writer.print("  at {s}:{d}\n", .{
+                if (module_ptr) |m| m else "unknown",
+                line,
+            }) catch {};
+        },
 
-pub fn takeError(self: *Self) ErrorReport {
-    return self.error_handler.takeError();
+        .compile => {
+            self.problem = WrenError.CompilationError;
+            self.error_writer.print("Wren compiler error at [{s}:{d}]: {s}\n", .{
+                if (module_ptr) |m| m else "unknown",
+                line,
+                if (message_ptr) |msg| msg else "unknown error",
+            }) catch {};
+        },
+
+        .runtime => {
+            self.problem = WrenError.RuntimeError;
+            self.error_writer.print("Wren runtime error: {s}\n", .{
+                if (message_ptr) |msg| msg else "unknown error",
+            }) catch {};
+        },
+    }
 }
 
 pub fn checkError(self: *Self) !void {
-    return self.error_handler.checkError();
+    if (self.problem) |e| {
+        self.error_writer.flush() catch {};
+        return e;
+    }
 }
 
 fn getSelf(vm: *c.VM) *Self {
@@ -294,23 +310,8 @@ pub fn runTopLevel(self: *Self, module_name: []const u8, source: []const u8) !vo
     const result = c.wrenInterpret(self.vm, module_name_as_cstr, source_as_cstr);
     log.warn("(top level exit)", .{});
 
-    const outcome = @as(c.InterpretResult, @enumFromInt(result));
-    switch (outcome) {
-        .success => {},
-        .compile_error => {
-            std.debug.print("\n=== WREN COMPILATION ERROR ===\n", .{});
-            std.debug.print("Module: {s}\n", .{module_name});
-            std.debug.print("Source code:\n{s}\n", .{source});
-            std.debug.print("===============================\n\n", .{});
-            return self.croak();
-        },
-        .runtime_error => {
-            std.debug.print("\n=== WREN RUNTIME ERROR ===\n", .{});
-            std.debug.print("Module: {s}\n", .{module_name});
-            std.debug.print("Source code:\n{s}\n", .{source});
-            std.debug.print("==========================\n\n", .{});
-            return self.croak();
-        },
+    if (result != 0) {
+        return error.ScriptError;
     }
 }
 
@@ -319,34 +320,31 @@ fn bind(self: *Self) !void {
     //    try self.runTopLevel("dom", @embedFile("dom.wren"));
 }
 
-pub fn takeOutput(self: *Self, allocator: std.mem.Allocator) ![]const u8 {
-    return self.output_handler.takeOutput(allocator);
-}
-
-pub fn croak(self: *Self) !void {
-    return self.error_handler.croak();
-}
-
 pub fn slots(self: *Self) slots_api.SlotBuilder {
     return slots_api.SlotBuilder.init(self.vm, self.allocator);
 }
 
 const Fiber = FiberID;
 
+var stderrbuf: [512]u8 = undefined;
+var stderrstate = std.fs.File.stderr().writer(&stderrbuf);
+const stderr: *std.Io.Writer = &stderrstate.interface;
+
 test "we can create and destroy a VM" {
     const allocator = std.testing.allocator;
     var document = try dom.Dom.init(allocator);
     defer document.deinit();
     var sc = Context.init(allocator, document);
+    var buf: [1024]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buf);
 
-    var vm = try Self.init(allocator, .{ .context = &sc });
+    var vm = try Self.init(allocator, .{
+        .context = &sc,
+        .output_writer = &writer,
+        .error_writer = stderr,
+    });
     defer vm.deinit();
-
-    const output = try vm.takeOutput(allocator);
-    defer allocator.free(output);
-
-    try std.testing.expectEqualStrings(output, "");
-    try std.testing.expect(vm.takeError() == .none);
+    try vm.checkError();
 }
 
 test "we can run a simple script" {
@@ -356,18 +354,17 @@ test "we can run a simple script" {
     defer document.deinit();
     var sc = Context.init(allocator, document);
 
-    var engine = try Self.init(allocator, .{ .context = &sc });
+    var buf: [1024]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buf);
+
+    var engine = try Self.init(allocator, .{ .context = &sc, .output_writer = &writer });
     defer engine.deinit();
 
     try engine.runTopLevel("foo",
         \\System.print("Hello, world!")
     );
 
-    const output = try engine.takeOutput(allocator);
-    defer allocator.free(output);
-
-    try std.testing.expectEqualStrings(output, "Hello, world!\n");
-    try std.testing.expect(engine.takeError() == .none);
+    try std.testing.expectEqualStrings(writer.buffered(), "Hello, world!\n");
 }
 
 test "we can call Core.call" {
@@ -380,14 +377,12 @@ test "we can call Core.call" {
     var engine = try Self.init(allocator, .{ .context = &sc });
     defer engine.deinit();
 
-    engine.runTopLevel("main",
+    try engine.runTopLevel("main",
         \\import "xtc" for Core
         \\import "syscall" for Print
         \\Core.call(Print.new("hello\n"))
         \\Core.call(Print.new("hello\n"))
-    ) catch {
-        try engine.croak();
-    };
+    );
 
     // hmm the Print syscall actually prints to stdout directly
     // so I make this test a bit silly for now by just checking no error
@@ -396,8 +391,6 @@ test "we can call Core.call" {
     // defer allocator.free(output);
 
     // try std.testing.expectEqualStrings(output, "hello\nhello\n");
-
-    try std.testing.expect(engine.takeError() == .none);
 }
 
 test "slots API - simple method call" {

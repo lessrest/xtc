@@ -53,14 +53,6 @@ export fn clock() i64 {
 
 extern fn js_performance_now() f64;
 
-export fn xtc_hello() void {
-    var out_buf: [256]u8 = undefined;
-    var out_state = std.fs.File.stdout().writer(&out_buf);
-    const out: *std.Io.Writer = &out_state.interface;
-    out.print("XTC WASM Live Session Ready!\n", .{}) catch return;
-    out.flush() catch {};
-}
-
 export fn xtc_init_session(
     script_ptr: [*]const u8,
     script_len: usize,
@@ -80,9 +72,6 @@ export fn xtc_init_session(
     }
 
     global_live_session = initLiveSessionWasm(script_bytes, module_bytes, width, height) catch |err| {
-        var err_buf: [256]u8 = undefined;
-        var err_state = std.fs.File.stderr().writer(&err_buf);
-        const stderr: *std.Io.Writer = &err_state.interface;
         stderr.print("Init session error: {}\n", .{err}) catch {};
         stderr.flush() catch {};
         return -1;
@@ -94,12 +83,8 @@ export fn xtc_init_session(
 export fn xtc_process_frame() c_int {
     if (global_live_session) |*session| {
         const needs_render = session.processFrame() catch |err| {
-            var err_buf: [256]u8 = undefined;
-            var err_state = std.fs.File.stderr().writer(&err_buf);
-            const stderr: *std.Io.Writer = &err_state.interface;
             stderr.print("process frame error: {}\n", .{err}) catch {};
             stderr.flush() catch {};
-            session.engine.?.croak() catch {};
             return -1;
         };
         return if (needs_render) 1 else 0;
@@ -110,9 +95,6 @@ export fn xtc_process_frame() c_int {
 export fn xtc_render_frame() c_int {
     if (global_live_session) |*session| {
         session.render() catch |err| {
-            var err_buf: [256]u8 = undefined;
-            var err_state = std.fs.File.stderr().writer(&err_buf);
-            const stderr: *std.Io.Writer = &err_state.interface;
             stderr.print("Render frame error: {}\n", .{err}) catch {};
             stderr.flush() catch {};
             return -1;
@@ -133,9 +115,6 @@ export fn xtc_keypress(key: u8) c_int {
 export fn xtc_resize(width: u32, height: u32) c_int {
     if (global_live_session) |*session| {
         session.handleResize(@as(usize, @intCast(width)), @as(usize, @intCast(height))) catch |err| {
-            var err_buf: [256]u8 = undefined;
-            var err_state = std.fs.File.stderr().writer(&err_buf);
-            const stderr: *std.Io.Writer = &err_state.interface;
             stderr.print("Resize error: {}\n", .{err}) catch {};
             stderr.flush() catch {};
             return -1;
@@ -158,6 +137,7 @@ fn initLiveSessionWasm(script: []const u8, module_name: []const u8, width: u32, 
             .width = @as(usize, @intCast(width)),
             .height = @as(usize, @intCast(height)),
         },
+        .console_writer = stderr,
     };
 
     var session = WasmLiveSession.init(global_allocator, config);
@@ -190,24 +170,24 @@ fn spawnDemoThread() void {
     thread.detach();
 }
 
-fn wasmThreadMain() !void {
-    var out_buf: [256]u8 = undefined;
-    var out_state = std.fs.File.stderr().writer(&out_buf);
-    const out: *std.Io.Writer = &out_state.interface;
+var out_buf: [256]u8 = undefined;
+var out_state = std.fs.File.stderr().writer(&out_buf);
+const stderr: *std.Io.Writer = &out_state.interface;
 
+fn wasmThreadMain() !void {
     const tid = std.Thread.getCurrentId();
-    try out.print("wasm thread {d} started\n", .{tid});
-    try out.flush();
+    try stderr.print("wasm thread {d} started\n", .{tid});
+    try stderr.flush();
 
     var tick: usize = 0;
     while (tick < 3) : (tick += 1) {
         std.Thread.sleep(200 * std.time.ns_per_ms);
-        try out.print("wasm thread {d} tick {d}\n", .{ tid, tick + 1 });
-        try out.flush();
+        try stderr.print("wasm thread {d} tick {d}\n", .{ tid, tick + 1 });
+        try stderr.flush();
     }
 
-    try out.print("wasm thread {d} finished\n", .{tid});
-    try out.flush();
+    try stderr.print("wasm thread {d} finished\n", .{tid});
+    try stderr.flush();
 }
 
 export fn wasm_alloc(size: usize) ?[*]u8 {

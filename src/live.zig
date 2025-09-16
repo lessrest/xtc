@@ -31,6 +31,7 @@ pub const LiveSession = struct {
 
     pub const Config = struct {
         output: OutputConfig,
+        console_writer: *std.Io.Writer,
     };
 
     pub const OutputConfig = struct {
@@ -57,7 +58,10 @@ pub const LiveSession = struct {
         context_ptr.setViewport(self.config.output.width, self.config.output.height);
         self.context = context_ptr;
 
-        const engine_ptr = try Engine.init(self.allocator, .{ .context = context_ptr });
+        const engine_ptr = try Engine.init(self.allocator, .{
+            .context = context_ptr,
+            .output_writer = self.config.console_writer,
+        });
         self.engine = engine_ptr;
 
         const window_ptr = try self.allocator.create(WindowType);
@@ -185,16 +189,8 @@ pub const LiveSession = struct {
 
     fn flushEngineOutput(self: *LiveSession) !void {
         const engine = self.engine orelse return;
-        const output = try engine.takeOutput(self.allocator);
-        defer if (output.len != 0) self.allocator.free(output);
-
-        if (output.len == 0) return;
-
-        var out_buf: [512]u8 = undefined;
-        var out_state = std.fs.File.stdout().writer(&out_buf);
-        const out: *std.Io.Writer = &out_state.interface;
-        try out.writeAll(output);
-        try out.flush();
+        try engine.output_writer.flush();
+        try engine.error_writer.flush();
     }
 };
 

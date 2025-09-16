@@ -46,6 +46,10 @@ fn logprint(
     try nest.writer.flush();
 }
 
+var err_buf: [512]u8 = undefined;
+var err_state = std.fs.File.stderr().writer(&err_buf);
+const stderr: *std.Io.Writer = &err_state.interface;
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -57,10 +61,6 @@ pub fn main() !void {
     defer arena.deinit();
 
     nest = ansi.nest.stderr(arena.allocator());
-
-    var err_buf: [512]u8 = undefined;
-    var err_state = std.fs.File.stderr().writer(&err_buf);
-    const stderr: *std.Io.Writer = &err_state.interface;
 
     var args = try std.process.argsWithAllocator(allocator);
     defer args.deinit();
@@ -141,6 +141,7 @@ pub fn run_script(allocator: std.mem.Allocator, script_path: []const u8) !void {
 
     var session = LiveSession.init(allocator, .{
         .output = .{ .width = viewport.width, .height = viewport.height },
+        .console_writer = stderr,
     });
     defer session.deinit();
 
@@ -164,9 +165,6 @@ pub fn run_script(allocator: std.mem.Allocator, script_path: []const u8) !void {
     while (true) {
         const needs_render = session.processFrame() catch |err| {
             log.err("process frame error: {}", .{err});
-            if (session.engine) |engine| {
-                engine.croak() catch {};
-            }
             return err;
         };
 

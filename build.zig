@@ -2,7 +2,6 @@ const std = @import("std");
 
 pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
-    //    const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
     const zg = b.dependency("zg", .{ .cjk = false });
@@ -99,6 +98,7 @@ pub fn build(b: *std.Build) !void {
     const unit_tests = b.addTest(.{
         .name = "xtc-test-suite",
         .root_module = xtc,
+
         .test_runner = .{
             .path = b.path("src/lib/test_runner.zig"),
             .mode = .simple,
@@ -157,7 +157,6 @@ pub fn build(b: *std.Build) !void {
     wasm_exe.max_memory = wasm_memory_bytes * 32;
 
     wasm_exe.root_module.export_symbol_names = &[_][]const u8{
-        "xtc_hello",
         "xtc_init_session",
         "xtc_process_frame",
         "xtc_render_frame",
