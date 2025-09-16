@@ -26,64 +26,6 @@ pub fn build(b: *std.Build) !void {
     miniflex.addImport("DisplayWidth", zg.module("DisplayWidth"));
     miniflex.addImport("Words", zg.module("Words"));
 
-    // // In Zig 0.15, a module may not import files above its root directory.
-    // // Point the wren module at a src-level root so vm.zig can import siblings.
-    // const wren = b.addModule("wren", .{
-    //     .target = target,
-    //     .optimize = optimize,
-    //     .root_source_file = null,
-    //     .link_libc = true,
-    // });
-
-    //    wren.addImport("ansi", ansi);
-
-    // const libwren = b.addLibrary(.{
-    //     .name = "wren",
-    //     .root_module = wren,
-    //     .use_lld = true,
-    //     .use_llvm = true,
-    // });
-
-    // // Create WASM-specific Wren library
-    // const libwren_wasm_mod = b.createModule(.{
-    //     .target = b.resolveTargetQuery(.{
-    //         .cpu_arch = .wasm32,
-    //         .os_tag = .wasi,
-    //     }),
-    //     .optimize = optimize,
-    // });
-    // const libwren_wasm = b.addLibrary(.{
-    //     .name = "wren-wasm",
-    //     .linkage = .static,
-    //     .root_module = libwren_wasm_mod,
-    // });
-
-    // libwren_wasm_mod.addIncludePath(b.path("deps/wren/src/include"));
-    // libwren_wasm_mod.addIncludePath(b.path("deps/wren/src/vm"));
-    // libwren_wasm_mod.addIncludePath(b.path("deps/wren/src/optional"));
-    // libwren_wasm_mod.addCSourceFiles(.{
-    //     .files = &.{
-    //         "deps/wren/src/vm/wren_compiler.c",
-    //         "deps/wren/src/vm/wren_core.c",
-    //         "deps/wren/src/vm/wren_debug.c",
-    //         "deps/wren/src/vm/wren_primitive.c",
-    //         "deps/wren/src/vm/wren_utils.c",
-    //         "deps/wren/src/vm/wren_value.c",
-    //         "deps/wren/src/vm/wren_vm.c",
-    //         "deps/wren/src/optional/wren_opt_meta.c",
-    //         "deps/wren/src/optional/wren_opt_random.c",
-    //     },
-    //     .flags = &.{
-    //         "-g",
-    //         "-std=c99",
-    //         "-Wall",
-    //         "-Wextra",
-    //         "-Wno-unused-parameter",
-    //         "-O3",
-    //     },
-    // });
-    // libwren_wasm.linkLibC();
-
     const xtc = b.addModule("xtc", .{
         .root_source_file = b.path("src/main.zig"),
         .target = target,

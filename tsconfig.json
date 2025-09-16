@@ -1,4 +1,5 @@
 {
+  "include": ["web/*.ts", "/*.ts"],
   "compilerOptions": {
     // Environment setup & latest features
     "lib": ["ESNext"],
@@ -24,6 +25,6 @@
     // Some stricter flags (disabled by default)
     "noUnusedLocals": false,
     "noUnusedParameters": false,
-    "noPropertyAccessFromIndexSignature": false
+    "noPropertyAccessFromIndexSignature": false,
   }
 }

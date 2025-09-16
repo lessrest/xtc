@@ -3,7 +3,7 @@ const builtin = @import("builtin");
 const miniflex = @import("miniflex");
 const dom = miniflex.dom;
 const WindowType = miniflex.Window;
-const Engine = @import("../fiberscript/vm.zig");
+const Engine = @import("fiberscript/vm.zig");
 const Context = Engine.Context;
 const Request = Engine.Request;
 
@@ -18,16 +18,6 @@ pub const SessionInput = union(enum) {
     script: ScriptConfig,
     default: void,
 };
-
-pub const default_script =
-    \\\\import "dom" for Document, Element, Text, Window
-    \\\\Window.immediately {
-    \\\\  Document.root.classes = "flex flex-col items-center justify-center h-full bg-gray-900"
-    \\\\  var panel = Document.createElement("p-2 text-gray-200")
-    \\\\  panel.append(Document.createText("xtc wasm ready"))
-    \\\\  Document.root.append(panel)
-    \\\\}
-;
 
 pub const LiveSession = struct {
     allocator: std.mem.Allocator,
@@ -79,7 +69,7 @@ pub const LiveSession = struct {
 
         switch (input) {
             .script => |script| try self.runTopLevel(script.module, script.source),
-            .default => try self.runTopLevel("main", default_script),
+            .default => {},
         }
 
         try self.flushEngineOutput();

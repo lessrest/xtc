@@ -1,6 +1,6 @@
 const std = @import("std");
 const ansi = @import("ansi");
-const live = @import("lib/live_session.zig");
+const live = @import("live.zig");
 const LiveSession = live.LiveSession;
 
 pub const std_options: std.Options = .{
