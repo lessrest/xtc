@@ -27,7 +27,7 @@ pub fn main() !void {
     defer if (session.document) |doc| doc.deinit();
     defer if (session.window) |win| win.deinit();
 
-    try session.initSession(.{ .xml_string = markup });
+    try session.initSession(.{ .script = .{ .module = "main", .source = markup } });
     _ = try session.processFrame();
 
     if (session.window) |window| {
