@@ -4,7 +4,7 @@ const std = @import("std");
 const syscalls = @import("syscalls.zig");
 const slots_api = @import("slots.zig");
 const Platform = @import("platform.zig");
-const ticket = @import("../ticket.zig");
+const Ticket = @import("../ticket.zig").Ticket;
 const miniflex = @import("miniflex");
 const Document = miniflex.dom.Dom;
 const root_mod = @import("root");
@@ -22,9 +22,7 @@ pub const FiberID = struct {
     ticket: [10]u8,
 
     pub fn init(handle: *c.Handle) FiberID {
-        const tix = ticket.from(handle) catch {
-            std.debug.panic("failed to get ticket for handle {p}", .{handle});
-        };
+        const tix = Ticket.pointer(handle);
         return FiberID{
             .handle = handle,
             .ticket = tix,

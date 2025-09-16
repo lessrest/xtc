@@ -1,403 +1,269 @@
-//! Ticket-style human-friendly ID encoder.
-//!
-//! This module encodes fixed-size binary data (e.g. hash digests) into
-//! short, readable, **all-caps** “robot ticket” strings with a pleasant
-//! consonant–vowel–digit rhythm.  IDs are constant-length, free of case
-//! mixing, and avoid ambiguous glyphs (`0/O`, `1/I/L`).
-//!
-//! ## Encoding scheme
-//! - The alphabet is split into:
-//!   - 20 consonants: `BCDFGHJKMNPQRSTVWXYZ`
-//!   - 5 vowels:      `AEIOU`
-//!   - 8 digits:      `23456789`
-//! - Two cell types are used:
-//!   - `.CVN` (3 chars): consonant + vowel + digit → base-800
-//!   - `.CV`  (2 chars): consonant + vowel         → base-100
-//! - A *pattern* is a compile-time array of `Cell` values specifying the
-//!   sequence of cells for an ID (e.g. `{ .CVN, .CV, .CVN, .CV }`).
-//! - The input byte array is treated as a big-endian integer and repeatedly
-//!   divided by each cell’s base (mixed-radix conversion). The remainders
-//!   become the output characters.
-//! - Because the pattern is known at compile time, both input length and
-//!   output length are constant and checked by the compiler.
-//!
-//! ## Features
-//! - **Comptime sizes**: no allocations, no dynamic buffers; output length is
-//!   available as `MyEncoder.out_len`.
-//! - **Deterministic**: given the same input and pattern, output is stable.
-//! - **Collision behaviour**: full input space is represented exactly in the
-//!   mixed-radix space of the chosen pattern. Change pattern → change ID.
-//! - **Readable rhythm**: consonant–vowel alternation and occasional digits
-//!   make scanning and verbal communication easy.
-//!
-//! ## Usage
-//! Define an encoder type with `encodeFixed(InLen, &pattern)`:
-//!
-//! ```zig
-//! pub const Wy64Ticket12 = encodeFixed(8, &PATTERN_12);
-//! pub const Sha256Ticket16 = encodeFixed(32, &PATTERN_16);
-//!
-//! const id = Wy64Ticket12.encode(&[8]u8{ 0xde,0xad,0xbe,0xef,0x12,0x34,0x56,0x78 });
-//! // id is [Wy64Ticket12.out_len]u8, e.g. "KOV5MEB4TUA…"
-//! ```
-//!
-//! See the preset `PATTERN_*` constants for ready-made rhythms.
-
 const std = @import("std");
 
-pub const Cell = enum { CVN, CV }; // CVN=3 chars (base 800), CV=2 chars (base 100)
+const consonants = "BCDFGHJKMNPQRSTVWXYZ";
+const vowels = "AEIOU";
+const digits = "23456789";
 
-const CONS = "BCDFGHJKMNPQRSTVWXYZ"; // 20 distinct uppercase consonants
-const VOWS = "AEIOU"; // 5 vowels
-const DIGS = "23456789"; // 8 digits (no 0/1)
+const Cell = enum {
+    cvn,
+    cv,
 
-fn cellBase(c: Cell) u16 {
-    return switch (c) {
-        .CVN => 800, // 20 * 5 * 8
-        .CV => 100, // 20 * 5
-    };
-}
-
-fn outChars(c: Cell) comptime_int {
-    return switch (c) {
-        .CVN => 3,
-        .CV => 2,
-    };
-}
-
-pub fn encodedLen(comptime pattern: []const Cell) comptime_int {
-    var n: usize = 0;
-    inline for (pattern) |cell| n += outChars(cell);
-    return n;
-}
-
-/// Divide a big-endian magnitude `num` by `base` in place.
-/// Writes the big-endian quotient back into `num`, returns the remainder.
-/// Requires 2 <= base <= 65535.
-fn beDivMod(num: []u8, base: u16) u16 {
-    std.debug.assert(base >= 2);
-    var rem: u32 = 0; // wide enough to hold (base-1)*256 + 255
-    for (num) |*b| {
-        const cur: u32 = (rem << 8) | @as(u32, b.*);
-        const q: u32 = cur / base; // 0..255 (see proof below)
-        const r: u32 = cur - q * base; // faster than cur % base on some CPUs
-        b.* = @intCast(q);
-        rem = r;
+    fn base(self: Cell) u16 {
+        return switch (self) {
+            .cvn => 800,
+            .cv => 100,
+        };
     }
-    return @intCast(rem);
+
+    fn width(self: Cell) comptime_int {
+        return switch (self) {
+            .cvn => 3,
+            .cv => 2,
+        };
+    }
+
+    fn write(cell: Cell, digit: u16, out: *std.Io.Writer) !void {
+        switch (cell) {
+            .cvn => {
+                try out.writeByte(consonants[digit / 40]);
+                try out.writeByte(vowels[(digit / 8) % 5]);
+                try out.writeByte(digits[digit % 8]);
+            },
+            .cv => {
+                try out.writeByte(consonants[digit / 5]);
+                try out.writeByte(vowels[digit % 5]);
+            },
+        }
+    }
+};
+
+fn encodedLen(comptime layout: []const Cell) comptime_int {
+    var total: usize = 0;
+    inline for (layout) |cell| total += cell.width();
+    return total;
 }
 
-// Map digits to glyphs (no allocations)
-fn putCVN(out: []u8, idx: usize, d: u16) void {
-    // d in 0..799 → c = d/40 (0..19), v = (d/8)%5 (0..4), n = d%8 (0..7)
-    const c: usize = d / 40;
-    const v: usize = (d / 8) % 5;
-    const n: usize = d % 8;
-    out[idx + 0] = CONS[c];
-    out[idx + 1] = VOWS[v];
-    out[idx + 2] = DIGS[n];
-}
-fn putCV(out: []u8, idx: usize, d: u16) void {
-    // d in 0..99 → c = d/5 (0..19), v = d%5 (0..4)
-    const c: usize = d / 5;
-    const v: usize = d % 5;
-    out[idx + 0] = CONS[c];
-    out[idx + 1] = VOWS[v];
-}
+/// Builds a ticket encoder using the provided `Hasher` and cell `pattern`.
+/// The hasher must expose `init(seed)`, `update([]const u8)`, and `final() u64`.
+pub fn TicketWriter(comptime Hasher: type, comptime pattern: []const Cell) type {
+    const fn_info = switch (@typeInfo(@TypeOf(Hasher.init))) {
+        .@"fn" => |info| info,
+        else => @compileError("Hasher.init must be a function"),
+    };
+    comptime {
+        if (fn_info.params.len != 1) @compileError("Hasher.init must accept exactly one parameter");
+        if (fn_info.return_type == null) @compileError("Hasher.init must return a hasher instance");
+    }
 
-/// Core, fully comptime-sized encoder.
-/// - `InLen` is the number of input bytes (known at comptime).
-/// - `pattern` is a comptime sequence of cells (CVN/CV), deciding output length.
-/// - Returns a fixed-size all-caps, no-separator ticket.
-pub fn encodeFixed(comptime InLen: usize, comptime pattern: []const Cell) type {
-    const OutLen = encodedLen(pattern);
+    const SeedType = fn_info.params[0].type.?;
+
     return struct {
-        pub const out_len = OutLen;
+        pub const Data = [encodedLen(pattern)]u8;
 
-        pub fn encode(input_be: *const [InLen]u8) [OutLen]u8 {
-            // Work copy for in-place big-int division (no heap)
-            var work: [InLen]u8 = input_be.*;
-            // We’ll extract remainders for each cell from the END to the START,
-            // so the human-readable order is preserved.
-            const Cells = pattern.len;
-            var digits: [Cells]u16 = undefined;
+        pub const Seed = SeedType;
 
-            // Walk cells from last to first, divmod by that cell’s base.
-            var i: usize = Cells;
-            while (i > 0) {
-                i -= 1;
-                const base = cellBase(pattern[i]);
-                digits[i] = beDivMod(&work, base);
+        /// Hashes formatted data with the provided `seed` and returns the ticket.
+        pub fn format(seed: Seed, comptime fmt: []const u8, args: anytype) Data {
+            var ctx = HashingWriter.initHasher(Hasher.init(seed), &.{});
+            ctx.writer.print(fmt, args) catch unreachable;
+            ctx.writer.flush() catch unreachable;
+            return encoded(ctx.hasher.final());
+        }
+
+        /// Convenience wrapper over `format` for byte slices and strings.
+        pub fn string(seed: Seed, value: anytype) Data {
+            if (std.meta.Elem(@TypeOf(value)) != u8) {
+                @compileError("fromString only accepts strings");
             }
 
-            // Map digits to glyphs
-            var out: [OutLen]u8 = undefined;
-            var pos: usize = 0;
-            inline for (pattern, 0..) |cell, k| {
-                switch (cell) {
-                    .CVN => {
-                        putCVN(&out, pos, digits[k]);
-                        pos += 3;
-                    },
-                    .CV => {
-                        putCV(&out, pos, digits[k]);
-                        pos += 2;
-                    },
-                }
+            return format(seed, "{s}", .{value});
+        }
+
+        /// Encodes a ticket derived from the pointer's address.
+        pub fn pointer(seed: Seed, ptr: anytype) Data {
+            if (@typeInfo(@TypeOf(ptr)) != .pointer) {
+                @compileError("fromAddress only accepts pointers");
             }
+
+            return format(seed, "{p}", .{ptr});
+        }
+
+        /// Streams data from `reader` into the hasher using the caller's buffer.
+        pub fn fromReader(seed: Seed, reader: *std.Io.Reader, buffer: []u8) !Data {
+            var ctx = HashingWriter.initHasher(Hasher.init(seed), buffer);
+            _ = try reader.streamRemaining(&ctx.writer);
+            ctx.writer.flush() catch unreachable;
+            return encoded(ctx.hasher.final());
+        }
+
+        const HashingWriter = std.Io.Writer.Hashing(Hasher);
+
+        fn writeEncoded(digest: u64, writer: *std.Io.Writer) !void {
+            var value = digest;
+            var digits_buf: [pattern.len]u16 = undefined;
+
+            comptime var index = pattern.len;
+            inline while (index > 0) {
+                index -= 1;
+                const base = pattern[index].base();
+                digits_buf[index] = @intCast(value % base);
+                value /= base;
+            }
+
+            inline for (pattern, 0..) |cell, i| {
+                try cell.write(digits_buf[i], writer);
+            }
+        }
+
+        fn encoded(digest: u64) Data {
+            var out: Data = undefined;
+            var w = std.Io.Writer.fixed(&out);
+            writeEncoded(digest, &w) catch unreachable;
             return out;
         }
     };
 }
 
-// -------------------- Presets --------------------
+fn TicketPreset(comptime Writer: type, comptime seed: Writer.Seed) type {
+    return struct {
+        pub const Data = Writer.Data;
 
-// Patterns tuned for a nice “ticket” rhythm (no separators).
-pub const PATTERN_12 = [_]Cell{ .CVN, .CV, .CVN, .CV }; // 3+2+3+2 = 10 chars (short)
-pub const PATTERN_16 = [_]Cell{ .CVN, .CVN, .CV, .CVN, .CV }; // 3+3+2+3+2 = 13 chars
-pub const PATTERN_20 = [_]Cell{ .CVN, .CV, .CV, .CVN, .CVN, .CV }; // 3+2+2+3+3+2 = 15 chars
-pub const PATTERN_24 = [_]Cell{ .CVN, .CVN, .CV, .CVN, .CV, .CVN, .CV }; // 18 chars
+        /// Hashes formatted data using the preset seed.
+        pub fn format(comptime fmt: []const u8, args: anytype) Data {
+            return Writer.format(seed, fmt, args);
+        }
 
-// You can define as many patterns as you like; pick by “aesthetic length”.
+        /// Hashes string-like data using the preset seed.
+        pub fn string(value: anytype) Data {
+            return Writer.string(seed, value);
+        }
 
-// --- Hash-oriented wrappers (inputs are fixed-size at comptime) ---
+        /// Hashes pointer addresses using the preset seed.
+        pub fn pointer(ptr: anytype) Data {
+            return Writer.pointer(seed, ptr);
+        }
 
-// For SHA-256 digests (32 bytes). You likely don't want all 256 bits;
-// pick a visual length and pattern. These consume the *entire* digest
-// via mixed-radix conversion, but the length is determined solely by `pattern`.
-pub const Sha256Ticket16 = encodeFixed(32, &PATTERN_16);
-pub const Sha256Ticket20 = encodeFixed(32, &PATTERN_20);
-pub const Sha256Ticket24 = encodeFixed(32, &PATTERN_24);
-
-// For 64-bit Wyhash output:
-pub const Wy64Ticket12 = encodeFixed(8, &PATTERN_12);
-pub const Wy64Ticket16 = encodeFixed(8, &PATTERN_16);
-
-// For 128-bit hashes (e.g., XXH3 128):
-pub const H128Ticket20 = encodeFixed(16, &PATTERN_20);
-
-// -------------------- Demo --------------------
-pub fn main() !void {
-    // Pretend we have a SHA-256 digest:
-    const sha: [32]u8 = [_]u8{
-        0x60, 0x4b, 0x0b, 0x0f, 0x83, 0x24, 0xa4, 0x2c,
-        0x99, 0x2a, 0x8c, 0x91, 0x5d, 0x1b, 0x4a, 0x1e,
-        0x97, 0x31, 0x0b, 0x7f, 0x2b, 0xf2, 0x84, 0x57,
-        0x9c, 0x2a, 0x5c, 0x98, 0x73, 0x66, 0x11, 0x42,
+        /// Streams reader data using the preset seed and caller buffer.
+        pub fn fromReader(reader: *std.Io.Reader, buffer: []u8) !Data {
+            return Writer.fromReader(seed, reader, buffer);
+        }
     };
-
-    const t16 = Sha256Ticket16.encode(&sha);
-    const t20 = Sha256Ticket20.encode(&sha);
-
-    // Wyhash-64 example:
-    const wy: [8]u8 = [_]u8{ 0xde, 0xad, 0xbe, 0xef, 0x12, 0x34, 0x56, 0x78 };
-    const w12 = Wy64Ticket12.encode(&wy);
-
-    var buf: [512]u8 = undefined;
-    var state = std.fs.File.stdout().writer(&buf);
-    const out: *std.Io.Writer = &state.interface;
-    try out.print("SHA256/13ch : {s}\n", .{t16});
-    try out.print("SHA256/15ch : {s}\n", .{t20});
-    try out.print("WY64 /10ch : {s}\n", .{w12});
 }
 
-// 1) Fixed-size/length sanity
-test "encodedLen sums cell widths" {
-    try std.testing.expectEqual(@as(usize, 10), encodedLen(&[_]Cell{ .CVN, .CV, .CVN, .CV })); // 3+2+3+2
-    try std.testing.expectEqual(@as(usize, 13), encodedLen(&[_]Cell{ .CVN, .CVN, .CV, .CVN, .CV })); // 3+3+2+3+2
+const compact_pattern = [_]Cell{ .cvn, .cv, .cvn };
+const fast_pattern = [_]Cell{ .cvn, .cv, .cvn, .cv };
+const secure_pattern = [_]Cell{ .cvn, .cv, .cvn, .cv, .cvn, .cv };
+
+/// Internal generator powering `TicketCompact`; trades headroom for brevity.
+const CompactWriter = TicketWriter(std.hash.Wyhash, &compact_pattern);
+/// Internal generator for `TicketFast`, our default rhythm.
+const FastWriter = TicketWriter(std.hash.XxHash3, &fast_pattern);
+const SecureHasher = struct {
+    const Inner = std.hash.SipHash64(2, 4);
+
+    inner: Inner,
+
+    pub fn init(key: [16]u8) SecureHasher {
+        return .{ .inner = Inner.init(&key) };
+    }
+
+    pub fn update(self: *SecureHasher, data: []const u8) void {
+        self.inner.update(data);
+    }
+
+    pub fn final(self: *SecureHasher) u64 {
+        return self.inner.finalInt();
+    }
+};
+
+/// Internal generator for `TicketSecure`, using SipHash-derived digests.
+const SecureWriter = TicketWriter(SecureHasher, &secure_pattern);
+
+/// 8-character, non-keyed ticket tuned for log-friendly compact IDs.
+pub const TicketCompact = TicketPreset(CompactWriter, 0);
+/// 10-character default ticket that balances readability and avalanche behaviour.
+pub const TicketFast = TicketPreset(FastWriter, 0);
+/// Alias of `TicketFast` kept for existing callers.
+pub const Ticket = TicketFast;
+
+/// Keyed SipHash64-based ticket with 15 characters for untrusted inputs.
+pub const TicketSecure = struct {
+    pub const Data = SecureWriter.Data;
+    pub const Key = SecureWriter.Seed;
+
+    /// Hashes formatted data with the supplied secret key.
+    pub fn format(key: Key, comptime fmt: []const u8, args: anytype) Data {
+        return SecureWriter.format(key, fmt, args);
+    }
+
+    /// Hashes string-like data with the supplied secret key.
+    pub fn string(key: Key, value: anytype) Data {
+        return SecureWriter.string(key, value);
+    }
+
+    /// Hashes pointer addresses with the supplied secret key.
+    pub fn pointer(key: Key, ptr: anytype) Data {
+        return SecureWriter.pointer(key, ptr);
+    }
+
+    /// Streams reader data with the supplied secret key.
+    pub fn fromReader(key: Key, reader: *std.Io.Reader, buffer: []u8) !Data {
+        return SecureWriter.fromReader(key, reader, buffer);
+    }
+};
+
+test "ticket compact" {
+    const t = TicketCompact.string("Hello, world!");
+    try std.testing.expectEqual(encodedLen(&compact_pattern), t.len);
 }
 
-// 2) Wy64Ticket12 known-good vectors (all zeros / one)
-// Pattern is CVN (3) + CV (2) + CVN (3) + CV (2) = 10 chars.
-// Mapping for digit 0: CVN => C0/V0/N0 => B A 2  => "BA2"
-//                      CV  => C0/V0     => B A    => "BA"
-test "Wy64Ticket12 zero vector" {
-    const zero: [8]u8 = [_]u8{0} ** 8;
-    const got = Wy64Ticket12.encode(&zero);
-    try std.testing.expectEqual(@as(usize, Wy64Ticket12.out_len), got.len);
-    // Digits will all be 0 => "BA2" "BA" "BA2" "BA"
-    try std.testing.expectEqualStrings("BA2BABA2BA", &got);
+test "ticket fast matches previous output" {
+    const t = TicketFast.string("Hello, world!");
+    try std.testing.expectEqualStrings("BI5KUFI6QI", &t);
 }
 
-// For input = 1 (big-endian), only the *last* digit is 1; others are 0.
-// CVN(0) = "BA2", CV(0) = "BA", CVN(0) = "BA2", last CV(1) => c=1/5=0 -> 'B', v=1%5=1 -> 'E' => "BE"
-test "Wy64Ticket12 one vector" {
-    const one: [8]u8 = [_]u8{ 0, 0, 0, 0, 0, 0, 0, 1 };
-    const got = Wy64Ticket12.encode(&one);
-    try std.testing.expectEqualStrings("BA2BABA2BE", &got);
+test "ticket fast pointer uniqueness" {
+    const xs = [_]u32{ 42, 42 };
+    const t1 = TicketFast.pointer(&xs[0]);
+    const t2 = TicketFast.pointer(&xs[1]);
+    const fast_len = encodedLen(&fast_pattern);
+    try std.testing.expectEqual(fast_len, t1.len);
+    try std.testing.expectEqual(fast_len, t2.len);
+    try std.testing.expect(!std.mem.eql(u8, &t1, &t2));
 }
 
-// 3) Glyph whitelist: every char must be in CONS/VOWS/DIGS
-test "glyphs are from allowed sets" {
-    const sample: [8]u8 = .{ 0xde, 0xad, 0xbe, 0xef, 0x12, 0x34, 0x56, 0x78 };
-    const t10 = Wy64Ticket12.encode(&sample);
-    const allowed = CONS ++ VOWS ++ DIGS;
-    for (t10) |ch| {
+test "ticket fast reader buffers" {
+    var reader = std.Io.Reader.fixed("Hello, world!");
+    const ticket = try TicketFast.fromReader(&reader, &.{});
+    try std.testing.expectEqualStrings("BI5KUFI6QI", &ticket);
+
+    var reader_large = std.Io.Reader.fixed("Hello, world!");
+    var buf_large: [64]u8 = undefined;
+    const ticket_large = try TicketFast.fromReader(&reader_large, &buf_large);
+    try std.testing.expectEqualStrings("BI5KUFI6QI", &ticket_large);
+
+    var reader_small = std.Io.Reader.fixed("Hello, world!");
+    var buf_small: [4]u8 = undefined;
+    const ticket_small = try TicketFast.fromReader(&reader_small, &buf_small);
+    try std.testing.expectEqualStrings("BI5KUFI6QI", &ticket_small);
+}
+
+test "ticket characters stay in whitelist" {
+    const sample = "0123456789abcdefghijklmnopqrstuvwxyz";
+    const ticket = TicketFast.string(sample);
+    const allowed = consonants ++ vowels ++ digits;
+    for (ticket) |ch| {
         try std.testing.expect(std.mem.indexOfScalar(u8, allowed, ch) != null);
     }
 }
 
-// 4) SHA-256 preset: only assert lengths and character class (don’t freeze the exact string)
-test "Sha256Ticket presets produce correct length and class" {
-    const sha: [32]u8 = [_]u8{
-        0x60, 0x4b, 0x0b, 0x0f, 0x83, 0x24, 0xa4, 0x2c,
-        0x99, 0x2a, 0x8c, 0x91, 0x5d, 0x1b, 0x4a, 0x1e,
-        0x97, 0x31, 0x0b, 0x7f, 0x2b, 0xf2, 0x84, 0x57,
-        0x9c, 0x2a, 0x5c, 0x98, 0x73, 0x66, 0x11, 0x42,
-    };
-    const t16 = Sha256Ticket16.encode(&sha);
-    const t20 = Sha256Ticket20.encode(&sha);
-
-    try std.testing.expectEqual(@as(usize, Sha256Ticket16.out_len), t16.len);
-    try std.testing.expectEqual(@as(usize, Sha256Ticket20.out_len), t20.len);
-
-    const allowed = CONS ++ VOWS ++ DIGS;
-    for (t16) |ch| try std.testing.expect(std.mem.indexOfScalar(u8, allowed, ch) != null);
-    for (t20) |ch| try std.testing.expect(std.mem.indexOfScalar(u8, allowed, ch) != null);
-}
-
-// 5) beDivMod invariants on small numbers (quick sanity)
-fn beToU16(b: [2]u8) u16 {
-    return (@as(u16, b[0]) << 8) | b[1];
-}
-
-test "beDivMod numeric check" {
-    var x = [_]u8{ 0x01, 0x00 };
-    const r = beDivMod(&x, 10);
-    try std.testing.expectEqual(@as(u16, 6), r);
-    try std.testing.expectEqual(@as(u16, 25), beToU16(x));
-}
-
-inline fn u64be(v: u64) [8]u8 {
-    var o: [8]u8 = undefined;
-    std.mem.writeInt(u64, &o, v, .big);
-    return o;
-}
-inline fn u128be(v: u128) [16]u8 {
-    var o: [16]u8 = undefined;
-    std.mem.writeInt(u128, &o, v, .big);
-    return o;
-}
-
-pub const StreamChunk = 64 * 1024;
-
-// --- TIX12 (10 chars) from XXH3-64 (fast default) ---
-pub fn tix12FromReader(reader: anytype) ![Wy64Ticket12.out_len]u8 {
-    var h = std.hash.XxHash3.init(0); // same seed style as your tests
-    var buf: [StreamChunk]u8 = undefined;
-    while (true) {
-        const n = try reader.read(&buf);
-        if (n == 0) break;
-        h.update(buf[0..n]);
-    }
-    const digest: u64 = h.final();
-    const be = u64be(digest);
-    return Wy64Ticket12.encode(&be);
-}
-
-// Optional variant using XxHash64 (also 64-bit)
-pub fn tix12FromReader_xx64(reader: anytype) ![Wy64Ticket12.out_len]u8 {
-    var h = std.hash.XxHash64.init(0);
-    var buf: [StreamChunk]u8 = undefined;
-    while (true) {
-        const n = try reader.read(&buf);
-        if (n == 0) break;
-        h.update(buf[0..n]);
-    }
-    const digest: u64 = h.final();
-    const be = u64be(digest);
-    return Wy64Ticket12.encode(&be);
-}
-
-// --- TIX16 (13 chars) from SHA-256 (crypto, compact) ---
-pub fn tix16FromReader_sha256(reader: anytype) ![Sha256Ticket16.out_len]u8 {
-    var h = std.crypto.hash.sha2.Sha256.init(.{});
-    var buf: [StreamChunk]u8 = undefined;
-    while (true) {
-        const n = try reader.read(&buf);
-        if (n == 0) break;
-        h.update(buf[0..n]);
-    }
-    var digest: [32]u8 = undefined;
-    h.final(&digest);
-    return Sha256Ticket16.encode(&digest);
-}
-
-// --- TIX20 / TIX24 from SHA-256 (more headroom) ---
-pub fn tix20FromReader_sha256(reader: anytype) ![Sha256Ticket20.out_len]u8 {
-    var h = std.crypto.hash.sha2.Sha256.init(.{});
-    var buf: [StreamChunk]u8 = undefined;
-    while (true) {
-        const n = try reader.read(&buf);
-        if (n == 0) break;
-        h.update(buf[0..n]);
-    }
-    var digest: [32]u8 = undefined;
-    h.final(&digest);
-    return Sha256Ticket20.encode(&digest);
-}
-
-pub fn tix24FromReader_sha256(reader: anytype) ![Sha256Ticket24.out_len]u8 {
-    var h = std.crypto.hash.sha2.Sha256.init(.{});
-    var buf: [StreamChunk]u8 = undefined;
-    while (true) {
-        const n = try reader.read(&buf);
-        if (n == 0) break;
-        h.update(buf[0..n]);
-    }
-    var digest: [32]u8 = undefined;
-    h.final(&digest);
-    return Sha256Ticket24.encode(&digest);
-}
-
-pub fn from(something: anytype) ![Wy64Ticket12.out_len]u8 {
-    const T = @TypeOf(something);
-    const ti = @typeInfo(T);
-
-    // []const u8 / []u8
-    if (@typeInfo(T) == .pointer and @typeInfo(T).pointer.size == .slice and @typeInfo(T).pointer.child == u8) {
-        var fbs = std.io.fixedBufferStream(something);
-        return try tix12FromReader(fbs.reader());
-    }
-
-    // [N]u8
-    if (ti == .array and ti.array.child == u8) {
-        var fbs = std.io.fixedBufferStream(something[0..]);
-        return try tix12FromReader(fbs.reader());
-    }
-
-    // *[N]u8 (pointer to array)
-    if (ti == .pointer and ti.pointer.size == .one) {
-        const child_info = @typeInfo(ti.pointer.child);
-        if (child_info == .array and child_info.array.child == u8) {
-            var fbs = std.io.fixedBufferStream(something[0..]);
-            return try tix12FromReader(fbs.reader());
-        }
-    }
-
-    // *c.Handle
-    if (ti == .pointer and ti.pointer.size == .one and ti.pointer.child == @import("fiberscript/wren.zig").Handle) {
-        var buf: [64]u8 = undefined;
-        var x = std.Io.Writer.fixed(&buf);
-        try x.printAddress(something);
-        var reader = std.Io.Reader.fixed(&buf);
-        return try tix12FromReader(reader.adaptToOldInterface());
-    }
-
-    // Anything with a .reader() method
-    if (@hasDecl(T, "reader")) {
-        return try tix12FromReader(something.reader());
-    }
-
-    // Already a reader type (has a read method)
-    if (@hasDecl(T, "read")) {
-        return try tix12FromReader(something);
-    }
-
-    @compileError("ticketOf: unsupported type: " ++ @typeName(T));
-}
-
-test "ticket of string" {
-    const t = try from("Hello, world!");
-    try std.testing.expectEqualStrings("BI5KUFI6QI", &t);
+test "secure ticket requires key" {
+    const key_a = [_]u8{ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15 };
+    const key_b = [_]u8{0xff} ** 16;
+    const ta = TicketSecure.string(key_a, "Hello, world!");
+    const tb = TicketSecure.string(key_b, "Hello, world!");
+    const secure_len = encodedLen(&secure_pattern);
+    try std.testing.expectEqual(secure_len, ta.len);
+    try std.testing.expectEqual(secure_len, tb.len);
+    try std.testing.expect(!std.mem.eql(u8, &ta, &tb));
 }
