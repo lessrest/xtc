@@ -15,7 +15,6 @@ const WindowMod = miniflex.window;
 const layout = miniflex.layout;
 const Painter = miniflex.Painter;
 const TrackingAllocator = @import("../lib/TrackingAllocator.zig");
-const ticket = @import("../ticket.zig");
 const Platform = @import("platform.zig");
 pub const Context = @import("context.zig").Context;
 
