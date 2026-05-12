@@ -1,7 +1,10 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const ansi = @import("ansi");
+const miniflex = @import("miniflex");
 const live = @import("live.zig");
+const xml = @import("xml.zig");
+const xmlparse = @import("xmlparse.zig");
 const LiveSession = live.LiveSession;
 const time = std.time;
 const posix = std.posix;
@@ -68,27 +71,79 @@ pub fn main() !void {
     const program = try allocator.dupe(u8, args.next() orelse "xtc");
     defer allocator.free(program);
 
-    if (args.next()) |arg| {
+    var script_path: ?[]const u8 = null;
+    var xml_markup: ?[]const u8 = null;
+    var width: usize = 80;
+    var height: ?usize = null;
+    var ansi_output = false;
+
+    while (args.next()) |arg| {
         if (std.mem.eql(u8, arg, "-v") or std.mem.eql(u8, arg, "--version")) {
             try stderr.print("{s} v{s}\n", .{ program, version });
             try stderr.flush();
             return;
-        }
-
-        if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
-            try stderr.print("Usage: {s} <file>\n", .{program});
-            try stderr.flush();
+        } else if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
+            try printUsage(stderr, program);
             return;
-        }
-
-        if (std.mem.endsWith(u8, arg, ".wren")) {
-            return run_script(allocator, arg);
+        } else if (std.mem.eql(u8, arg, "--xml")) {
+            xml_markup = args.next() orelse {
+                try stderr.writeAll("error: --xml requires a markup argument\n");
+                try printUsage(stderr, program);
+                std.process.exit(2);
+            };
+        } else if (std.mem.eql(u8, arg, "--width")) {
+            const value = args.next() orelse {
+                try stderr.writeAll("error: --width requires a number\n");
+                try printUsage(stderr, program);
+                std.process.exit(2);
+            };
+            width = std.fmt.parseInt(usize, value, 10) catch {
+                try stderr.print("error: invalid --width value '{s}'\n", .{value});
+                try printUsage(stderr, program);
+                std.process.exit(2);
+            };
+        } else if (std.mem.eql(u8, arg, "--height")) {
+            const value = args.next() orelse {
+                try stderr.writeAll("error: --height requires a number\n");
+                try printUsage(stderr, program);
+                std.process.exit(2);
+            };
+            height = std.fmt.parseInt(usize, value, 10) catch {
+                try stderr.print("error: invalid --height value '{s}'\n", .{value});
+                try printUsage(stderr, program);
+                std.process.exit(2);
+            };
+        } else if (std.mem.eql(u8, arg, "--ansi")) {
+            ansi_output = true;
+        } else if (std.mem.endsWith(u8, arg, ".wren")) {
+            script_path = arg;
+        } else {
+            try stderr.print("error: unknown argument '{s}'\n", .{arg});
+            try printUsage(stderr, program);
+            std.process.exit(2);
         }
     }
 
-    try stderr.print("Usage: {s} <file>\n", .{program});
+    if (xml_markup) |markup| {
+        return renderXmlToStdout(allocator, markup, width, height, ansi_output);
+    }
+
+    if (script_path) |path| {
+        return run_script(allocator, path);
+    }
+
+    try printUsage(stderr, program);
+    std.process.exit(2);
+}
+
+fn printUsage(stderr: *std.Io.Writer, program: []const u8) !void {
+    try stderr.print(
+        \\Usage:
+        \\  {s} <file.wren>
+        \\  {s} --xml '<root class="...">...</root>' [--width N] [--height N] [--ansi]
+        \\
+    , .{ program, program });
     try stderr.flush();
-    return error.Usage;
 }
 
 const Viewport = struct {
@@ -123,6 +178,68 @@ fn detectViewport(stdout_file: std.fs.File) Viewport {
     }
 
     return .{ .width = width, .height = height };
+}
+
+fn renderXmlToStdout(
+    allocator: std.mem.Allocator,
+    markup: []const u8,
+    width: usize,
+    requested_height: ?usize,
+    ansi_output: bool,
+) !void {
+    var trace = ansi.nest.silent(allocator);
+
+    var unicode = try miniflex.UnicodeData.init(allocator);
+    defer unicode.deinit(allocator);
+
+    var glyphs = try miniflex.GlyphTable.init(allocator);
+    defer glyphs.deinit();
+
+    var painter = miniflex.Painter.init(allocator, &unicode, &trace);
+    defer painter.deinit();
+
+    var fbs = std.io.fixedBufferStream(markup);
+    var xdoc = try xmlparse.parse(allocator, "<stdin>", fbs.reader());
+    defer xdoc.deinit();
+
+    var document = try xml.loadDocumentFromMarkup(allocator, &xdoc);
+    defer document.deinit();
+
+    var tree = try miniflex.layout.allocateBoxTreeFromDOM(allocator, document, 0);
+    defer tree.deinit();
+
+    const height = requested_height orelse miniflex.measure.intrinsicSize(
+        document,
+        &tree,
+        0,
+        width,
+        0,
+        &unicode,
+    )[1];
+
+    var layout_engine = miniflex.layout.init(allocator, &unicode, &trace);
+    try layout_engine.layoutSubtree(
+        &tree,
+        document,
+        tree.getNodeMut(0),
+        .{ .x = 0, .y = 0, .w = width, .h = height },
+    );
+
+    var raster = try miniflex.Raster.init(allocator, width, height);
+    defer raster.deinit(allocator);
+
+    try painter.computePaintCommands(document, &tree, glyphs);
+    try raster.rasterizeDisplayList(allocator, glyphs, &painter);
+
+    var out_buf: [4096]u8 = undefined;
+    var out_state = std.fs.File.stdout().writer(&out_buf);
+    const stdout: *std.Io.Writer = &out_state.interface;
+    if (ansi_output) {
+        try raster.writeAsAnsiText(stdout, glyphs);
+    } else {
+        try raster.writeAsPlainText(stdout, glyphs);
+    }
+    try stdout.flush();
 }
 
 pub fn run_script(allocator: std.mem.Allocator, script_path: []const u8) !void {

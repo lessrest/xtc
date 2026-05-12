@@ -13,6 +13,7 @@ const Dom = @import("./dom.zig").Dom;
 const DomNodeId = @import("./dom.zig").DomNodeId;
 const StyleRow = @import("./style.zig").StyleRow;
 const BoxTree = @import("./layout.zig").BoxTree;
+const text_layout = @import("./text_layout.zig");
 
 // ============================================================================
 // Core Concepts
@@ -85,19 +86,32 @@ fn measureTextNode(
     const spacing = calculateBoxSpacing(node.data.style);
     const text = dom.getTextSlice(node.data.dom_id);
 
-    // Calculate text dimensions
-    // Width: Number of display columns (handles double-width chars, etc.)
-    const text_width = unicode.monospacedTextWidth(text);
+    const content_max_w = if (max_w > spacing.horizontal) max_w - spacing.horizontal else 0;
+    const explicit_content_w = if (node.data.style.width > spacing.horizontal)
+        @as(usize, @intCast(node.data.style.width)) - spacing.horizontal
+    else
+        0;
+    const wrap_width = if (node.data.style.width != 0)
+        explicit_content_w
+    else
+        content_max_w;
 
-    // Height: Count newlines to determine number of lines
-    var line_count: usize = 1;
-    var utf8_iter = std.unicode.Utf8Iterator{ .bytes = text, .i = 0 };
-    while (utf8_iter.nextCodepoint()) |codepoint| {
-        if (codepoint == '\n') line_count += 1;
+    var text_width: usize = 0;
+    var line_count: usize = 0;
+    var wrapped_lines = text_layout.WrappedLineIterator.init(unicode, text, wrap_width);
+    while (wrapped_lines.next()) |line| {
+        line_count += 1;
+        text_width = @max(text_width, line.width_cols);
     }
 
-    // Apply constraints to content dimensions
-    const content_width = if (max_w == 0) text_width else @min(max_w, text_width);
+    if (line_count == 0) line_count = 1;
+
+    const content_width = if (node.data.style.width != 0)
+        explicit_content_w
+    else if (content_max_w == 0)
+        text_width
+    else
+        @min(content_max_w, text_width);
 
     // Add spacing to get final dimensions
     const final_width = spacing.horizontal + content_width;

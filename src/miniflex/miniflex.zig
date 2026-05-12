@@ -12,6 +12,7 @@ pub const Rect = layout.Rect;
 pub const BoxTree = layout.BoxTree;
 
 pub const measure = @import("./measure.zig");
+pub const text_layout = @import("./text_layout.zig");
 pub const style = @import("./style.zig");
 pub const tailwind = @import("./tailwind.zig");
 

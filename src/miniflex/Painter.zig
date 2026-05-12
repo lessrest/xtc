@@ -12,6 +12,7 @@ const paint = @import("./paint.zig");
 const Rgba8 = paint.Rgba8;
 const rgba8 = paint.rgba8;
 const PaintOp = paint.PaintOp;
+const text_layout = @import("./text_layout.zig");
 
 pub const Painter = struct {
     allocator: std.mem.Allocator,
@@ -143,8 +144,8 @@ pub const Painter = struct {
             defer self.trace.exit();
             self.trace.info("Emitting paint ops");
 
-            try self.emitGlyphTileFill(glyphs, paint_rect, row);
             try self.emitBackgroundFillIfAny(paint_rect, row);
+            try self.emitGlyphTileFill(glyphs, paint_rect, row);
             try self.emitBorderStrokeIfAny(paint_rect, row);
 
             if (node_kind == .text) {
@@ -474,12 +475,11 @@ pub const Painter = struct {
             return;
         }
 
-        var y_offset: usize = 0;
         var total_lines_processed: usize = 0;
         var total_glyph_runs_emitted: usize = 0;
+        var y_offset: usize = 0;
 
-        // First split by newlines
-        var line_iter = std.mem.tokenizeScalar(u8, slice, '\n');
+        var line_iter = text_layout.WrappedLineIterator.init(self.unicode, slice, cb.rect.w);
         while (line_iter.next()) |line| {
             if (y_offset >= cb.rect.h) {
                 self.trace.decision("Reached content box height limit, stopping line processing");
@@ -493,87 +493,24 @@ pub const Painter = struct {
             self.trace.info("Processing text line");
             self.trace.fields("text-line", .{
                 .line_number = total_lines_processed,
-                .line_length = line.len,
+                .line_length = line.bytes.len,
+                .line_width = line.width_cols,
                 .y_offset = y_offset,
             });
 
-            // For each line, apply word wrapping if needed
-            var line_start: usize = 0;
-            var line_width: usize = 0;
-            var last_break_bytes: ?usize = null;
-            var witer = self.unicode.wordIterator(line);
-            var wrapped_segments: usize = 0;
-
-            while (witer.next()) |seg| {
-                const bytes = seg.bytes(line);
-                const seg_w = self.unicode.monospacedTextWidth(bytes);
-
-                if (line_width + seg_w > cb.rect.w and line_width > 0) {
-                    // Emit the current wrapped line
-                    wrapped_segments += 1;
-                    self.trace.fields("wrapped-segment", .{
-                        .wrapped_segment = wrapped_segments,
-                        .current_line_width = line_width,
-                    });
-
-                    const line_bytes_end = last_break_bytes orelse seg.offset;
-                    const line_bytes = line[line_start..line_bytes_end];
-                    const shaped = try self.buildGlyphRun(glyphs, line_bytes, cb.rect.w, false);
-
-                    if (shaped.run.len > 0) {
-                        const extra = computeJustifyOffset(cb.rect.w, shaped.width_cols, row.justify);
-                        self.trace.fields("justify-offset", .{
-                            .justify_offset = extra,
-                        });
-
-                        try self.push(PaintOp{ .GlyphRun = .{
-                            .x = rect.x + cb.inset_left + extra,
-                            .y = rect.y + cb.inset_top + y_offset,
-                            .glyphs = shaped.run,
-                            .color = color,
-                        } });
-                        total_glyph_runs_emitted += 1;
-                    }
-
-                    y_offset += 1;
-                    if (y_offset >= cb.rect.h) {
-                        self.trace.decision("Reached height limit during wrapping");
-                        break;
-                    }
-                    line_start = seg.offset;
-                    line_width = seg_w;
-                    last_break_bytes = seg.offset + seg.len;
-                    continue;
-                }
-                line_width += seg_w;
-                last_break_bytes = seg.offset + seg.len;
+            const shaped = try self.buildGlyphRun(glyphs, line.bytes, cb.rect.w, true);
+            if (shaped.run.len > 0) {
+                const extra = computeJustifyOffset(cb.rect.w, shaped.width_cols, row.justify);
+                try self.push(PaintOp{ .GlyphRun = .{
+                    .x = rect.x + cb.inset_left + extra,
+                    .y = rect.y + cb.inset_top + y_offset,
+                    .glyphs = shaped.run,
+                    .color = color,
+                } });
+                total_glyph_runs_emitted += 1;
             }
 
-            // Emit the remainder of this line (after wrapping)
-            if (line_start < line.len and y_offset < cb.rect.h) {
-                self.trace.fields("final-line-segment", .{
-                    .remaining_text_length = line.len - line_start,
-                });
-
-                const line_bytes = line[line_start..];
-                const shaped = try self.buildGlyphRun(glyphs, line_bytes, cb.rect.w, true);
-
-                if (shaped.run.len > 0) {
-                    const extra = computeJustifyOffset(cb.rect.w, shaped.width_cols, row.justify);
-                    try self.push(PaintOp{ .GlyphRun = .{
-                        .x = rect.x + cb.inset_left + extra,
-                        .y = rect.y + cb.inset_top + y_offset,
-                        .glyphs = shaped.run,
-                        .color = color,
-                    } });
-                    total_glyph_runs_emitted += 1;
-                }
-                y_offset += 1;
-            }
-
-            self.trace.fields("wrapped-segments", .{
-                .wrapped_segments = wrapped_segments,
-            });
+            y_offset += 1;
         }
 
         self.trace.fields("text-emission-stats", .{

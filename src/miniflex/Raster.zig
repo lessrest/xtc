@@ -370,9 +370,9 @@ pub fn writeAsAnsiText(
                 if (bg == 0 or bg == TERMINAL_DEFAULT_COLOR) {
                     try writer.writeAll("\x1b[49m"); // Reset background
                 } else {
-                    const r = (bg >> 24) & 0xFF;
-                    const g = (bg >> 16) & 0xFF;
-                    const b = (bg >> 8) & 0xFF;
+                    const r = paint.rgba8Red(bg);
+                    const g = paint.rgba8Green(bg);
+                    const b = paint.rgba8Blue(bg);
                     try writer.print("\x1b[48;2;{};{};{}m", .{ r, g, b });
                 }
                 current_bg = bg;
@@ -382,9 +382,9 @@ pub fn writeAsAnsiText(
                 if (fg == 0 or fg == TERMINAL_DEFAULT_COLOR) {
                     try writer.writeAll("\x1b[39m"); // Reset foreground
                 } else {
-                    const r = (fg >> 24) & 0xFF;
-                    const g = (fg >> 16) & 0xFF;
-                    const b = (fg >> 8) & 0xFF;
+                    const r = paint.rgba8Red(fg);
+                    const g = paint.rgba8Green(fg);
+                    const b = paint.rgba8Blue(fg);
                     try writer.print("\x1b[38;2;{};{};{}m", .{ r, g, b });
                 }
                 current_fg = fg;

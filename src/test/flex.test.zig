@@ -218,6 +218,17 @@ test "text nodes containing newline characters render on multiple lines" {
     );
 }
 
+test "text nodes report wrapped intrinsic height" {
+    try Expect.layoutExample(
+        \\<root class="flex flex-col w-12">
+        \\  <text class="w-10">hello world from xtc</text>
+        \\</root>
+    ,
+        \\hello world 
+        \\from xtc    
+    );
+}
+
 test "overflow-y-scroll containers automatically scroll to show bottom content" {
     try Expect.layoutExample(
         \\<root class="flex flex-col w-6 h-5 bg-glyph-[.]">
